@@ -8,6 +8,13 @@ import (
 	cv "github.com/tdewolff/canvas"
 )
 
+type layoutDir int
+
+const (
+	dirVertical layoutDir = iota
+	dirHorizontal
+)
+
 // nodeSize holds a measured width and height in pixels.
 type nodeSize struct{ w, h float64 }
 
@@ -597,4 +604,124 @@ func (n *imageNode) draw(dctx *drawCtx) {
 		fit = cv.ImageContain
 	}
 	dctx.ctx.FitImage(n.img, rect, fit)
+}
+
+// --- Build bridge: exported Node tree → internal node tree ---
+
+// buildNode converts an exported Node into the internal node used by the
+// measure/layout/draw pipeline. parentDir is the layout direction of the
+// enclosing container, used to infer DividerNode orientation.
+func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
+	if n == nil {
+		return &spacerNode{weight: 0}, nil
+	}
+	switch v := n.(type) {
+	case *VStackNode:
+		children, err := buildNodes(v.Children, cfg, dirVertical)
+		if err != nil {
+			return nil, err
+		}
+		return &vstackNode{
+			gap:      v.Gap,
+			padding:  v.Padding,
+			align:    v.Align,
+			children: children,
+		}, nil
+	case *HStackNode:
+		children, err := buildNodes(v.Children, cfg, dirHorizontal)
+		if err != nil {
+			return nil, err
+		}
+		return &hstackNode{
+			gap:      v.Gap,
+			padding:  v.Padding,
+			align:    v.Align,
+			children: children,
+		}, nil
+	case *ZStackNode:
+		children, err := buildNodes(v.Children, cfg, dirVertical)
+		if err != nil {
+			return nil, err
+		}
+		return &zstackNode{align: v.Align, children: children}, nil
+	case *BoxNode:
+		children, err := buildNodes(v.Children, cfg, dirVertical)
+		if err != nil {
+			return nil, err
+		}
+		bc := v.BorderColor
+		bg := v.Background
+		if cfg != nil {
+			bc = resolveColor(bc, cfg.Roles)
+			bg = resolveColor(bg, cfg.Roles)
+		}
+		return &boxNode{
+			padding:      v.Padding,
+			borderWidth:  v.BorderWidth,
+			borderColor:  bc,
+			background:   bg,
+			cornerRadius: v.CornerRadius,
+			clip:         v.Clip,
+			children:     children,
+		}, nil
+	case *FrameNode:
+		children, err := buildNodes(v.Children, cfg, dirVertical)
+		if err != nil {
+			return nil, err
+		}
+		return &frameNode{w: v.Width, h: v.Height, children: children}, nil
+	case *SpacerNode:
+		w := v.Weight
+		if w == 0 {
+			w = 1
+		}
+		return &spacerNode{weight: w}, nil
+	case *DividerNode:
+		return &dividerNode{isHorizontal: parentDir == dirVertical}, nil
+	case *TextNode:
+		style := v.Style
+		if style.Font == "" && cfg != nil {
+			style = cfg.DefaultTextStyle
+		}
+		if cfg != nil {
+			style.Color = resolveColor(style.Color, cfg.Roles)
+		}
+		return &textNode{text: v.Text, style: style}, nil
+	case *ImageNode:
+		img := v.Image
+		if img == nil && v.Key != "" {
+			if cfg != nil && cfg.Images != nil {
+				img = cfg.Images[v.Key]
+			}
+			if img == nil {
+				return nil, imageKeyError(v.Key)
+			}
+		}
+		return &imageNode{img: img, scale: v.Scale, clip: v.Clip}, nil
+	default:
+		panic("pate: unknown node type")
+	}
+}
+
+// buildNodes converts a slice of exported Nodes, skipping nil entries.
+func buildNodes(nodes []Node, cfg *Config, parentDir layoutDir) ([]node, error) {
+	result := make([]node, 0, len(nodes))
+	for _, n := range nodes {
+		if n == nil {
+			continue
+		}
+		built, err := buildNode(n, cfg, parentDir)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, built)
+	}
+	return result, nil
+}
+
+// imageKeyError is a named error constructor to avoid fmt import in this file.
+type imageKeyError string
+
+func (e imageKeyError) Error() string {
+	return "pate: image key " + string(e) + " not found in Config.Images"
 }

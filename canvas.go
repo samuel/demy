@@ -6,43 +6,24 @@ import (
 	"image/color"
 	"image/png"
 	"io"
-	"math"
 
 	cv "github.com/tdewolff/canvas"
 	"github.com/tdewolff/canvas/renderers/rasterizer"
 )
 
-// stackEntry tracks the current container being built and its layout direction.
-type stackEntry struct {
-	children *[]node
-	dir      layoutDir
-}
-
-type layoutDir int
-
-const (
-	dirVertical layoutDir = iota
-	dirHorizontal
-)
-
-// Canvas is the pate rendering context. Build a layout tree by calling methods
-// such as VStack, HStack, Text, and Image, then call Render or EncodePNG.
+// Canvas is the pate rendering context. Build a Node tree using the constructor
+// functions (VStack, HStack, Text, …), then call Render or EncodePNG.
 //
 // All dimensions are in pixels. Font sizes are in points.
 // The origin is top-left (0,0); Y increases downward.
 type Canvas struct {
-	cv       *cv.Canvas
-	ctx      *cv.Context
-	cfg      Config
-	dpmm     float64
-	Roles    Roles
-	root     []node
-	stack    []stackEntry
-	rendered bool
+	cfg   Config
+	dpmm  float64
+	Roles Roles
 }
 
 // New creates a Canvas from the given Config.
-// Returns an error if the Config has zero physical dimensions.
+// Returns an error if the Config has zero physical or pixel dimensions.
 func New(cfg Config) (*Canvas, error) {
 	if cfg.PhysicalWidthMM == 0 || cfg.PhysicalHeightMM == 0 {
 		return nil, errors.New("pate: Config must have non-zero physical dimensions")
@@ -50,15 +31,9 @@ func New(cfg Config) (*Canvas, error) {
 	if cfg.PixelWidth == 0 || cfg.PixelHeight == 0 {
 		return nil, errors.New("pate: Config must have non-zero pixel dimensions")
 	}
-	dpmm := float64(cfg.PixelWidth) / cfg.PhysicalWidthMM
-	c := cv.New(cfg.PhysicalWidthMM, cfg.PhysicalHeightMM)
-	ctx := cv.NewContext(c)
-	ctx.SetCoordSystem(cv.CartesianIV)
 	return &Canvas{
-		cv:    c,
-		ctx:   ctx,
 		cfg:   cfg,
-		dpmm:  dpmm,
+		dpmm:  cfg.DPMM(),
 		Roles: cfg.Roles,
 	}, nil
 }
@@ -72,40 +47,79 @@ func MustNew(cfg Config) *Canvas {
 	return c
 }
 
-// Pt converts n points to pixels based on the canvas PPI.
-func (c *Canvas) Pt(n float64) float64 {
-	return n * c.dpmm * 25.4 / 72
+// draw builds the internal node tree from root, runs the three-pass layout, and
+// returns a rendered cv.Canvas ready for rasterization.
+func (c *Canvas) draw(root Node) (*cv.Canvas, error) {
+	cvs := cv.New(c.cfg.PhysicalWidthMM, c.cfg.PhysicalHeightMM)
+	ctx := cv.NewContext(cvs)
+	ctx.SetCoordSystem(cv.CartesianIV)
+
+	wPx := float64(c.cfg.PixelWidth)
+	hPx := float64(c.cfg.PixelHeight)
+
+	internal, err := buildNode(root, &c.cfg, dirVertical)
+	if err != nil {
+		return nil, err
+	}
+
+	mctx := &measureCtx{
+		fonts:  c.cfg.Fonts,
+		dpmm:   c.dpmm,
+		availW: wPx,
+		availH: hPx,
+	}
+	internal.measure(mctx)
+
+	bounds := nodeRect{x: 0, y: 0, w: wPx, h: hPx}
+	internal.layout(bounds)
+
+	bg := c.cfg.Roles.Background
+	if bg == nil {
+		bg = White
+	}
+	ctx.SetFillColor(bg)
+	ctx.SetStrokeColor(color.Transparent)
+	ctx.DrawPath(0, 0, cv.Rectangle(c.cfg.PhysicalWidthMM, c.cfg.PhysicalHeightMM))
+
+	dctx := &drawCtx{
+		ctx:   ctx,
+		dpmm:  c.dpmm,
+		roles: c.Roles,
+		fonts: c.cfg.Fonts,
+	}
+	internal.draw(dctx)
+	return cvs, nil
 }
 
-// MM converts n millimetres to pixels based on the canvas PPI.
-func (c *Canvas) MM(n float64) float64 {
-	return n * c.dpmm
-}
-
-// rasterize renders the canvas into an image of exactly PixelWidth×PixelHeight pixels.
-func (c *Canvas) rasterize() *image.RGBA {
+// rasterize converts a rendered cv.Canvas into a pixel image.
+func (c *Canvas) rasterize(cvs *cv.Canvas) *image.RGBA {
 	img := image.NewRGBA(image.Rect(0, 0, c.cfg.PixelWidth, c.cfg.PixelHeight))
 	ras := rasterizer.FromImage(img, cv.DPMM(c.dpmm), cv.DefaultColorSpace)
-	c.cv.RenderTo(ras)
+	cvs.RenderTo(ras)
 	ras.Close()
 	return img
 }
 
-// Render returns the fully composed grayscale image. The layout and draw
-// passes run automatically on the first call.
-func (c *Canvas) Render() image.Image {
-	c.ensureRendered()
-	return c.rasterize()
+// Render lays out and rasterizes root, returning the full grayscale image.
+func (c *Canvas) Render(root Node) (image.Image, error) {
+	cvs, err := c.draw(root)
+	if err != nil {
+		return nil, err
+	}
+	return c.rasterize(cvs), nil
 }
 
-// EncodePNG encodes the canvas as a PNG with the given color mode and optional
+// EncodePNG renders root and writes a PNG with the given color mode and optional
 // dithering algorithm (default FloydSteinberg).
-func (c *Canvas) EncodePNG(w io.Writer, mode ColorMode, algo ...Dither) error {
-	c.ensureRendered()
-	rgba := c.rasterize()
+func (c *Canvas) EncodePNG(root Node, w io.Writer, mode ColorMode, algo ...Dither) error {
+	cvs, err := c.draw(root)
+	if err != nil {
+		return err
+	}
+	rgba := c.rasterize(cvs)
 	gray := toGray(rgba)
 
-	algorithm := Atkinson
+	algorithm := NoDithering
 	if len(algo) > 0 {
 		algorithm = algo[0]
 	}
@@ -114,16 +128,22 @@ func (c *Canvas) EncodePNG(w io.Writer, mode ColorMode, algo ...Dither) error {
 	switch mode {
 	case OneBit:
 		pal := []color.Gray{{Y: 0}, {Y: 255}}
-		if algorithm == FloydSteinberg {
+		switch algorithm {
+		case NoDithering:
+			out = ditherNone(gray, pal)
+		case FloydSteinberg:
 			out = ditherFloydSteinberg(gray, pal)
-		} else {
+		case Atkinson:
 			out = ditherAtkinson(gray, pal)
 		}
 	case TwoBit:
 		pal := []color.Gray{{Y: 0}, {Y: 85}, {Y: 170}, {Y: 255}}
-		if algorithm == FloydSteinberg {
+		switch algorithm {
+		case NoDithering:
+			out = ditherNone(gray, pal)
+		case FloydSteinberg:
 			out = ditherFloydSteinberg(gray, pal)
-		} else {
+		case Atkinson:
 			out = ditherAtkinson(gray, pal)
 		}
 	case BWRed:
@@ -133,212 +153,4 @@ func (c *Canvas) EncodePNG(w io.Writer, mode ColorMode, algo ...Dither) error {
 		out = gray
 	}
 	return png.Encode(w, out)
-}
-
-// addNode adds n to the current container or to the root if no container is open.
-func (c *Canvas) addNode(n node) {
-	if len(c.stack) == 0 {
-		c.root = append(c.root, n)
-		return
-	}
-	top := c.stack[len(c.stack)-1].children
-	*top = append(*top, n)
-}
-
-// withChildren opens a new child-collection scope.
-func (c *Canvas) withChildren(children *[]node, dir layoutDir, fn func()) {
-	c.stack = append(c.stack, stackEntry{children: children, dir: dir})
-	fn()
-	c.stack = c.stack[:len(c.stack)-1]
-}
-
-// currentDir returns the layout direction of the innermost container.
-func (c *Canvas) currentDir() layoutDir {
-	if len(c.stack) > 0 {
-		return c.stack[len(c.stack)-1].dir
-	}
-	return dirVertical
-}
-
-// ensureRendered runs the layout and draw passes if not yet done.
-func (c *Canvas) ensureRendered() {
-	if c.rendered {
-		return
-	}
-	c.rendered = true
-
-	wPx := float64(c.cfg.PixelWidth)
-	hPx := float64(c.cfg.PixelHeight)
-	mctx := &measureCtx{
-		fonts:  c.cfg.Fonts,
-		dpmm:   c.dpmm,
-		availW: wPx,
-		availH: hPx,
-	}
-	for _, n := range c.root {
-		n.measure(mctx)
-	}
-	bounds := nodeRect{x: 0, y: 0, w: wPx, h: hPx}
-	for _, n := range c.root {
-		n.layout(bounds)
-	}
-
-	// Draw background.
-	bg := c.cfg.Roles.Background
-	if bg == nil {
-		bg = White
-	}
-	c.ctx.SetFillColor(bg)
-	c.ctx.SetStrokeColor(color.Transparent)
-	c.ctx.DrawPath(0, 0, cv.Rectangle(c.cfg.PhysicalWidthMM, c.cfg.PhysicalHeightMM))
-
-	dctx := &drawCtx{
-		ctx:   c.ctx,
-		dpmm:  c.dpmm,
-		roles: c.Roles,
-		fonts: c.cfg.Fonts,
-	}
-	for _, n := range c.root {
-		n.draw(dctx)
-	}
-}
-
-// VStack lays children out vertically. Options: Gap, Padding, Alignment.
-// The last argument must be a func() that adds children.
-func (c *Canvas) VStack(args ...any) {
-	n := &vstackNode{}
-	var fn func()
-	for _, arg := range args {
-		switch v := arg.(type) {
-		case gapOpt:
-			n.gap = float64(v)
-		case paddingOpt:
-			n.padding = float64(v)
-		case Alignment:
-			n.align = v
-		case func():
-			fn = v
-		}
-	}
-	if fn != nil {
-		c.withChildren(&n.children, dirVertical, fn)
-	}
-	c.addNode(n)
-}
-
-// HStack lays children out horizontally. Options: Gap, Padding, Alignment.
-func (c *Canvas) HStack(args ...any) {
-	n := &hstackNode{}
-	var fn func()
-	for _, arg := range args {
-		switch v := arg.(type) {
-		case gapOpt:
-			n.gap = float64(v)
-		case paddingOpt:
-			n.padding = float64(v)
-		case Alignment:
-			n.align = v
-		case func():
-			fn = v
-		}
-	}
-	if fn != nil {
-		c.withChildren(&n.children, dirHorizontal, fn)
-	}
-	c.addNode(n)
-}
-
-// ZStack layers children on top of each other. Options: ZAlignment.
-// Default alignment is TopLeading.
-func (c *Canvas) ZStack(args ...any) {
-	n := &zstackNode{align: TopLeading}
-	var fn func()
-	for _, arg := range args {
-		switch v := arg.(type) {
-		case ZAlignment:
-			n.align = v
-		case func():
-			fn = v
-		}
-	}
-	if fn != nil {
-		c.withChildren(&n.children, dirVertical, fn)
-	}
-	c.addNode(n)
-}
-
-// Box is a container with optional background, border, corner radius, padding, and clipping.
-// Options: Padding, Background, Border, CornerRadius, Clip.
-func (c *Canvas) Box(args ...any) {
-	n := &boxNode{}
-	var fn func()
-	for _, arg := range args {
-		switch v := arg.(type) {
-		case paddingOpt:
-			n.padding = float64(v)
-		case borderOpt:
-			n.borderWidth = v.width
-			n.borderColor = v.color
-		case backgroundOpt:
-			n.background = v.color
-		case cornerRadiusOpt:
-			n.cornerRadius = float64(v)
-		case clipOpt:
-			n.clip = true
-		case func():
-			fn = v
-		}
-	}
-	if fn != nil {
-		c.withChildren(&n.children, dirVertical, fn)
-	}
-	c.addNode(n)
-}
-
-// Frame constrains its children to exactly w×h pixels.
-func (c *Canvas) Frame(w, h float64, fn func()) {
-	n := &frameNode{w: w, h: h}
-	if fn != nil {
-		c.withChildren(&n.children, dirVertical, fn)
-	}
-	c.addNode(n)
-}
-
-// Spacer fills remaining space in a stack. Optional weight (default 1).
-func (c *Canvas) Spacer(weight ...float64) {
-	w := 1.0
-	if len(weight) > 0 {
-		w = weight[0]
-	}
-	c.addNode(&spacerNode{weight: w})
-}
-
-// Divider draws a 1px rule; orientation is inferred from the enclosing stack.
-func (c *Canvas) Divider() {
-	horizontal := c.currentDir() == dirVertical
-	c.addNode(&dividerNode{isHorizontal: horizontal})
-}
-
-// Text renders a string with the given style.
-func (c *Canvas) Text(s string, style Style) {
-	c.addNode(&textNode{text: s, style: style})
-}
-
-// Image renders an image. Options: ImageScale (ImageFit, ImageFill, ImageStretch), Clip.
-func (c *Canvas) Image(img image.Image, opts ...any) {
-	n := &imageNode{img: img}
-	for _, opt := range opts {
-		switch v := opt.(type) {
-		case ImageScale:
-			n.scale = v
-		case clipOpt:
-			n.clip = true
-		}
-	}
-	c.addNode(n)
-}
-
-// clamp restricts v to [lo, hi].
-func clamp(v, lo, hi float64) float64 {
-	return math.Max(lo, math.Min(hi, v))
 }

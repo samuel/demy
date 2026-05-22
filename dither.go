@@ -6,6 +6,11 @@ import (
 	"math"
 )
 
+// clamp restricts v to [lo, hi].
+func clamp(v, lo, hi float64) float64 {
+	return math.Max(lo, math.Min(hi, v))
+}
+
 // toGray converts an RGBA image to 8-bit grayscale using luminance weights.
 func toGray(rgba *image.RGBA) *image.Gray {
 	bounds := rgba.Bounds()
@@ -34,6 +39,22 @@ func nearestPalette(val float64, palette []color.Gray) int {
 		}
 	}
 	return nearest
+}
+
+func ditherNone(src *image.Gray, palette []color.Gray) *image.Gray {
+	bounds := src.Bounds()
+	w := bounds.Dx()
+	h := bounds.Dy()
+
+	out := image.NewGray(bounds)
+	for y := range h {
+		for x := range w {
+			old := src.Pix[y*w+x]
+			idx := nearestPalette(float64(old), palette)
+			out.SetGray(bounds.Min.X+x, bounds.Min.Y+y, palette[idx])
+		}
+	}
+	return out
 }
 
 // ditherFloydSteinberg applies Floyd-Steinberg error diffusion to src using palette.

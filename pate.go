@@ -4,6 +4,7 @@
 package pate
 
 import (
+	"image"
 	"image/color"
 
 	cv "github.com/tdewolff/canvas"
@@ -98,7 +99,7 @@ func (ff *FontFamily) AddStyle(data []byte, style FontStyle) error {
 }
 
 // Config defines a display's pixel dimensions, physical dimensions, color palette,
-// semantic color roles, and pre-loaded fonts.
+// semantic color roles, pre-loaded fonts, and named styles.
 type Config struct {
 	PixelWidth       int
 	PixelHeight      int
@@ -107,7 +108,24 @@ type Config struct {
 	Palette          []color.Color
 	Roles            Roles
 	Fonts            map[string]*FontFamily
+	Images           map[string]image.Image // pre-loaded images by key, for plugin contexts
+	DefaultTextStyle Style                  // fallback when Text() receives no style opts
+	Styles           map[string]Style       // named typographic scale (body, caption, h1, …)
 }
+
+// DPMM returns dots per millimetre for this Config.
+func (cfg Config) DPMM() float64 {
+	if cfg.PhysicalWidthMM == 0 {
+		return 0
+	}
+	return float64(cfg.PixelWidth) / cfg.PhysicalWidthMM
+}
+
+// Pt converts n points to pixels based on the display PPI.
+func (cfg Config) Pt(n float64) float64 { return n * cfg.DPMM() * 25.4 / 72 }
+
+// MM converts n millimetres to pixels based on the display PPI.
+func (cfg Config) MM(n float64) float64 { return n * cfg.DPMM() }
 
 // TRMNLOriginal is the preset Config for the TRMNL Original display (800×480 px, ~163×98 mm).
 var TRMNLOriginal = Config{
@@ -154,6 +172,8 @@ type Style struct {
 	Overflow   TextOverflow
 }
 
+func (Style) pateTextOption() {}
+
 // ImageScale controls how images scale to fit their container.
 type ImageScale int
 
@@ -163,6 +183,8 @@ const (
 	ImageStretch                   // stretch to fill exactly
 )
 
+func (ImageScale) pateOption() {}
+
 // Alignment is the cross-axis alignment for HStack and VStack.
 type Alignment int
 
@@ -171,6 +193,8 @@ const (
 	AlignCenter
 	AlignEnd
 )
+
+func (Alignment) pateOption() {}
 
 // ZAlignment is the 9-position alignment for ZStack children.
 type ZAlignment int
@@ -187,13 +211,15 @@ const (
 	BottomTrailing                   // 8
 )
 
+func (ZAlignment) pateOption() {}
+
 // ColorMode controls the bit depth and palette of the output PNG.
 type ColorMode int
 
 const (
 	Grayscale ColorMode = iota // 8-bit grayscale
-	OneBit                     // 1-bit black/white via dithering
-	TwoBit                     // 2-bit 4-shade (black/dark/light/white) via dithering
+	OneBit                     // 1-bit black/white
+	TwoBit                     // 2-bit 4-shade (black/dark/light/white)
 	BWRed                      // black+white+red two-layer encoder
 )
 
@@ -201,20 +227,172 @@ const (
 type Dither int
 
 const (
-	FloydSteinberg Dither = iota
+	NoDithering Dither = iota - 1
+	FloydSteinberg
 	Atkinson
 )
+
+// --- Interfaces ---
+
+// Node is a composable, serializable widget. All layout and widget constructors
+// return a Node. The interface is sealed — implementations are provided by this
+// package only.
+type Node interface {
+	pateNode()
+}
+
+// Option is implemented by layout options (Gap, Padding, Alignment, …) and by
+// Node itself, allowing children to be passed inline to layout constructors.
+// The interface is sealed to this package.
+type Option interface {
+	pateOption()
+}
+
+// TextOption is implemented by Style and future per-property text overrides.
+// It does NOT implement Option, preventing text-only options from being
+// accidentally passed to layout containers.
+type TextOption interface {
+	pateTextOption()
+}
+
+// RoleColor is a color.Color that references a semantic role from Config.Roles.
+// Used in deserialized scene trees (scene.Unmarshal) where colors are specified
+// by role name. Resolved to a concrete color during the build pass.
+type RoleColor struct {
+	Name string // "foreground", "background", "accent", or "muted"
+}
+
+// RGBA implements color.Color. Returns black; actual value resolved in buildNode.
+func (r RoleColor) RGBA() (uint32, uint32, uint32, uint32) { return 0, 0, 0, 0xffff }
+
+// resolveColor replaces a RoleColor with the matching concrete color from roles.
+func resolveColor(c color.Color, roles Roles) color.Color {
+	if c == nil {
+		return nil
+	}
+	rc, ok := c.(RoleColor)
+	if !ok {
+		return c
+	}
+	switch rc.Name {
+	case "foreground":
+		return roles.Foreground
+	case "background":
+		return roles.Background
+	case "accent":
+		return roles.Accent
+	case "muted":
+		return roles.Muted
+	}
+	return c
+}
+
+// --- Exported node types ---
+
+// VStackNode lays children out vertically.
+type VStackNode struct {
+	Gap      float64
+	Padding  float64
+	Align    Alignment // default AlignStart
+	Children []Node
+}
+
+func (*VStackNode) pateNode()   {}
+func (*VStackNode) pateOption() {}
+
+// HStackNode lays children out horizontally.
+type HStackNode struct {
+	Gap      float64
+	Padding  float64
+	Align    Alignment // default AlignStart
+	Children []Node
+}
+
+func (*HStackNode) pateNode()   {}
+func (*HStackNode) pateOption() {}
+
+// ZStackNode layers children on top of each other.
+type ZStackNode struct {
+	Align    ZAlignment // default TopLeading
+	Children []Node
+}
+
+func (*ZStackNode) pateNode()   {}
+func (*ZStackNode) pateOption() {}
+
+// BoxNode is a container with optional background, border, corner radius, and padding.
+type BoxNode struct {
+	Padding      float64
+	BorderWidth  float64
+	BorderColor  color.Color
+	Background   color.Color
+	CornerRadius float64
+	Clip         bool
+	Children     []Node
+}
+
+func (*BoxNode) pateNode()   {}
+func (*BoxNode) pateOption() {}
+
+// FrameNode constrains its children to exactly Width×Height pixels.
+type FrameNode struct {
+	Width    float64
+	Height   float64
+	Children []Node
+}
+
+func (*FrameNode) pateNode()   {}
+func (*FrameNode) pateOption() {}
+
+// SpacerNode fills remaining space in a stack. Weight defaults to 1.
+type SpacerNode struct {
+	Weight float64
+}
+
+func (*SpacerNode) pateNode()   {}
+func (*SpacerNode) pateOption() {}
+
+// DividerNode draws a 1px rule. Orientation is inferred from the enclosing stack.
+type DividerNode struct{}
+
+func (*DividerNode) pateNode()   {}
+func (*DividerNode) pateOption() {}
+
+// TextNode renders a string. Style defaults to Config.DefaultTextStyle when Font is empty.
+type TextNode struct {
+	Text  string
+	Style Style
+}
+
+func (*TextNode) pateNode()   {}
+func (*TextNode) pateOption() {}
+
+// ImageNode renders an image. Set Image directly or use Key to reference
+// a pre-loaded image in Config.Images (required for serialized contexts).
+type ImageNode struct {
+	Image image.Image
+	Key   string
+	Scale ImageScale
+	Clip  bool
+}
+
+func (*ImageNode) pateNode()   {}
+func (*ImageNode) pateOption() {}
 
 // --- Layout option types ---
 
 // gapOpt sets spacing between stack children (pixels).
 type gapOpt float64
 
+func (gapOpt) pateOption() {}
+
 // Gap returns a gap option for stack layouts.
 func Gap(px float64) gapOpt { return gapOpt(px) }
 
 // paddingOpt sets padding inside a container (pixels).
 type paddingOpt float64
+
+func (paddingOpt) pateOption() {}
 
 // Padding returns a padding option for stack and box layouts.
 func Padding(px float64) paddingOpt { return paddingOpt(px) }
@@ -225,11 +403,15 @@ type borderOpt struct {
 	color color.Color
 }
 
+func (borderOpt) pateOption() {}
+
 // Border returns a border option for Box.
 func Border(width float64, c color.Color) borderOpt { return borderOpt{width, c} }
 
 // backgroundOpt sets a box fill color.
 type backgroundOpt struct{ color color.Color }
+
+func (backgroundOpt) pateOption() {}
 
 // Background returns a background color option for Box.
 func Background(c color.Color) backgroundOpt { return backgroundOpt{c} }
@@ -237,11 +419,170 @@ func Background(c color.Color) backgroundOpt { return backgroundOpt{c} }
 // cornerRadiusOpt sets rounded corners (pixels).
 type cornerRadiusOpt float64
 
+func (cornerRadiusOpt) pateOption() {}
+
 // CornerRadius returns a corner-radius option for Box.
 func CornerRadius(px float64) cornerRadiusOpt { return cornerRadiusOpt(px) }
 
 // clipOpt enables clipping children to a container's bounds.
 type clipOpt struct{}
 
+func (clipOpt) pateOption() {}
+
 // Clip enables clipping when passed as a Box or Image option.
 var Clip = clipOpt{} //nolint:gochecknoglobals
+
+// childrenOpt wraps a slice of Nodes as a single Option for variadic expansion.
+type childrenOpt []Node
+
+func (childrenOpt) pateOption() {}
+
+// Children wraps nodes as an Option, enabling slice expansion into layout constructors:
+//
+//	pate.VStack(pate.Gap(4), pate.Children(rows...))
+func Children(nodes ...Node) childrenOpt { return childrenOpt(nodes) }
+
+// appendChildren appends opts that are Node or childrenOpt values to dst.
+func appendChildren(dst []Node, opts []Option) []Node {
+	for _, opt := range opts {
+		switch v := opt.(type) {
+		case childrenOpt:
+			dst = append(dst, []Node(v)...)
+		case Node:
+			dst = append(dst, v)
+		}
+	}
+	return dst
+}
+
+// --- Constructor functions ---
+
+// VStack creates a vertical stack. Options: Gap, Padding, Alignment, child Nodes, Children.
+func VStack(opts ...Option) *VStackNode {
+	n := &VStackNode{}
+	for _, opt := range opts {
+		switch v := opt.(type) {
+		case gapOpt:
+			n.Gap = float64(v)
+		case paddingOpt:
+			n.Padding = float64(v)
+		case Alignment:
+			n.Align = v
+		}
+	}
+	n.Children = appendChildren(n.Children, opts)
+	return n
+}
+
+// HStack creates a horizontal stack. Options: Gap, Padding, Alignment, child Nodes, Children.
+func HStack(opts ...Option) *HStackNode {
+	n := &HStackNode{}
+	for _, opt := range opts {
+		switch v := opt.(type) {
+		case gapOpt:
+			n.Gap = float64(v)
+		case paddingOpt:
+			n.Padding = float64(v)
+		case Alignment:
+			n.Align = v
+		}
+	}
+	n.Children = appendChildren(n.Children, opts)
+	return n
+}
+
+// ZStack creates a layered stack. Options: ZAlignment, child Nodes, Children.
+func ZStack(opts ...Option) *ZStackNode {
+	n := &ZStackNode{}
+	for _, opt := range opts {
+		if v, ok := opt.(ZAlignment); ok {
+			n.Align = v
+		}
+	}
+	n.Children = appendChildren(n.Children, opts)
+	return n
+}
+
+// Box creates a styled container. Options: Padding, Background, Border, CornerRadius, Clip,
+// child Nodes, Children.
+func Box(opts ...Option) *BoxNode {
+	n := &BoxNode{}
+	for _, opt := range opts {
+		switch v := opt.(type) {
+		case paddingOpt:
+			n.Padding = float64(v)
+		case borderOpt:
+			n.BorderWidth = v.width
+			n.BorderColor = v.color
+		case backgroundOpt:
+			n.Background = v.color
+		case cornerRadiusOpt:
+			n.CornerRadius = float64(v)
+		case clipOpt:
+			n.Clip = true
+		}
+	}
+	n.Children = appendChildren(n.Children, opts)
+	return n
+}
+
+// Frame constrains its children to exactly w×h pixels.
+func Frame(w, h float64, opts ...Option) *FrameNode {
+	n := &FrameNode{Width: w, Height: h}
+	n.Children = appendChildren(n.Children, opts)
+	return n
+}
+
+// Spacer fills remaining space in a stack. Optional weight defaults to 1.
+func Spacer(weight ...float64) *SpacerNode {
+	w := 1.0
+	if len(weight) > 0 {
+		w = weight[0]
+	}
+	return &SpacerNode{Weight: w}
+}
+
+// Divider draws a 1px rule. Orientation is inferred from the enclosing stack
+// at render time: horizontal in a VStack, vertical in an HStack.
+func Divider() *DividerNode { return &DividerNode{} }
+
+// Text renders s with the given style options. When no TextOption is provided,
+// Config.DefaultTextStyle is used at render time.
+func Text(s string, opts ...TextOption) *TextNode {
+	n := &TextNode{Text: s}
+	for _, opt := range opts {
+		if v, ok := opt.(Style); ok {
+			n.Style = v
+		}
+	}
+	return n
+}
+
+// Image renders img. Options: ImageScale (ImageFit, ImageFill, ImageStretch), Clip.
+func Image(img image.Image, opts ...Option) *ImageNode {
+	n := &ImageNode{Image: img}
+	for _, opt := range opts {
+		switch v := opt.(type) {
+		case ImageScale:
+			n.Scale = v
+		case clipOpt:
+			n.Clip = true
+		}
+	}
+	return n
+}
+
+// ImageKey renders the image registered under key in Config.Images.
+// Used in serialized plugin contexts where image.Image cannot be transmitted.
+func ImageKey(key string, opts ...Option) *ImageNode {
+	n := &ImageNode{Key: key}
+	for _, opt := range opts {
+		switch v := opt.(type) {
+		case ImageScale:
+			n.Scale = v
+		case clipOpt:
+			n.Clip = true
+		}
+	}
+	return n
+}

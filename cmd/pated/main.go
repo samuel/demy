@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"image"
@@ -13,10 +14,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/samuel/pate"
 	"github.com/samuel/pate/deviceapi"
+	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/goregular"
 )
 
@@ -26,12 +29,94 @@ func main() {
 	fontFile := flag.String("font", "", "path to TTF font file for alt text")
 	baseURL := flag.String("base-url", "http://localhost:8080", "base URL of this server, used in image_url responses")
 	refreshRate := flag.Int("refresh-rate", 300, "display refresh rate in seconds")
+
+	weatherLat := flag.Float64("weather-lat", 0, "latitude for weather display (enables weather mode)")
+	weatherLon := flag.Float64("weather-lon", 0, "longitude for weather display")
+	weatherLocation := flag.String("weather-location", "", "location name for weather display (e.g. 'San Francisco, CA')")
+	weatherUnits := flag.String("weather-units", "imperial", "units for weather display: imperial or metric")
+	weatherTTL := flag.Int("weather-ttl", 900, "weather cache TTL in seconds")
 	flag.Parse()
 
-	imageName := "display4.png"
-	imageURL := *baseURL + "/screen/" + imageName
+	imageName := "weather-1.png"
+	screenPath := "/screen/weather.png" // + imageName
+	screenURL := *baseURL + screenPath
+
+	weatherMode := *weatherLat != 0 || *weatherLon != 0
 
 	var displayPNG []byte
+
+	if weatherMode {
+		wc := weatherCfg{
+			lat:      *weatherLat,
+			lon:      *weatherLon,
+			location: *weatherLocation,
+			units:    *weatherUnits,
+			ttl:      time.Duration(*weatherTTL) * time.Second,
+		}
+		cache := &weatherCache{cfg: wc}
+		if err := cache.refresh(context.Background()); err != nil {
+			log.Fatalf("initial weather fetch failed: %v", err)
+		}
+
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET "+screenPath, func(w http.ResponseWriter, r *http.Request) {
+			png, err := cache.png(r.Context())
+			if err != nil {
+				slog.Error("weather render failed", "err", err)
+				http.Error(w, "render error", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(png)
+		})
+		deviceapi.Register(mux, deviceapi.Handler{
+			OnDisplay: func(ctx context.Context, device deviceapi.DeviceHeaders) (deviceapi.DisplayResponse, error) {
+				logDevice("display request", device)
+				return deviceapi.DisplayResponse{
+					Filename:    imageName,
+					ImageURL:    screenURL,
+					RefreshRate: *refreshRate,
+				}, nil
+			},
+			OnLog: func(ctx context.Context, device deviceapi.DeviceHeaders, entries []deviceapi.LogEntry) error {
+				logDevice("device log batch", device)
+				for _, e := range entries {
+					slog.Info("device log entry",
+						"device_id", device.ID,
+						"log_id", e.ID,
+						"message", e.Message,
+						"wifi_status", e.WiFiStatus,
+						"wake_reason", e.WakeReason,
+						"firmware_version", e.FirmwareVersion,
+						"battery_voltage", e.BatteryVoltage,
+						"wifi_signal", e.WiFiSignal,
+						"free_heap_size", e.FreeHeapSize,
+						"special_function", e.SpecialFunction,
+					)
+				}
+				return nil
+			},
+			OnSetup: func(ctx context.Context, device deviceapi.DeviceHeaders) (deviceapi.SetupResponse, error) {
+				logDevice("setup request", device)
+				return deviceapi.SetupResponse{
+					FriendlyID: device.ID,
+					ImageURL:   screenURL,
+					Message:    "Welcome to pated",
+				}, nil
+			},
+		})
+		srv := &http.Server{
+			Addr:           *addr,
+			Handler:        requestLogger(mux),
+			ReadTimeout:    10 * time.Second,
+			WriteTimeout:   10 * time.Second,
+			MaxHeaderBytes: 1 << 20,
+		}
+		slog.Info("pated listening", "addr", *addr, "lat", *weatherLat, "lon", *weatherLon)
+		log.Fatal(srv.ListenAndServe())
+		return
+	}
+
 	if *imageFile != "" {
 		var buf bytes.Buffer
 		if err := renderDisplay(&buf, *imageFile, *fontFile); err != nil {
@@ -56,7 +141,7 @@ func main() {
 			logDevice("display request", device)
 			return deviceapi.DisplayResponse{
 				Filename:    imageName,
-				ImageURL:    imageURL,
+				ImageURL:    screenURL,
 				RefreshRate: *refreshRate,
 			}, nil
 		},
@@ -82,7 +167,7 @@ func main() {
 			logDevice("setup request", device)
 			return deviceapi.SetupResponse{
 				FriendlyID: device.ID,
-				ImageURL:   imageURL,
+				ImageURL:   screenURL,
 				Message:    "Welcome to pated",
 			}, nil
 		},
@@ -98,6 +183,357 @@ func main() {
 	slog.Info("pated listening", "addr", *addr)
 	log.Fatal(srv.ListenAndServe())
 }
+
+// --- Weather types and cache ---
+
+type weatherCfg struct {
+	lat      float64
+	lon      float64
+	location string
+	units    string // "imperial" or "metric"
+	ttl      time.Duration
+}
+
+type dayForecast struct {
+	date time.Time
+	high float64
+	low  float64
+	code int
+}
+
+type weatherData struct {
+	tempC        float64
+	apparentTemp float64
+	humidity     int
+	code         int
+	windSpeed    float64
+	windDir      int
+	uvIndex      float64
+	precip       float64
+	tempUnit     string // "°F" or "°C"
+	windUnit     string // "mph" or "km/h"
+	precipUnit   string // "in" or "mm"
+	daily        []dayForecast
+	fetchedAt    time.Time
+}
+
+type weatherCache struct {
+	cfg weatherCfg
+	mu  sync.Mutex
+	// protected by mu:
+	data       *weatherData
+	renderedAt time.Time
+	pngBytes   []byte
+}
+
+func (wc *weatherCache) refresh(ctx context.Context) error {
+	data, err := fetchWeather(ctx, wc.cfg)
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	if err := renderWeather(&buf, data, wc.cfg.location); err != nil {
+		return err
+	}
+	wc.mu.Lock()
+	wc.data = data
+	wc.renderedAt = time.Now()
+	wc.pngBytes = buf.Bytes()
+	wc.mu.Unlock()
+	return nil
+}
+
+func (wc *weatherCache) png(ctx context.Context) ([]byte, error) {
+	wc.mu.Lock()
+	stale := time.Since(wc.renderedAt) > wc.cfg.ttl
+	wc.mu.Unlock()
+	if stale {
+		if err := wc.refresh(ctx); err != nil {
+			slog.Warn("weather refresh failed, serving stale data", "err", err)
+		}
+	}
+	wc.mu.Lock()
+	b := wc.pngBytes
+	wc.mu.Unlock()
+	return b, nil
+}
+
+// --- Open-Meteo API client ---
+
+type openMeteoResp struct {
+	Current struct {
+		Temperature   float64 `json:"temperature_2m"`
+		ApparentTemp  float64 `json:"apparent_temperature"`
+		Humidity      int     `json:"relative_humidity_2m"`
+		WeatherCode   int     `json:"weather_code"`
+		WindSpeed     float64 `json:"wind_speed_10m"`
+		WindDirection int     `json:"wind_direction_10m"`
+		UVIndex       float64 `json:"uv_index"`
+		Precipitation float64 `json:"precipitation"`
+	} `json:"current"`
+	Daily struct {
+		Time        []string  `json:"time"`
+		TempMax     []float64 `json:"temperature_2m_max"`
+		TempMin     []float64 `json:"temperature_2m_min"`
+		WeatherCode []int     `json:"weather_code"`
+	} `json:"daily"`
+}
+
+func fetchWeather(ctx context.Context, cfg weatherCfg) (*weatherData, error) {
+	tempUnit := "fahrenheit"
+	windUnit := "mph"
+	precipUnit := "inch"
+	if cfg.units == "metric" {
+		tempUnit = "celsius"
+		windUnit = "kmh"
+		precipUnit = "mm"
+	}
+
+	url := fmt.Sprintf(
+		"https://api.open-meteo.com/v1/forecast"+
+			"?latitude=%f&longitude=%f"+
+			"&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,uv_index,precipitation"+
+			"&daily=temperature_2m_max,temperature_2m_min,weather_code"+
+			"&forecast_days=7"+
+			"&temperature_unit=%s&wind_speed_unit=%s&precipitation_unit=%s"+
+			"&timezone=auto",
+		cfg.lat, cfg.lon, tempUnit, windUnit, precipUnit,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating weather request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching weather: %w", err)
+	}
+	//nolint:errcheck
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("weather API returned %s", resp.Status)
+	}
+
+	var raw openMeteoResp
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decoding weather response: %w", err)
+	}
+
+	tUnit := "°F"
+	wUnit := "mph"
+	pUnit := "in"
+	if cfg.units == "metric" {
+		tUnit = "°C"
+		wUnit = "km/h"
+		pUnit = "mm"
+	}
+
+	data := &weatherData{
+		tempC:        raw.Current.Temperature,
+		apparentTemp: raw.Current.ApparentTemp,
+		humidity:     raw.Current.Humidity,
+		code:         raw.Current.WeatherCode,
+		windSpeed:    raw.Current.WindSpeed,
+		windDir:      raw.Current.WindDirection,
+		uvIndex:      raw.Current.UVIndex,
+		precip:       raw.Current.Precipitation,
+		tempUnit:     tUnit,
+		windUnit:     wUnit,
+		precipUnit:   pUnit,
+		fetchedAt:    time.Now(),
+	}
+
+	for i, t := range raw.Daily.Time {
+		d, err := time.Parse("2006-01-02", t)
+		if err != nil {
+			continue
+		}
+		f := dayForecast{date: d}
+		if i < len(raw.Daily.TempMax) {
+			f.high = raw.Daily.TempMax[i]
+		}
+		if i < len(raw.Daily.TempMin) {
+			f.low = raw.Daily.TempMin[i]
+		}
+		if i < len(raw.Daily.WeatherCode) {
+			f.code = raw.Daily.WeatherCode[i]
+		}
+		data.daily = append(data.daily, f)
+	}
+
+	return data, nil
+}
+
+// --- Weather rendering ---
+
+func renderWeather(w io.Writer, data *weatherData, location string) error {
+	font := pate.MustLoadFontBytes("sans", goregular.TTF)
+	if err := font.AddStyle(gobold.TTF, pate.FontBold); err != nil {
+		return fmt.Errorf("loading bold font: %w", err)
+	}
+
+	cfg := pate.TRMNLOriginal
+	cfg.Fonts = map[string]*pate.FontFamily{"sans": font}
+	c, err := pate.New(cfg)
+	if err != nil {
+		return fmt.Errorf("creating canvas: %w", err)
+	}
+
+	sTitle := pate.Style{Font: "sans", Size: 18, Weight: pate.FontBold}
+	sLocation := pate.Style{Font: "sans", Size: 12, Color: pate.DarkGray}
+	sTempBig := pate.Style{Font: "sans", Size: 64, Weight: pate.FontBold, Align: pate.TextAlignCenter}
+	sTempUnit := pate.Style{Font: "sans", Size: 20, Weight: pate.FontBold}
+	sCondition := pate.Style{Font: "sans", Size: 13, Align: pate.TextAlignCenter}
+	sSub := pate.Style{Font: "sans", Size: 11, Color: pate.DarkGray, Align: pate.TextAlignCenter}
+	sDetailLabel := pate.Style{Font: "sans", Size: 11, Color: pate.DarkGray}
+	sDetailValue := pate.Style{Font: "sans", Size: 11, Weight: pate.FontBold, Align: pate.TextAlignRight}
+	sForecastDay := pate.Style{Font: "sans", Size: 10, Weight: pate.FontBold, Align: pate.TextAlignCenter}
+	sForecastHigh := pate.Style{Font: "sans", Size: 12, Weight: pate.FontBold, Align: pate.TextAlignCenter}
+	sForecastLow := pate.Style{Font: "sans", Size: 10, Color: pate.DarkGray, Align: pate.TextAlignCenter}
+
+	tempStr := fmt.Sprintf("%.0f", data.tempC)
+	condition := wmoDescription(data.code)
+	feelsLike := fmt.Sprintf("Feels like %.0f%s", data.apparentTemp, data.tempUnit)
+
+	windStr := fmt.Sprintf("%.0f %s %s", data.windSpeed, data.windUnit, windDirStr(data.windDir))
+	humidStr := fmt.Sprintf("%d%%", data.humidity)
+	uvStr := fmt.Sprintf("%.0f", data.uvIndex)
+	precipStr := fmt.Sprintf("%.2f %s", data.precip, data.precipUnit)
+
+	// Header: title + optional location.
+	headerOpts := []pate.Option{
+		pate.Text("WEATHER", sTitle),
+		pate.Spacer(),
+	}
+	if location != "" {
+		headerOpts = append(headerOpts, pate.Text(location, sLocation))
+	}
+
+	// Left column: big temp + condition + optional today high/low.
+	leftOpts := []pate.Option{
+		pate.AlignCenter, pate.Gap(6),
+		pate.HStack(pate.AlignEnd, pate.Gap(4),
+			pate.Text(tempStr, sTempBig),
+			pate.VStack(
+				pate.Text(data.tempUnit, sTempUnit),
+				pate.Spacer(),
+			),
+		),
+		pate.Text(condition, sCondition),
+		pate.Text(feelsLike, sSub),
+	}
+	if len(data.daily) > 0 {
+		hlStr := fmt.Sprintf("H: %.0f%s   L: %.0f%s",
+			data.daily[0].high, data.tempUnit,
+			data.daily[0].low, data.tempUnit)
+		leftOpts = append(leftOpts, pate.Text(hlStr, sSub))
+	}
+
+	// Forecast columns: day label / high / low with spacers between.
+	forecastCols := make([]pate.Node, 0, len(data.daily)*2)
+	for i, day := range data.daily {
+		forecastCols = append(forecastCols, pate.VStack(
+			pate.AlignCenter, pate.Gap(3),
+			pate.Text(day.date.Format("Mon"), sForecastDay),
+			pate.Text(fmt.Sprintf("%.0f°", day.high), sForecastHigh),
+			pate.Text(fmt.Sprintf("%.0f°", day.low), sForecastLow),
+		))
+		if i < len(data.daily)-1 {
+			forecastCols = append(forecastCols, pate.Spacer())
+		}
+	}
+
+	root := pate.VStack(pate.Padding(16), pate.Gap(0),
+		pate.HStack(headerOpts...),
+		pate.Box(pate.Padding(6)),
+		pate.Divider(),
+		pate.Box(pate.Padding(6)),
+		// Body: current conditions left, detail sidebar right.
+		pate.HStack(pate.AlignCenter, pate.Gap(16),
+			pate.VStack(leftOpts...),
+			pate.Spacer(),
+			// Frame ensures minimum width so label+value spacers can expand.
+			pate.Frame(240, 220,
+				pate.Box(pate.Border(1, pate.DarkGray), pate.Padding(12), pate.CornerRadius(4),
+					pate.VStack(pate.Gap(12),
+						detailRow("Humidity", humidStr, sDetailLabel, sDetailValue),
+						detailRow("Wind", windStr, sDetailLabel, sDetailValue),
+						detailRow("UV Index", uvStr, sDetailLabel, sDetailValue),
+						detailRow("Precip", precipStr, sDetailLabel, sDetailValue),
+						pate.Box(pate.Padding(2)),
+						pate.Text("Updated "+data.fetchedAt.Format("3:04 PM"), pate.Style{
+							Font: "sans", Size: 9, Color: pate.LightGray, Align: pate.TextAlignRight,
+						}),
+					),
+				),
+			),
+		),
+		pate.Box(pate.Padding(6)),
+		pate.Divider(),
+		pate.Box(pate.Padding(6)),
+		pate.HStack(pate.Children(forecastCols...)),
+	)
+
+	return c.EncodePNG(root, w, pate.TwoBit)
+}
+
+func detailRow(label, value string, labelStyle, valueStyle pate.Style) *pate.HStackNode {
+	return pate.HStack(
+		pate.Text(label, labelStyle),
+		pate.Spacer(),
+		pate.Text(value, valueStyle),
+	)
+}
+
+// wmoDescription maps WMO weather interpretation codes to short descriptions.
+func wmoDescription(code int) string {
+	switch {
+	case code == 0:
+		return "Clear Sky"
+	case code == 1:
+		return "Mainly Clear"
+	case code == 2:
+		return "Partly Cloudy"
+	case code == 3:
+		return "Overcast"
+	case code == 45 || code == 48:
+		return "Foggy"
+	case code >= 51 && code <= 55:
+		return "Drizzle"
+	case code >= 56 && code <= 57:
+		return "Freezing Drizzle"
+	case code >= 61 && code <= 65:
+		return "Rain"
+	case code >= 66 && code <= 67:
+		return "Freezing Rain"
+	case code >= 71 && code <= 75:
+		return "Snow"
+	case code == 77:
+		return "Snow Grains"
+	case code >= 80 && code <= 82:
+		return "Rain Showers"
+	case code >= 85 && code <= 86:
+		return "Snow Showers"
+	case code == 95:
+		return "Thunderstorm"
+	case code >= 96 && code <= 99:
+		return "Thunderstorm w/ Hail"
+	default:
+		return "Unknown"
+	}
+}
+
+// windDirStr converts a wind direction in degrees to a compass abbreviation.
+func windDirStr(deg int) string {
+	dirs := []string{"N", "NE", "E", "SE", "S", "SW", "W", "NW"}
+	idx := ((deg + 22) % 360) / 45
+	if idx < 0 || idx >= len(dirs) {
+		return ""
+	}
+	return dirs[idx]
+}
+
+// --- Static image display ---
 
 func renderDisplay(w io.Writer, imageFile, fontFile string) error {
 	f, err := os.Open(imageFile)
@@ -117,7 +553,7 @@ func renderDisplay(w io.Writer, imageFile, fontFile string) error {
 			return fmt.Errorf("loading font: %w", err)
 		}
 	} else {
-		font = pate.MustLoadFontBytes("sand", goregular.TTF)
+		font = pate.MustLoadFontBytes("sans", goregular.TTF)
 	}
 
 	cfg := pate.TRMNLOriginal
@@ -127,24 +563,25 @@ func renderDisplay(w io.Writer, imageFile, fontFile string) error {
 		return fmt.Errorf("creating canvas: %w", err)
 	}
 
-	// Image fills the entire canvas.
-	c.Image(img, pate.ImageFit)
+	root := pate.ZStack(
+		pate.Image(img, pate.ImageFit),
+		pate.VStack(
+			pate.Spacer(),
+			pate.Box(pate.Background(pate.White), pate.Padding(8),
+				pate.Text("This is where the alt text would go", pate.Style{
+					Font:  "sans",
+					Size:  11,
+					Color: pate.Black,
+					Align: pate.TextAlignCenter,
+				}),
+			),
+		),
+	)
 
-	// Text overlay at the bottom, centered, with a white background bar.
-	c.VStack(func() {
-		c.Spacer()
-		c.Box(pate.Background(pate.White), pate.Padding(8), func() {
-			c.Text("This is where the alt text would go", pate.Style{
-				Font:  "sans",
-				Size:  11,
-				Color: pate.Black,
-				Align: pate.TextAlignCenter,
-			})
-		})
-	})
-
-	return c.EncodePNG(w, pate.TwoBit)
+	return c.EncodePNG(root, w, pate.TwoBit)
 }
+
+// --- Device logging and HTTP middleware ---
 
 func logDevice(msg string, d deviceapi.DeviceHeaders) {
 	args := []any{

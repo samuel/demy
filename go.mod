@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/samuel/goil v0.0.0-20251014204128-4505f8450ad9
 	github.com/tdewolff/canvas v0.0.0-20260508100355-63a7228e682d
+	golang.org/x/image v0.41.0
 )
 
 require (
@@ -27,7 +28,6 @@ require (
 	github.com/tdewolff/minify/v2 v2.24.13 // indirect
 	github.com/tdewolff/parse/v2 v2.8.12 // indirect
 	github.com/yuin/goldmark v1.8.2 // indirect
-	golang.org/x/image v0.41.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	modernc.org/knuth v0.5.5 // indirect

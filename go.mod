@@ -28,7 +28,9 @@ require (
 	github.com/tdewolff/minify/v2 v2.24.13 // indirect
 	github.com/tdewolff/parse/v2 v2.8.12 // indirect
 	github.com/yuin/goldmark v1.8.2 // indirect
+	go.starlark.net v0.0.0-20260522144826-ec58d4b459e2 // indirect
 	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	modernc.org/knuth v0.5.5 // indirect
 	modernc.org/token v1.1.0 // indirect

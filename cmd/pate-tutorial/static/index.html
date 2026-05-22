@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pate Tutorial</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+      background: #f5f5f0;
+      color: #111;
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      background: #1a1a1a;
+      color: #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #sidebar-header {
+      padding: 18px 16px 12px;
+      border-bottom: 1px solid #2e2e2e;
+      flex-shrink: 0;
+    }
+    #sidebar-header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+      letter-spacing: 0.2px;
+    }
+    #sidebar-header p {
+      font-size: 11px;
+      color: #666;
+      margin-top: 3px;
+    }
+    #lesson-list {
+      list-style: none;
+      overflow-y: auto;
+      flex: 1;
+      padding: 6px 0;
+    }
+    #lesson-list li {
+      cursor: pointer;
+      padding: 9px 16px;
+      font-size: 13px;
+      color: #aaa;
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      border-left: 3px solid transparent;
+      transition: background 0.1s, color 0.1s;
+    }
+    #lesson-list li:hover { background: #242424; color: #ddd; }
+    #lesson-list li.active { background: #252525; color: #fff; border-left-color: #888; }
+    .lesson-num { font-size: 11px; color: #555; min-width: 18px; flex-shrink: 0; }
+    #lesson-list li.active .lesson-num { color: #888; }
+
+    /* ── Main area ── */
+    #main {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #lesson-header {
+      padding: 16px 20px 14px;
+      border-bottom: 1px solid #ddd;
+      background: #fff;
+      flex-shrink: 0;
+    }
+    #lesson-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #111;
+    }
+    #lesson-desc {
+      margin-top: 5px;
+      font-size: 13px;
+      color: #555;
+      line-height: 1.5;
+      max-width: 800px;
+    }
+
+    /* ── Workspace ── */
+    #workspace {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Editor pane ── */
+    #editor-pane {
+      display: flex;
+      flex-direction: column;
+      width: 44%;
+      min-width: 300px;
+      border-right: 1px solid #2e2e2e;
+      background: #1e1e1e;
+    }
+    #editor-toolbar {
+      display: flex;
+      align-items: center;
+      padding: 6px 12px;
+      background: #252525;
+      border-bottom: 1px solid #2e2e2e;
+      flex-shrink: 0;
+    }
+    #editor-label {
+      font-size: 11px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }
+    #code-editor {
+      flex: 1;
+      resize: none;
+      border: none;
+      outline: none;
+      padding: 14px 16px;
+      font-family: "SF Mono", "Fira Code", "Menlo", "Consolas", monospace;
+      font-size: 12.5px;
+      line-height: 1.65;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      tab-size: 2;
+    }
+    #code-editor::selection { background: #264f78; }
+
+    #controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      background: #252525;
+      border-top: 1px solid #2e2e2e;
+      flex-shrink: 0;
+    }
+    button {
+      font-size: 12.5px;
+      border-radius: 4px;
+      cursor: pointer;
+      padding: 5px 11px;
+      border: 1px solid #3c3c3c;
+      background: #2d2d2d;
+      color: #ccc;
+      white-space: nowrap;
+    }
+    button:hover { background: #383838; }
+    button:active { background: #222; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    select {
+      font-size: 12.5px;
+      border-radius: 4px;
+      cursor: pointer;
+      padding: 5px 10px;
+      border: 1px solid #3c3c3c;
+      background: #2d2d2d;
+      color: #ccc;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    select:hover { background: #383838; }
+    #run-btn {
+      background: #1e3a1e;
+      border-color: #2e5a2e;
+      color: #8ee08e;
+      font-weight: 600;
+      padding: 5px 14px;
+    }
+    #run-btn:hover { background: #254825; }
+    #run-btn:active { background: #162c16; }
+    #reset-btn { margin-left: auto; color: #999; }
+
+    #error-bar {
+      display: none;
+      padding: 8px 14px;
+      background: #3a1010;
+      color: #f0aaaa;
+      font-size: 11.5px;
+      font-family: "SF Mono", "Fira Code", monospace;
+      white-space: pre-wrap;
+      word-break: break-all;
+      line-height: 1.5;
+      border-top: 1px solid #5a2020;
+      flex-shrink: 0;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+
+    /* ── Preview pane ── */
+    #preview-pane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: #f0ede8;
+    }
+    #preview-toolbar {
+      display: flex;
+      align-items: center;
+      padding: 6px 14px;
+      background: #e6e3de;
+      border-bottom: 1px solid #d5d2cd;
+      flex-shrink: 0;
+    }
+    #preview-toolbar-label {
+      font-size: 11px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }
+    #preview-dims {
+      margin-left: auto;
+      font-size: 11px;
+      color: #aaa;
+      font-family: monospace;
+    }
+    #preview-area {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      overflow: auto;
+      position: relative;
+    }
+    #preview-img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      border: 1px solid #bbb;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+      display: none;
+      background: #fff;
+    }
+    #preview-placeholder {
+      color: #bbb;
+      font-size: 13px;
+      text-align: center;
+      pointer-events: none;
+    }
+    #preview-placeholder kbd {
+      display: inline-block;
+      padding: 2px 7px;
+      background: #e0ddd8;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      font-size: 12px;
+      color: #888;
+      font-family: inherit;
+    }
+    #loading-indicator {
+      display: none;
+      position: absolute;
+      inset: 0;
+      align-items: center;
+      justify-content: center;
+      background: rgba(240,237,232,0.7);
+      font-size: 13px;
+      color: #888;
+    }
+    #loading-indicator.visible { display: flex; }
+
+    /* ── Go equivalent ── */
+    #go-equiv-section {
+      padding: 10px 14px 12px;
+      background: #fff;
+      border-top: 1px solid #ddd;
+      flex-shrink: 0;
+      max-height: 160px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    #go-equiv-label {
+      font-size: 10px;
+      color: #aaa;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin-bottom: 5px;
+      flex-shrink: 0;
+    }
+    #go-equiv-code {
+      font-family: "SF Mono", "Fira Code", "Menlo", "Consolas", monospace;
+      font-size: 11.5px;
+      color: #444;
+      line-height: 1.55;
+      white-space: pre;
+      overflow: auto;
+      flex: 1;
+    }
+  </style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div id="sidebar-header">
+    <h1>Pate Tutorial</h1>
+    <p>Interactive layout playground</p>
+  </div>
+  <ul id="lesson-list"></ul>
+</div>
+
+<div id="main">
+  <div id="lesson-header">
+    <div id="lesson-title">Loading…</div>
+    <div id="lesson-desc"></div>
+  </div>
+
+  <div id="workspace">
+    <div id="editor-pane">
+      <div id="editor-toolbar">
+        <span id="editor-label">Scene JSON</span>
+      </div>
+      <textarea id="code-editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+      <div id="controls">
+        <button id="run-btn" title="Ctrl+Enter or Cmd+Enter">&#9654; Run</button>
+        <select id="mode-select" title="Output color mode">
+          <option value="grayscale">Grayscale</option>
+          <option value="2bit">2-bit (e-ink)</option>
+          <option value="1bit">1-bit (B&amp;W)</option>
+        </select>
+        <select id="dither-select" title="Dithering algorithm">
+          <option value="none">No dither</option>
+          <option value="floyd">Floyd-Steinberg</option>
+          <option value="atkinson">Atkinson</option>
+        </select>
+        <button id="reset-btn" title="Restore original JSON">Reset</button>
+      </div>
+      <div id="error-bar"></div>
+    </div>
+
+    <div id="preview-pane">
+      <div id="preview-toolbar">
+        <span id="preview-toolbar-label">Preview</span>
+        <span id="preview-dims">800 &times; 480 px</span>
+      </div>
+      <div id="preview-area">
+        <img id="preview-img" alt="Rendered output">
+        <div id="preview-placeholder">Press <kbd>&#9654; Run</kbd> or <kbd>Ctrl+Enter</kbd> to render</div>
+        <div id="loading-indicator">Rendering…</div>
+      </div>
+      <div id="go-equiv-section">
+        <div id="go-equiv-label">Go equivalent</div>
+        <pre id="go-equiv-code"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  'use strict';
+
+  let lessons = [];
+  let currentLesson = null;
+  let currentBlobURL = null;
+
+  async function loadLessons() {
+    const res = await fetch('/lessons');
+    lessons = await res.json();
+    const list = document.getElementById('lesson-list');
+    lessons.forEach((l, i) => {
+      const li = document.createElement('li');
+      const num = document.createElement('span');
+      num.className = 'lesson-num';
+      num.textContent = l.id;
+      li.appendChild(num);
+      li.appendChild(document.createTextNode(l.title));
+      li.addEventListener('click', () => selectLesson(i));
+      list.appendChild(li);
+    });
+    if (lessons.length > 0) selectLesson(0);
+  }
+
+  function selectLesson(idx) {
+    currentLesson = lessons[idx];
+    document.querySelectorAll('#lesson-list li').forEach((li, i) => {
+      li.classList.toggle('active', i === idx);
+    });
+    document.getElementById('lesson-title').textContent = currentLesson.title;
+    document.getElementById('lesson-desc').textContent = currentLesson.desc;
+    document.getElementById('code-editor').value = currentLesson.scene_json;
+    document.getElementById('go-equiv-code').textContent = currentLesson.go_equiv;
+    clearError();
+    render();
+  }
+
+  async function render() {
+    const code = document.getElementById('code-editor').value.trim();
+    if (!code) return;
+
+    const mode = document.getElementById('mode-select').value;
+    const dither = document.getElementById('dither-select').value;
+    const btn = document.getElementById('run-btn');
+    const loading = document.getElementById('loading-indicator');
+
+    btn.disabled = true;
+    loading.classList.add('visible');
+
+    try {
+      const res = await fetch('/render?mode=' + encodeURIComponent(mode) + '&dither=' + encodeURIComponent(dither), {
+        method: 'POST',
+        body: code,
+      });
+
+      const img = document.getElementById('preview-img');
+      const placeholder = document.getElementById('preview-placeholder');
+
+      if (res.ok) {
+        const blob = await res.blob();
+        if (currentBlobURL) URL.revokeObjectURL(currentBlobURL);
+        currentBlobURL = URL.createObjectURL(blob);
+        img.src = currentBlobURL;
+        img.style.display = 'block';
+        placeholder.style.display = 'none';
+        clearError();
+      } else {
+        let msg = 'Render failed';
+        try {
+          const data = await res.json();
+          msg = data.error || msg;
+        } catch (_) {}
+        showError(msg);
+      }
+    } catch (e) {
+      showError('Network error: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      loading.classList.remove('visible');
+    }
+  }
+
+  function clearError() {
+    const bar = document.getElementById('error-bar');
+    bar.style.display = 'none';
+    bar.textContent = '';
+  }
+
+  function showError(msg) {
+    const bar = document.getElementById('error-bar');
+    bar.textContent = msg;
+    bar.style.display = 'block';
+  }
+
+  document.getElementById('run-btn').addEventListener('click', render);
+
+  document.getElementById('reset-btn').addEventListener('click', () => {
+    if (!currentLesson) return;
+    document.getElementById('code-editor').value = currentLesson.scene_json;
+    clearError();
+  });
+
+  document.getElementById('mode-select').addEventListener('change', render);
+  document.getElementById('dither-select').addEventListener('change', render);
+
+  document.getElementById('code-editor').addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      render();
+      return;
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const ta = e.target;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
+      ta.selectionStart = ta.selectionEnd = start + 2;
+    }
+  });
+
+  loadLessons().catch(e => showError('Failed to load lessons: ' + e.message));
+</script>
+</body>
+</html>

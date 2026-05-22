@@ -123,6 +123,7 @@ func (n *vstackNode) layout(bounds nodeRect) {
 				childX = innerX + (innerW-childW)/2
 			case AlignEnd:
 				childX = innerX + innerW - childW
+			case AlignStart:
 			}
 		}
 		child.layout(nodeRect{x: childX, y: y, w: innerW, h: childH})

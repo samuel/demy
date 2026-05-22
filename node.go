@@ -6,6 +6,7 @@ import (
 	"math"
 
 	cv "github.com/tdewolff/canvas"
+	"github.com/tdewolff/canvas/renderers/rasterizer"
 )
 
 type layoutDir int
@@ -403,9 +404,37 @@ func (n *frameNode) layout(bounds nodeRect) {
 }
 
 func (n *frameNode) draw(dctx *drawCtx) {
-	for _, child := range n.children {
-		child.draw(dctx)
+	dpmm := dctx.dpmm
+	wPx := int(math.Round(n.w))
+	hPx := int(math.Round(n.h))
+	if wPx <= 0 || hPx <= 0 {
+		return
 	}
+	wMM := n.w / dpmm
+	hMM := n.h / dpmm
+	xMM := n.bounds.x / dpmm
+	yMM := n.bounds.y / dpmm
+
+	subCvs := cv.New(wMM, hMM)
+	subCtx := cv.NewContext(subCvs)
+	subCtx.SetCoordSystem(cv.CartesianIV)
+	subCtx.Translate(-xMM, -yMM)
+	subDctx := &drawCtx{
+		ctx:   subCtx,
+		dpmm:  dpmm,
+		roles: dctx.roles,
+		fonts: dctx.fonts,
+	}
+	for _, child := range n.children {
+		child.draw(subDctx)
+	}
+
+	subImg := image.NewRGBA(image.Rect(0, 0, wPx, hPx))
+	subRas := rasterizer.FromImage(subImg, cv.DPMM(dpmm), cv.DefaultColorSpace)
+	subCvs.RenderTo(subRas)
+	subRas.Close()
+
+	dctx.ctx.DrawImage(xMM, yMM, subImg, cv.DPMM(dpmm))
 }
 
 // --- spacerNode ---

@@ -319,7 +319,7 @@
   <div id="workspace">
     <div id="editor-pane">
       <div id="editor-toolbar">
-        <span id="editor-label">Scene JSON</span>
+        <span id="editor-label">Scene XML</span>
       </div>
       <textarea id="code-editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
       <div id="controls">
@@ -334,7 +334,7 @@
           <option value="floyd">Floyd-Steinberg</option>
           <option value="atkinson">Atkinson</option>
         </select>
-        <button id="reset-btn" title="Restore original JSON">Reset</button>
+        <button id="reset-btn" title="Restore original XML">Reset</button>
       </div>
       <div id="error-bar"></div>
     </div>
@@ -388,7 +388,7 @@
     });
     document.getElementById('lesson-title').textContent = currentLesson.title;
     document.getElementById('lesson-desc').textContent = currentLesson.desc;
-    document.getElementById('code-editor').value = currentLesson.scene_json;
+    document.getElementById('code-editor').value = currentLesson.scene_xml;
     document.getElementById('go-equiv-code').textContent = currentLesson.go_equiv;
     clearError();
     render();
@@ -455,7 +455,7 @@
 
   document.getElementById('reset-btn').addEventListener('click', () => {
     if (!currentLesson) return;
-    document.getElementById('code-editor').value = currentLesson.scene_json;
+    document.getElementById('code-editor').value = currentLesson.scene_xml;
     clearError();
   });
 

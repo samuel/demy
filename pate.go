@@ -352,6 +352,26 @@ type SpacerNode struct {
 func (*SpacerNode) pateNode()   {}
 func (*SpacerNode) pateOption() {}
 
+// WeightedNode wraps a child and allocates it a proportional share of the
+// parent stack's remaining space. It participates in the same weight pool as
+// SpacerNode: non-weighted children are measured at their natural size first,
+// and weighted/spacer nodes divide the remainder proportionally.
+//
+// Example — three columns at 25 / 25 / 50 %:
+//
+//	pate.HStack(
+//	    pate.Weighted(1, child1),
+//	    pate.Weighted(1, child2),
+//	    pate.Weighted(2, child3),
+//	)
+type WeightedNode struct {
+	Weight float64
+	Child  Node
+}
+
+func (*WeightedNode) pateNode()   {}
+func (*WeightedNode) pateOption() {}
+
 // DividerNode draws a 1px rule. Orientation is inferred from the enclosing stack.
 type DividerNode struct{}
 
@@ -540,6 +560,13 @@ func Spacer(weight ...float64) *SpacerNode {
 		w = weight[0]
 	}
 	return &SpacerNode{Weight: w}
+}
+
+// Weighted wraps child and allocates it a proportional share of the enclosing
+// stack's remaining space. Weight 0 is treated as 1. Multiple weighted children
+// share the remaining space in proportion to their weights.
+func Weighted(weight float64, child Node) *WeightedNode {
+	return &WeightedNode{Weight: weight, Child: child}
 }
 
 // Divider draws a 1px rule. Orientation is inferred from the enclosing stack

@@ -18,27 +18,27 @@ import (
 	"github.com/samuel/pate"
 )
 
-type sceneNode struct {
-	Type         string      `json:"type"`
-	Gap          float64     `json:"gap,omitempty"`
-	Padding      float64     `json:"padding,omitempty"`
-	BorderWidth  float64     `json:"border_width,omitempty"`
-	BorderColor  string      `json:"border_color,omitempty"`
-	Background   string      `json:"background,omitempty"`
-	CornerRadius float64     `json:"corner_radius,omitempty"`
-	Clip         bool        `json:"clip,omitempty"`
-	Width        float64     `json:"width,omitempty"`
-	Height       float64     `json:"height,omitempty"`
-	Weight       float64     `json:"weight,omitempty"`
-	Align        string      `json:"align,omitempty"`
-	Text         string      `json:"text,omitempty"`
-	Style        *sceneStyle `json:"style,omitempty"`
-	ImageKey     string      `json:"image_key,omitempty"`
-	Scale        string      `json:"scale,omitempty"`
-	Children     []sceneNode `json:"children,omitempty"`
+type Node struct {
+	Type         string  `json:"type"`
+	Gap          float64 `json:"gap,omitempty"`
+	Padding      float64 `json:"padding,omitempty"`
+	BorderWidth  float64 `json:"border_width,omitempty"`
+	BorderColor  string  `json:"border_color,omitempty"`
+	Background   string  `json:"background,omitempty"`
+	CornerRadius float64 `json:"corner_radius,omitempty"`
+	Clip         bool    `json:"clip,omitempty"`
+	Width        float64 `json:"width,omitempty"`
+	Height       float64 `json:"height,omitempty"`
+	Weight       float64 `json:"weight,omitempty"`
+	Align        string  `json:"align,omitempty"`
+	Text         string  `json:"text,omitempty"`
+	Style        *Style  `json:"style,omitempty"`
+	ImageKey     string  `json:"image_key,omitempty"`
+	Scale        string  `json:"scale,omitempty"`
+	Children     []Node  `json:"children,omitempty"`
 }
 
-type sceneStyle struct {
+type Style struct {
 	Font       string  `json:"font,omitempty"`
 	Size       float64 `json:"size,omitempty"`
 	Weight     string  `json:"weight,omitempty"`
@@ -51,7 +51,7 @@ type sceneStyle struct {
 
 // Marshal serializes a Node tree to JSON.
 func Marshal(n pate.Node) ([]byte, error) {
-	sn, err := nodeToScene(n)
+	sn, err := NoteToSchene(n)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +62,7 @@ func Marshal(n pate.Node) ([]byte, error) {
 // are stored as pate.RoleColor and resolved against Config.Roles at render time.
 // Image keys are resolved against Config.Images during the build pass.
 func Unmarshal(data []byte) (pate.Node, error) {
-	var sn sceneNode
+	var sn Node
 	if err := json.Unmarshal(data, &sn); err != nil {
 		return nil, err
 	}
@@ -71,56 +71,56 @@ func Unmarshal(data []byte) (pate.Node, error) {
 
 // --- marshal helpers ---
 
-func nodeToScene(n pate.Node) (sceneNode, error) {
+func NoteToSchene(n pate.Node) (Node, error) {
 	if n == nil {
-		return sceneNode{Type: "spacer", Weight: 0}, nil
+		return Node{Type: "spacer", Weight: 0}, nil
 	}
 	switch v := n.(type) {
 	case *pate.VStackNode:
-		sn := sceneNode{
+		sn := Node{
 			Type:    "vstack",
 			Gap:     v.Gap,
 			Padding: v.Padding,
 			Align:   alignStr(v.Align),
 		}
 		for _, child := range v.Children {
-			cs, err := nodeToScene(child)
+			cs, err := NoteToSchene(child)
 			if err != nil {
-				return sceneNode{}, err
+				return Node{}, err
 			}
 			sn.Children = append(sn.Children, cs)
 		}
 		return sn, nil
 	case *pate.HStackNode:
-		sn := sceneNode{
+		sn := Node{
 			Type:    "hstack",
 			Gap:     v.Gap,
 			Padding: v.Padding,
 			Align:   alignStr(v.Align),
 		}
 		for _, child := range v.Children {
-			cs, err := nodeToScene(child)
+			cs, err := NoteToSchene(child)
 			if err != nil {
-				return sceneNode{}, err
+				return Node{}, err
 			}
 			sn.Children = append(sn.Children, cs)
 		}
 		return sn, nil
 	case *pate.ZStackNode:
-		sn := sceneNode{
+		sn := Node{
 			Type:  "zstack",
 			Align: zAlignStr(v.Align),
 		}
 		for _, child := range v.Children {
-			cs, err := nodeToScene(child)
+			cs, err := NoteToSchene(child)
 			if err != nil {
-				return sceneNode{}, err
+				return Node{}, err
 			}
 			sn.Children = append(sn.Children, cs)
 		}
 		return sn, nil
 	case *pate.BoxNode:
-		sn := sceneNode{
+		sn := Node{
 			Type:         "box",
 			Padding:      v.Padding,
 			BorderWidth:  v.BorderWidth,
@@ -130,55 +130,65 @@ func nodeToScene(n pate.Node) (sceneNode, error) {
 			Clip:         v.Clip,
 		}
 		for _, child := range v.Children {
-			cs, err := nodeToScene(child)
+			cs, err := NoteToSchene(child)
 			if err != nil {
-				return sceneNode{}, err
+				return Node{}, err
 			}
 			sn.Children = append(sn.Children, cs)
 		}
 		return sn, nil
 	case *pate.FrameNode:
-		sn := sceneNode{
+		sn := Node{
 			Type:   "frame",
 			Width:  v.Width,
 			Height: v.Height,
 		}
 		for _, child := range v.Children {
-			cs, err := nodeToScene(child)
+			cs, err := NoteToSchene(child)
 			if err != nil {
-				return sceneNode{}, err
+				return Node{}, err
 			}
 			sn.Children = append(sn.Children, cs)
 		}
 		return sn, nil
 	case *pate.SpacerNode:
-		return sceneNode{Type: "spacer", Weight: v.Weight}, nil
+		return Node{Type: "spacer", Weight: v.Weight}, nil
+	case *pate.WeightedNode:
+		var children []Node
+		if v.Child != nil {
+			cs, err := NoteToSchene(v.Child)
+			if err != nil {
+				return Node{}, err
+			}
+			children = []Node{cs}
+		}
+		return Node{Type: "weighted", Weight: v.Weight, Children: children}, nil
 	case *pate.DividerNode:
-		return sceneNode{Type: "divider"}, nil
+		return Node{Type: "divider"}, nil
 	case *pate.TextNode:
-		sn := sceneNode{
+		sn := Node{
 			Type:  "text",
 			Text:  v.Text,
 			Style: styleToScene(v.Style),
 		}
 		return sn, nil
 	case *pate.ImageNode:
-		return sceneNode{
+		return Node{
 			Type:     "image",
 			ImageKey: v.Key,
 			Scale:    scaleStr(v.Scale),
 			Clip:     v.Clip,
 		}, nil
 	default:
-		return sceneNode{}, fmt.Errorf("scene: unknown node type %T", n)
+		return Node{}, fmt.Errorf("scene: unknown node type %T", n)
 	}
 }
 
-func styleToScene(s pate.Style) *sceneStyle {
+func styleToScene(s pate.Style) *Style {
 	if s == (pate.Style{}) {
 		return nil
 	}
-	return &sceneStyle{
+	return &Style{
 		Font:       s.Font,
 		Size:       s.Size,
 		Weight:     weightStr(s.Weight),
@@ -192,7 +202,7 @@ func styleToScene(s pate.Style) *sceneStyle {
 
 // --- unmarshal helpers ---
 
-func sceneToNode(sn sceneNode) (pate.Node, error) {
+func sceneToNode(sn Node) (pate.Node, error) {
 	switch sn.Type {
 	case "vstack":
 		n := &pate.VStackNode{
@@ -269,6 +279,16 @@ func sceneToNode(sn sceneNode) (pate.Node, error) {
 		return n, nil
 	case "spacer":
 		return &pate.SpacerNode{Weight: sn.Weight}, nil
+	case "weighted":
+		var child pate.Node
+		if len(sn.Children) > 0 {
+			var err error
+			child, err = sceneToNode(sn.Children[0])
+			if err != nil {
+				return nil, err
+			}
+		}
+		return &pate.WeightedNode{Weight: sn.Weight, Child: child}, nil
 	case "divider":
 		return &pate.DividerNode{}, nil
 	case "text":
@@ -288,7 +308,7 @@ func sceneToNode(sn sceneNode) (pate.Node, error) {
 	}
 }
 
-func parseStyle(ss *sceneStyle) (pate.Style, error) {
+func parseStyle(ss *Style) (pate.Style, error) {
 	if ss == nil {
 		return pate.Style{}, nil
 	}
@@ -336,6 +356,11 @@ func parseColor(s string) (color.Color, error) {
 	if strings.HasPrefix(s, "#") {
 		hex := s[1:]
 		switch len(hex) {
+		case 3:
+			rv, _ := strconv.ParseUint(hex[0:1], 16, 8)
+			gv, _ := strconv.ParseUint(hex[1:2], 16, 8)
+			bv, _ := strconv.ParseUint(hex[2:3], 16, 8)
+			return color.RGBA{R: uint8(rv<<8 | rv), G: uint8(gv<<8 | gv), B: uint8(bv<<8 | bv), A: 255}, nil
 		case 6:
 			rv, _ := strconv.ParseUint(hex[0:2], 16, 8)
 			gv, _ := strconv.ParseUint(hex[2:4], 16, 8)

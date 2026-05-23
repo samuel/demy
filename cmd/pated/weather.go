@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/samuel/pate"
+	"github.com/samuel/pate/scene/xmlscene"
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/goregular"
 )
@@ -116,6 +118,9 @@ func renderWeather(w io.Writer, data *weatherData, location string) error {
 		pate.Box(pate.Padding(6)),
 		pate.HStack(pate.Children(forecastCols...)),
 	)
+
+	b, err := xmlscene.Marshal(root)
+	_ = os.WriteFile("scene.xml", b, 0644)
 
 	return c.EncodePNG(root, w, pate.TwoBit)
 }

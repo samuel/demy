@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/samuel/pate"
-	"github.com/samuel/pate/scene"
+	"github.com/samuel/pate/scene/xmlscene"
 	"golang.org/x/image/font/gofont/goregular"
 )
 
@@ -22,11 +22,11 @@ var staticFiles embed.FS
 var renderCanvas *pate.Canvas
 
 type lesson struct {
-	ID        int    `json:"id"`
-	Title     string `json:"title"`
-	Desc      string `json:"desc"`
-	GoEquiv   string `json:"go_equiv"`
-	SceneJSON string `json:"scene_json"`
+	ID       int    `json:"id"`
+	Title    string `json:"title"`
+	Desc     string `json:"desc"`
+	GoEquiv  string `json:"go_equiv"`
+	SceneXML string `json:"scene_xml"`
 }
 
 func main() {
@@ -82,7 +82,7 @@ func renderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	node, err := scene.Unmarshal(body)
+	node, err := xmlscene.Unmarshal(body)
 	if err != nil {
 		writeJSONError(w, fmt.Errorf("parsing scene: %w", err), http.StatusBadRequest)
 		return

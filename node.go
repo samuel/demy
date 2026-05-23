@@ -71,7 +71,9 @@ func (n *vstackNode) measure(mctx *measureCtx) nodeSize {
 		if i > 0 {
 			totalH += n.gap
 		}
-		if _, ok := child.(*spacerNode); !ok {
+		switch child.(type) {
+		case *spacerNode, *weightedNode:
+		default:
 			totalH += s.h
 		}
 		if s.w > maxW {
@@ -88,20 +90,23 @@ func (n *vstackNode) layout(bounds nodeRect) {
 	innerW := bounds.w - 2*n.padding
 	innerH := bounds.h - 2*n.padding
 
-	// Compute fixed height and total spacer weight.
+	// Compute fixed height and total weight (spacers + weighted nodes share one pool).
 	fixedH := -n.gap // account for no gap before first child
 	totalWeight := 0.0
 	for i, child := range n.children {
 		fixedH += n.gap
-		if s, ok := child.(*spacerNode); ok {
-			totalWeight += s.weight
-		} else {
+		switch v := child.(type) {
+		case *spacerNode:
+			totalWeight += v.weight
+		case *weightedNode:
+			totalWeight += v.weight
+		default:
 			fixedH += n.measuredSizes[i].h
 		}
 	}
-	spacerH := 0.0
+	unitH := 0.0
 	if totalWeight > 0 {
-		spacerH = math.Max(0, innerH-fixedH) / totalWeight
+		unitH = math.Max(0, innerH-fixedH) / totalWeight
 	}
 
 	y := innerY
@@ -110,24 +115,32 @@ func (n *vstackNode) layout(bounds nodeRect) {
 			y += n.gap
 		}
 		var childW, childH float64
-		if sp, ok := child.(*spacerNode); ok {
-			childH = spacerH * sp.weight
-			childW = 0
-		} else {
+		var fillCrossAxis bool
+		switch v := child.(type) {
+		case *spacerNode:
+			childH = unitH * v.weight
+			fillCrossAxis = true
+		case *weightedNode:
+			childH = unitH * v.weight
+			fillCrossAxis = true
+		default:
 			childH = n.measuredSizes[i].h
 			childW = n.measuredSizes[i].w
 		}
 		childX := innerX
-		if childW < innerW {
+		childLayoutW := innerW
+		if !fillCrossAxis && childW < innerW {
 			switch n.align {
 			case AlignCenter:
 				childX = innerX + (innerW-childW)/2
+				childLayoutW = childW
 			case AlignEnd:
 				childX = innerX + innerW - childW
+				childLayoutW = childW
 			case AlignStart:
 			}
 		}
-		child.layout(nodeRect{x: childX, y: y, w: innerW, h: childH})
+		child.layout(nodeRect{x: childX, y: y, w: childLayoutW, h: childH})
 		y += childH
 	}
 }
@@ -165,7 +178,9 @@ func (n *hstackNode) measure(mctx *measureCtx) nodeSize {
 		if i > 0 {
 			totalW += n.gap
 		}
-		if _, ok := child.(*spacerNode); !ok {
+		switch child.(type) {
+		case *spacerNode, *weightedNode:
+		default:
 			totalW += s.w
 		}
 		if s.h > maxH {
@@ -186,15 +201,18 @@ func (n *hstackNode) layout(bounds nodeRect) {
 	totalWeight := 0.0
 	for i, child := range n.children {
 		fixedW += n.gap
-		if s, ok := child.(*spacerNode); ok {
-			totalWeight += s.weight
-		} else {
+		switch v := child.(type) {
+		case *spacerNode:
+			totalWeight += v.weight
+		case *weightedNode:
+			totalWeight += v.weight
+		default:
 			fixedW += n.measuredSizes[i].w
 		}
 	}
-	spacerW := 0.0
+	unitW := 0.0
 	if totalWeight > 0 {
-		spacerW = math.Max(0, innerW-fixedW) / totalWeight
+		unitW = math.Max(0, innerW-fixedW) / totalWeight
 	}
 
 	x := innerX
@@ -203,15 +221,23 @@ func (n *hstackNode) layout(bounds nodeRect) {
 			x += n.gap
 		}
 		var childW, childH float64
-		if sp, ok := child.(*spacerNode); ok {
-			childW = spacerW * sp.weight
-			childH = innerH
-		} else {
+		var fillCrossAxis bool
+		switch v := child.(type) {
+		case *spacerNode:
+			childW = unitW * v.weight
+			fillCrossAxis = true
+		case *weightedNode:
+			childW = unitW * v.weight
+			fillCrossAxis = true
+		default:
 			childW = n.measuredSizes[i].w
 			childH = n.measuredSizes[i].h
 		}
+		if fillCrossAxis {
+			childH = innerH
+		}
 		childY := innerY
-		if childH < innerH {
+		if !fillCrossAxis && childH < innerH {
 			switch n.align {
 			case AlignCenter:
 				childY = innerY + (innerH-childH)/2
@@ -449,6 +475,37 @@ func (n *spacerNode) measure(_ *measureCtx) nodeSize { return nodeSize{} }
 func (n *spacerNode) layout(bounds nodeRect) { n.bounds = bounds }
 
 func (n *spacerNode) draw(_ *drawCtx) {}
+
+// --- weightedNode ---
+
+type weightedNode struct {
+	weight float64
+	child  node
+	// retained from measure for re-measuring the child with actual allocated dims.
+	fonts  map[string]*FontFamily
+	dpmm   float64
+	bounds nodeRect
+}
+
+func (n *weightedNode) measure(mctx *measureCtx) nodeSize {
+	n.fonts = mctx.fonts
+	n.dpmm = mctx.dpmm
+	n.child.measure(mctx)
+	return nodeSize{}
+}
+
+func (n *weightedNode) layout(bounds nodeRect) {
+	n.bounds = bounds
+	n.child.measure(&measureCtx{
+		fonts:  n.fonts,
+		dpmm:   n.dpmm,
+		availW: bounds.w,
+		availH: bounds.h,
+	})
+	n.child.layout(bounds)
+}
+
+func (n *weightedNode) draw(dctx *drawCtx) { n.child.draw(dctx) }
 
 // --- dividerNode ---
 
@@ -706,6 +763,22 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 			w = 1
 		}
 		return &spacerNode{weight: w}, nil
+	case *WeightedNode:
+		w := v.Weight
+		if w == 0 {
+			w = 1
+		}
+		var child node
+		if v.Child != nil {
+			var err error
+			child, err = buildNode(v.Child, cfg, parentDir)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			child = &spacerNode{}
+		}
+		return &weightedNode{weight: w, child: child}, nil
 	case *DividerNode:
 		return &dividerNode{isHorizontal: parentDir == dirVertical}, nil
 	case *TextNode:

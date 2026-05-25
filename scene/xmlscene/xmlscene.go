@@ -1,4 +1,4 @@
-// Package xmlscene provides XML serialization and template rendering for pate Node trees.
+// Package xmlscene provides XML serialization and template rendering for demy Node trees.
 //
 // The format maps element tag names to node types, attributes to layout/style
 // properties, and child elements to child nodes — no "type" discriminator field,
@@ -16,7 +16,7 @@
 //	</vstack>
 //
 // Color encoding matches the scene package: role names ("foreground", "background",
-// "accent", "muted") are stored as-is and resolved at render time via pate.RoleColor;
+// "accent", "muted") are stored as-is and resolved at render time via demy.RoleColor;
 // other colors are "#rrggbb" or "#rrggbbaa" hex strings.
 package xmlscene
 
@@ -27,15 +27,17 @@ import (
 	"fmt"
 	"image/color"
 	"io"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"text/template"
 
-	"github.com/samuel/pate"
+	"github.com/samuel/demy"
 )
 
 // Marshal serializes a Node tree to indented XML.
-func Marshal(n pate.Node) ([]byte, error) {
+func Marshal(n demy.Node) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := xml.NewEncoder(&buf)
 	enc.Indent("", "\t")
@@ -54,7 +56,7 @@ func Marshal(n pate.Node) ([]byte, error) {
 }
 
 // Unmarshal deserializes XML to a Node tree.
-func Unmarshal(data []byte) (pate.Node, error) {
+func Unmarshal(data []byte) (demy.Node, error) {
 	dec := xml.NewDecoder(bytes.NewReader(data))
 	for {
 		tok, err := dec.Token()
@@ -71,7 +73,7 @@ func Unmarshal(data []byte) (pate.Node, error) {
 }
 
 // Execute renders a text/template that produces XML and unmarshals the result.
-func Execute(tmplSrc []byte, data any) (pate.Node, error) {
+func Execute(tmplSrc []byte, data any) (demy.Node, error) {
 	t, err := template.New("scene").Parse(string(tmplSrc))
 	if err != nil {
 		return nil, fmt.Errorf("xmlscene: template parse: %w", err)
@@ -83,9 +85,112 @@ func Execute(tmplSrc []byte, data any) (pate.Node, error) {
 	return Unmarshal(buf.Bytes())
 }
 
+// MarshalScene serializes a Node tree and named style definitions to an indented
+// XML Scene envelope. Callers that consume the output should call UnmarshalScene
+// and merge the returned styles into Config.Styles before rendering.
+//
+//	<scene>
+//	  <styles>
+//	    <style name="h1" font="sans" size="24" weight="bold"/>
+//	  </styles>
+//	  <vstack>...</vstack>
+//	</scene>
+func MarshalScene(n demy.Node, styles map[string]demy.Style) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := xml.NewEncoder(&buf)
+	enc.Indent("", "\t")
+
+	sceneElem := xml.StartElement{Name: xml.Name{Local: "scene"}}
+	if err := enc.EncodeToken(sceneElem); err != nil {
+		_ = enc.Close()
+		return nil, fmt.Errorf("xmlscene: %w", err)
+	}
+
+	if len(styles) > 0 {
+		stylesElem := xml.StartElement{Name: xml.Name{Local: "styles"}}
+		if err := enc.EncodeToken(stylesElem); err != nil {
+			_ = enc.Close()
+			return nil, fmt.Errorf("xmlscene: %w", err)
+		}
+		for _, k := range slices.Sorted(maps.Keys(styles)) {
+			styleElem := xml.StartElement{Name: xml.Name{Local: "style"}}
+			appendStr(&styleElem, "name", k)
+			appendStyleAttrs(&styleElem, styles[k])
+			if err := enc.EncodeToken(styleElem); err != nil {
+				_ = enc.Close()
+				return nil, fmt.Errorf("xmlscene: %w", err)
+			}
+			if err := enc.EncodeToken(styleElem.End()); err != nil {
+				_ = enc.Close()
+				return nil, fmt.Errorf("xmlscene: %w", err)
+			}
+		}
+		if err := enc.EncodeToken(stylesElem.End()); err != nil {
+			_ = enc.Close()
+			return nil, fmt.Errorf("xmlscene: %w", err)
+		}
+	}
+
+	if err := marshalNode(enc, n); err != nil {
+		_ = enc.Close()
+		return nil, err
+	}
+
+	if err := enc.EncodeToken(sceneElem.End()); err != nil {
+		_ = enc.Close()
+		return nil, fmt.Errorf("xmlscene: %w", err)
+	}
+	if err := enc.Flush(); err != nil {
+		_ = enc.Close()
+		return nil, fmt.Errorf("xmlscene: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return nil, fmt.Errorf("xmlscene: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// UnmarshalScene deserializes XML to a Node tree and style definitions.
+// The document may be a bare node element or a <scene> wrapper containing
+// <styles> and a root element. Merge returned styles into Config.Styles before
+// rendering so that class references resolve correctly.
+func UnmarshalScene(data []byte) (demy.Node, map[string]demy.Style, error) {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			return nil, nil, errors.New("xmlscene: empty document")
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("xmlscene: %w", err)
+		}
+		if start, ok := tok.(xml.StartElement); ok {
+			if start.Name.Local == "scene" {
+				return unmarshalScene(dec)
+			}
+			n, err := unmarshalElement(dec, start)
+			return n, nil, err
+		}
+	}
+}
+
+// ExecuteScene renders a text/template that produces XML and unmarshals the result,
+// returning the root Node and any style definitions embedded in the document.
+func ExecuteScene(tmplSrc []byte, data any) (demy.Node, map[string]demy.Style, error) {
+	t, err := template.New("scene").Parse(string(tmplSrc))
+	if err != nil {
+		return nil, nil, fmt.Errorf("xmlscene: template parse: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return nil, nil, fmt.Errorf("xmlscene: template execute: %w", err)
+	}
+	return UnmarshalScene(buf.Bytes())
+}
+
 // --- marshal ---
 
-func marshalNode(enc *xml.Encoder, n pate.Node) error {
+func marshalNode(enc *xml.Encoder, n demy.Node) error {
 	if n == nil {
 		start := xml.StartElement{Name: xml.Name{Local: "spacer"}}
 		if err := enc.EncodeToken(start); err != nil {
@@ -94,23 +199,23 @@ func marshalNode(enc *xml.Encoder, n pate.Node) error {
 		return enc.EncodeToken(start.End())
 	}
 	switch v := n.(type) {
-	case *pate.VStackNode:
+	case *demy.VStackNode:
 		start := xml.StartElement{Name: xml.Name{Local: "vstack"}}
 		appendFloat(&start, "gap", v.Gap)
 		appendFloat(&start, "padding", v.Padding)
 		appendStr(&start, "align", alignStr(v.Align))
 		return marshalContainer(enc, start, v.Children)
-	case *pate.HStackNode:
+	case *demy.HStackNode:
 		start := xml.StartElement{Name: xml.Name{Local: "hstack"}}
 		appendFloat(&start, "gap", v.Gap)
 		appendFloat(&start, "padding", v.Padding)
 		appendStr(&start, "align", alignStr(v.Align))
 		return marshalContainer(enc, start, v.Children)
-	case *pate.ZStackNode:
+	case *demy.ZStackNode:
 		start := xml.StartElement{Name: xml.Name{Local: "zstack"}}
 		appendStr(&start, "align", zAlignStr(v.Align))
 		return marshalContainer(enc, start, v.Children)
-	case *pate.BoxNode:
+	case *demy.BoxNode:
 		start := xml.StartElement{Name: xml.Name{Local: "box"}}
 		appendFloat(&start, "padding", v.Padding)
 		appendFloat(&start, "border-width", v.BorderWidth)
@@ -119,34 +224,35 @@ func marshalNode(enc *xml.Encoder, n pate.Node) error {
 		appendFloat(&start, "corner-radius", v.CornerRadius)
 		appendBool(&start, "clip", v.Clip)
 		return marshalContainer(enc, start, v.Children)
-	case *pate.FrameNode:
+	case *demy.FrameNode:
 		start := xml.StartElement{Name: xml.Name{Local: "frame"}}
 		appendFloat(&start, "width", v.Width)
 		appendFloat(&start, "height", v.Height)
 		return marshalContainer(enc, start, v.Children)
-	case *pate.SpacerNode:
+	case *demy.SpacerNode:
 		start := xml.StartElement{Name: xml.Name{Local: "spacer"}}
 		appendFloat(&start, "weight", v.Weight)
 		if err := enc.EncodeToken(start); err != nil {
 			return err
 		}
 		return enc.EncodeToken(start.End())
-	case *pate.WeightedNode:
+	case *demy.WeightedNode:
 		start := xml.StartElement{Name: xml.Name{Local: "weighted"}}
 		appendFloat(&start, "weight", v.Weight)
-		var children []pate.Node
+		var children []demy.Node
 		if v.Child != nil {
-			children = []pate.Node{v.Child}
+			children = []demy.Node{v.Child}
 		}
 		return marshalContainer(enc, start, children)
-	case *pate.DividerNode:
+	case *demy.DividerNode:
 		start := xml.StartElement{Name: xml.Name{Local: "divider"}}
 		if err := enc.EncodeToken(start); err != nil {
 			return err
 		}
 		return enc.EncodeToken(start.End())
-	case *pate.TextNode:
+	case *demy.TextNode:
 		start := xml.StartElement{Name: xml.Name{Local: "text"}}
+		appendStr(&start, "class", string(v.Class))
 		appendStyleAttrs(&start, v.Style)
 		if err := enc.EncodeToken(start); err != nil {
 			return err
@@ -157,7 +263,7 @@ func marshalNode(enc *xml.Encoder, n pate.Node) error {
 			}
 		}
 		return enc.EncodeToken(start.End())
-	case *pate.ImageNode:
+	case *demy.ImageNode:
 		start := xml.StartElement{Name: xml.Name{Local: "image"}}
 		appendStr(&start, "key", v.Key)
 		appendStr(&start, "scale", scaleStr(v.Scale))
@@ -171,7 +277,7 @@ func marshalNode(enc *xml.Encoder, n pate.Node) error {
 	}
 }
 
-func marshalContainer(enc *xml.Encoder, start xml.StartElement, children []pate.Node) error {
+func marshalContainer(enc *xml.Encoder, start xml.StartElement, children []demy.Node) error {
 	if err := enc.EncodeToken(start); err != nil {
 		return err
 	}
@@ -214,7 +320,7 @@ func appendInt(start *xml.StartElement, name string, v int) {
 	start.Attr = append(start.Attr, xml.Attr{Name: xml.Name{Local: name}, Value: strconv.Itoa(v)})
 }
 
-func appendStyleAttrs(start *xml.StartElement, s pate.Style) {
+func appendStyleAttrs(start *xml.StartElement, s demy.Style) {
 	appendStr(start, "font", s.Font)
 	appendFloat(start, "size", s.Size)
 	appendStr(start, "weight", weightStr(s.Weight))
@@ -227,11 +333,11 @@ func appendStyleAttrs(start *xml.StartElement, s pate.Style) {
 
 // --- unmarshal ---
 
-func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (pate.Node, error) {
+func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, error) {
 	attrs := attrMap(start.Attr)
 	switch start.Name.Local {
 	case "vstack":
-		n := &pate.VStackNode{
+		n := &demy.VStackNode{
 			Gap:     floatAttr(attrs, "gap"),
 			Padding: floatAttr(attrs, "padding"),
 			Align:   parseAlign(attrs["align"]),
@@ -243,7 +349,7 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (pate.Node, erro
 		n.Children = children
 		return n, nil
 	case "hstack":
-		n := &pate.HStackNode{
+		n := &demy.HStackNode{
 			Gap:     floatAttr(attrs, "gap"),
 			Padding: floatAttr(attrs, "padding"),
 			Align:   parseAlign(attrs["align"]),
@@ -255,7 +361,7 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (pate.Node, erro
 		n.Children = children
 		return n, nil
 	case "zstack":
-		n := &pate.ZStackNode{Align: parseZAlign(attrs["align"])}
+		n := &demy.ZStackNode{Align: parseZAlign(attrs["align"])}
 		children, err := unmarshalChildren(dec)
 		if err != nil {
 			return nil, err
@@ -271,7 +377,7 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (pate.Node, erro
 		if err != nil {
 			return nil, err
 		}
-		n := &pate.BoxNode{
+		n := &demy.BoxNode{
 			Padding:      floatAttr(attrs, "padding"),
 			BorderWidth:  floatAttr(attrs, "border-width"),
 			BorderColor:  bc,
@@ -286,7 +392,7 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (pate.Node, erro
 		n.Children = children
 		return n, nil
 	case "frame":
-		n := &pate.FrameNode{
+		n := &demy.FrameNode{
 			Width:  floatAttr(attrs, "width"),
 			Height: floatAttr(attrs, "height"),
 		}
@@ -300,22 +406,22 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (pate.Node, erro
 		if err := dec.Skip(); err != nil {
 			return nil, fmt.Errorf("xmlscene: %w", err)
 		}
-		return &pate.SpacerNode{Weight: floatAttr(attrs, "weight")}, nil
+		return &demy.SpacerNode{Weight: floatAttr(attrs, "weight")}, nil
 	case "weighted":
 		children, err := unmarshalChildren(dec)
 		if err != nil {
 			return nil, err
 		}
-		var child pate.Node
+		var child demy.Node
 		if len(children) > 0 {
 			child = children[0]
 		}
-		return &pate.WeightedNode{Weight: floatAttr(attrs, "weight"), Child: child}, nil
+		return &demy.WeightedNode{Weight: floatAttr(attrs, "weight"), Child: child}, nil
 	case "divider":
 		if err := dec.Skip(); err != nil {
 			return nil, fmt.Errorf("xmlscene: %w", err)
 		}
-		return &pate.DividerNode{}, nil
+		return &demy.DividerNode{}, nil
 	case "text":
 		text, err := unmarshalTextContent(dec)
 		if err != nil {
@@ -325,12 +431,12 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (pate.Node, erro
 		if err != nil {
 			return nil, err
 		}
-		return &pate.TextNode{Text: text, Style: style}, nil
+		return &demy.TextNode{Text: text, Class: demy.StyleClass(attrs["class"]), Style: style}, nil
 	case "image":
 		if err := dec.Skip(); err != nil {
 			return nil, fmt.Errorf("xmlscene: %w", err)
 		}
-		return &pate.ImageNode{
+		return &demy.ImageNode{
 			Key:   attrs["key"],
 			Scale: parseScale(attrs["scale"]),
 			Clip:  boolAttr(attrs, "clip"),
@@ -340,8 +446,76 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (pate.Node, erro
 	}
 }
 
-func unmarshalChildren(dec *xml.Decoder) ([]pate.Node, error) {
-	var children []pate.Node
+func unmarshalStyles(dec *xml.Decoder) (map[string]demy.Style, error) {
+	styles := make(map[string]demy.Style)
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, fmt.Errorf("xmlscene: %w", err)
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local != "style" {
+				if err := dec.Skip(); err != nil {
+					return nil, fmt.Errorf("xmlscene: %w", err)
+				}
+				continue
+			}
+			attrs := attrMap(t.Attr)
+			name := attrs["name"]
+			if name == "" {
+				if err := dec.Skip(); err != nil {
+					return nil, fmt.Errorf("xmlscene: %w", err)
+				}
+				continue
+			}
+			style, err := styleFromAttrs(attrs)
+			if err != nil {
+				return nil, err
+			}
+			styles[name] = style
+			if err := dec.Skip(); err != nil {
+				return nil, fmt.Errorf("xmlscene: %w", err)
+			}
+		case xml.EndElement:
+			return styles, nil
+		}
+	}
+}
+
+func unmarshalScene(dec *xml.Decoder) (demy.Node, map[string]demy.Style, error) {
+	var (
+		root   demy.Node
+		styles map[string]demy.Style
+	)
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, nil, fmt.Errorf("xmlscene: %w", err)
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "styles" {
+				s, err := unmarshalStyles(dec)
+				if err != nil {
+					return nil, nil, err
+				}
+				styles = s
+			} else {
+				n, err := unmarshalElement(dec, t)
+				if err != nil {
+					return nil, nil, err
+				}
+				root = n
+			}
+		case xml.EndElement:
+			return root, styles, nil
+		}
+	}
+}
+
+func unmarshalChildren(dec *xml.Decoder) ([]demy.Node, error) {
+	var children []demy.Node
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -401,16 +575,16 @@ func boolAttr(attrs map[string]string, name string) bool {
 	return attrs[name] == "true"
 }
 
-func styleFromAttrs(attrs map[string]string) (pate.Style, error) {
+func styleFromAttrs(attrs map[string]string) (demy.Style, error) {
 	clr, err := parseColor(attrs["color"])
 	if err != nil {
-		return pate.Style{}, err
+		return demy.Style{}, err
 	}
 	var maxLines int
 	if s := attrs["max-lines"]; s != "" {
 		maxLines, _ = strconv.Atoi(s)
 	}
-	return pate.Style{
+	return demy.Style{
 		Font:       attrs["font"],
 		Size:       floatAttr(attrs, "size"),
 		Weight:     parseWeight(attrs["weight"]),
@@ -428,7 +602,7 @@ func colorStr(c color.Color) string {
 	if c == nil {
 		return ""
 	}
-	if rc, ok := c.(pate.RoleColor); ok {
+	if rc, ok := c.(demy.RoleColor); ok {
 		return rc.Name
 	}
 	r, g, b, a := c.RGBA()
@@ -445,7 +619,7 @@ func parseColor(s string) (color.Color, error) {
 	}
 	switch s {
 	case "foreground", "background", "accent", "muted":
-		return pate.RoleColor{Name: s}, nil
+		return demy.RoleColor{Name: s}, nil
 	}
 	if strings.HasPrefix(s, "#") {
 		hex := s[1:]
@@ -473,141 +647,141 @@ func parseColor(s string) (color.Color, error) {
 
 // --- alignment ---
 
-func alignStr(a pate.Alignment) string {
+func alignStr(a demy.Alignment) string {
 	switch a {
-	case pate.AlignCenter:
+	case demy.AlignCenter:
 		return "center"
-	case pate.AlignEnd:
+	case demy.AlignEnd:
 		return "end"
 	default:
 		return ""
 	}
 }
 
-func parseAlign(s string) pate.Alignment {
+func parseAlign(s string) demy.Alignment {
 	switch s {
 	case "center":
-		return pate.AlignCenter
+		return demy.AlignCenter
 	case "end":
-		return pate.AlignEnd
+		return demy.AlignEnd
 	default:
-		return pate.AlignStart
+		return demy.AlignStart
 	}
 }
 
-func zAlignStr(a pate.ZAlignment) string {
+func zAlignStr(a demy.ZAlignment) string {
 	switch a {
-	case pate.Top:
+	case demy.Top:
 		return "top"
-	case pate.TopTrailing:
+	case demy.TopTrailing:
 		return "top-trailing"
-	case pate.Leading:
+	case demy.Leading:
 		return "leading"
-	case pate.Center:
+	case demy.Center:
 		return "center"
-	case pate.Trailing:
+	case demy.Trailing:
 		return "trailing"
-	case pate.BottomLeading:
+	case demy.BottomLeading:
 		return "bottom-leading"
-	case pate.Bottom:
+	case demy.Bottom:
 		return "bottom"
-	case pate.BottomTrailing:
+	case demy.BottomTrailing:
 		return "bottom-trailing"
 	default:
 		return ""
 	}
 }
 
-func parseZAlign(s string) pate.ZAlignment {
+func parseZAlign(s string) demy.ZAlignment {
 	switch s {
 	case "top":
-		return pate.Top
+		return demy.Top
 	case "top-trailing":
-		return pate.TopTrailing
+		return demy.TopTrailing
 	case "leading":
-		return pate.Leading
+		return demy.Leading
 	case "center":
-		return pate.Center
+		return demy.Center
 	case "trailing":
-		return pate.Trailing
+		return demy.Trailing
 	case "bottom-leading":
-		return pate.BottomLeading
+		return demy.BottomLeading
 	case "bottom":
-		return pate.Bottom
+		return demy.Bottom
 	case "bottom-trailing":
-		return pate.BottomTrailing
+		return demy.BottomTrailing
 	default:
-		return pate.TopLeading
+		return demy.TopLeading
 	}
 }
 
 // --- text style ---
 
-func textAlignStr(a pate.TextAlign) string {
+func textAlignStr(a demy.TextAlign) string {
 	switch a {
-	case pate.TextAlignCenter:
+	case demy.TextAlignCenter:
 		return "center"
-	case pate.TextAlignRight:
+	case demy.TextAlignRight:
 		return "right"
 	default:
 		return ""
 	}
 }
 
-func parseTextAlign(s string) pate.TextAlign {
+func parseTextAlign(s string) demy.TextAlign {
 	switch s {
 	case "center":
-		return pate.TextAlignCenter
+		return demy.TextAlignCenter
 	case "right":
-		return pate.TextAlignRight
+		return demy.TextAlignRight
 	default:
-		return pate.TextAlignLeft
+		return demy.TextAlignLeft
 	}
 }
 
-func overflowStr(o pate.TextOverflow) string {
+func overflowStr(o demy.TextOverflow) string {
 	switch o {
-	case pate.TextOverflowClip:
+	case demy.TextOverflowClip:
 		return "clip"
-	case pate.TextOverflowEllipsis:
+	case demy.TextOverflowEllipsis:
 		return "ellipsis"
 	default:
 		return ""
 	}
 }
 
-func parseOverflow(s string) pate.TextOverflow {
+func parseOverflow(s string) demy.TextOverflow {
 	switch s {
 	case "clip":
-		return pate.TextOverflowClip
+		return demy.TextOverflowClip
 	case "ellipsis":
-		return pate.TextOverflowEllipsis
+		return demy.TextOverflowEllipsis
 	default:
-		return pate.TextOverflowWrap
+		return demy.TextOverflowWrap
 	}
 }
 
 // --- font weight ---
 
-func weightStr(w pate.FontStyle) string {
-	italic := w&pate.FontItalic != 0
+func weightStr(w demy.FontStyle) string {
+	italic := w&demy.FontItalic != 0
 	var s string
-	switch w &^ pate.FontItalic {
-	case pate.FontThin:
+	switch w &^ demy.FontItalic {
+	case demy.FontThin:
 		s = "thin"
-	case pate.FontExtraLight:
+	case demy.FontExtraLight:
 		s = "extra-light"
-	case pate.FontLight:
+	case demy.FontLight:
 		s = "light"
-	case pate.FontMedium:
+	case demy.FontMedium:
 		s = "medium"
-	case pate.FontSemiBold:
+	case demy.FontSemiBold:
 		s = "semi-bold"
-	case pate.FontBold:
+	case demy.FontBold:
 		s = "bold"
-	case pate.FontExtraBold:
+	case demy.FontExtraBold:
 		s = "extra-bold"
-	case pate.FontBlack:
+	case demy.FontBlack:
 		s = "black"
 	default:
 		s = ""
@@ -621,56 +795,56 @@ func weightStr(w pate.FontStyle) string {
 	return s
 }
 
-func parseWeight(s string) pate.FontStyle {
+func parseWeight(s string) demy.FontStyle {
 	italic := strings.HasSuffix(s, "-italic") || s == "italic"
 	base := strings.TrimSuffix(s, "-italic")
-	var w pate.FontStyle
+	var w demy.FontStyle
 	switch base {
 	case "thin":
-		w = pate.FontThin
+		w = demy.FontThin
 	case "extra-light":
-		w = pate.FontExtraLight
+		w = demy.FontExtraLight
 	case "light":
-		w = pate.FontLight
+		w = demy.FontLight
 	case "medium":
-		w = pate.FontMedium
+		w = demy.FontMedium
 	case "semi-bold":
-		w = pate.FontSemiBold
+		w = demy.FontSemiBold
 	case "bold":
-		w = pate.FontBold
+		w = demy.FontBold
 	case "extra-bold":
-		w = pate.FontExtraBold
+		w = demy.FontExtraBold
 	case "black":
-		w = pate.FontBlack
+		w = demy.FontBlack
 	default:
-		w = pate.FontRegular
+		w = demy.FontRegular
 	}
 	if italic {
-		return w | pate.FontItalic
+		return w | demy.FontItalic
 	}
 	return w
 }
 
 // --- image scale ---
 
-func scaleStr(s pate.ImageScale) string {
+func scaleStr(s demy.ImageScale) string {
 	switch s {
-	case pate.ImageFill:
+	case demy.ImageFill:
 		return "fill"
-	case pate.ImageStretch:
+	case demy.ImageStretch:
 		return "stretch"
 	default:
 		return ""
 	}
 }
 
-func parseScale(s string) pate.ImageScale {
+func parseScale(s string) demy.ImageScale {
 	switch s {
 	case "fill":
-		return pate.ImageFill
+		return demy.ImageFill
 	case "stretch":
-		return pate.ImageStretch
+		return demy.ImageStretch
 	default:
-		return pate.ImageFit
+		return demy.ImageFit
 	}
 }

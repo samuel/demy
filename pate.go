@@ -1,7 +1,7 @@
-// Package pate provides a composable rendering context for e-ink and
+// Package demy provides a composable rendering context for e-ink and
 // other more static displays, built on tdewolff/canvas with a
 // SwiftUI-inspired layout model.
-package pate
+package demy
 
 import (
 	"image"
@@ -52,7 +52,7 @@ type FontFamily struct {
 }
 
 // LoadFontFile loads a TTF or OTF font file as the Regular style of a new family.
-// name identifies the family within pate (used as the key in Config.Fonts).
+// name identifies the family within demy (used as the key in Config.Fonts).
 func LoadFontFile(name, path string) (*FontFamily, error) {
 	ff := cv.NewFontFamily(name)
 	if err := ff.LoadFontFile(path, cv.FontRegular); err != nil {
@@ -172,7 +172,45 @@ type Style struct {
 	Overflow   TextOverflow
 }
 
-func (Style) pateTextOption() {}
+func (Style) demyTextOption() {}
+
+// mergeStyle overlays non-zero fields from override on top of base.
+func mergeStyle(base, override Style) Style {
+	if override.Font != "" {
+		base.Font = override.Font
+	}
+	if override.Size != 0 {
+		base.Size = override.Size
+	}
+	if override.Weight != 0 {
+		base.Weight = override.Weight
+	}
+	if override.Color != nil {
+		base.Color = override.Color
+	}
+	if override.Align != 0 {
+		base.Align = override.Align
+	}
+	if override.LineHeight != 0 {
+		base.LineHeight = override.LineHeight
+	}
+	if override.MaxLines != 0 {
+		base.MaxLines = override.MaxLines
+	}
+	if override.Overflow != 0 {
+		base.Overflow = override.Overflow
+	}
+	return base
+}
+
+// StyleClass references a named entry in Config.Styles.
+// It is resolved at render time and merged under any inline Style fields.
+type StyleClass string
+
+func (StyleClass) demyTextOption() {}
+
+// Class returns a StyleClass TextOption referencing the named style in Config.Styles.
+func Class(name string) StyleClass { return StyleClass(name) }
 
 // ImageScale controls how images scale to fit their container.
 type ImageScale int
@@ -183,7 +221,7 @@ const (
 	ImageStretch                   // stretch to fill exactly
 )
 
-func (ImageScale) pateOption() {}
+func (ImageScale) demyOption() {}
 
 // Alignment is the cross-axis alignment for HStack and VStack.
 type Alignment int
@@ -194,7 +232,7 @@ const (
 	AlignEnd
 )
 
-func (Alignment) pateOption() {}
+func (Alignment) demyOption() {}
 
 // ZAlignment is the 9-position alignment for ZStack children.
 type ZAlignment int
@@ -211,7 +249,7 @@ const (
 	BottomTrailing                   // 8
 )
 
-func (ZAlignment) pateOption() {}
+func (ZAlignment) demyOption() {}
 
 // ColorMode controls the bit depth and palette of the output PNG.
 type ColorMode int
@@ -238,21 +276,21 @@ const (
 // return a Node. The interface is sealed — implementations are provided by this
 // package only.
 type Node interface {
-	pateNode()
+	demyNode()
 }
 
 // Option is implemented by layout options (Gap, Padding, Alignment, …) and by
 // Node itself, allowing children to be passed inline to layout constructors.
 // The interface is sealed to this package.
 type Option interface {
-	pateOption()
+	demyOption()
 }
 
 // TextOption is implemented by Style and future per-property text overrides.
 // It does NOT implement Option, preventing text-only options from being
 // accidentally passed to layout containers.
 type TextOption interface {
-	pateTextOption()
+	demyTextOption()
 }
 
 // RoleColor is a color.Color that references a semantic role from Config.Roles.
@@ -297,8 +335,8 @@ type VStackNode struct {
 	Children []Node
 }
 
-func (*VStackNode) pateNode()   {}
-func (*VStackNode) pateOption() {}
+func (*VStackNode) demyNode()   {}
+func (*VStackNode) demyOption() {}
 
 // HStackNode lays children out horizontally.
 type HStackNode struct {
@@ -308,8 +346,8 @@ type HStackNode struct {
 	Children []Node
 }
 
-func (*HStackNode) pateNode()   {}
-func (*HStackNode) pateOption() {}
+func (*HStackNode) demyNode()   {}
+func (*HStackNode) demyOption() {}
 
 // ZStackNode layers children on top of each other.
 type ZStackNode struct {
@@ -317,8 +355,8 @@ type ZStackNode struct {
 	Children []Node
 }
 
-func (*ZStackNode) pateNode()   {}
-func (*ZStackNode) pateOption() {}
+func (*ZStackNode) demyNode()   {}
+func (*ZStackNode) demyOption() {}
 
 // BoxNode is a container with optional background, border, corner radius, and padding.
 type BoxNode struct {
@@ -331,8 +369,8 @@ type BoxNode struct {
 	Children     []Node
 }
 
-func (*BoxNode) pateNode()   {}
-func (*BoxNode) pateOption() {}
+func (*BoxNode) demyNode()   {}
+func (*BoxNode) demyOption() {}
 
 // FrameNode constrains its children to exactly Width×Height pixels.
 type FrameNode struct {
@@ -341,51 +379,53 @@ type FrameNode struct {
 	Children []Node
 }
 
-func (*FrameNode) pateNode()   {}
-func (*FrameNode) pateOption() {}
+func (*FrameNode) demyNode()   {}
+func (*FrameNode) demyOption() {}
 
 // SpacerNode fills remaining space in a stack. Weight defaults to 1.
 type SpacerNode struct {
 	Weight float64
 }
 
-func (*SpacerNode) pateNode()   {}
-func (*SpacerNode) pateOption() {}
+func (*SpacerNode) demyNode()   {}
+func (*SpacerNode) demyOption() {}
 
 // WeightedNode wraps a child and allocates it a proportional share of the
-// parent stack's remaining space. It participates in the same weight pool as
+// parent stack's remaining space. It particidemys in the same weight pool as
 // SpacerNode: non-weighted children are measured at their natural size first,
 // and weighted/spacer nodes divide the remainder proportionally.
 //
 // Example — three columns at 25 / 25 / 50 %:
 //
-//	pate.HStack(
-//	    pate.Weighted(1, child1),
-//	    pate.Weighted(1, child2),
-//	    pate.Weighted(2, child3),
+//	demy.HStack(
+//	    demy.Weighted(1, child1),
+//	    demy.Weighted(1, child2),
+//	    demy.Weighted(2, child3),
 //	)
 type WeightedNode struct {
 	Weight float64
 	Child  Node
 }
 
-func (*WeightedNode) pateNode()   {}
-func (*WeightedNode) pateOption() {}
+func (*WeightedNode) demyNode()   {}
+func (*WeightedNode) demyOption() {}
 
 // DividerNode draws a 1px rule. Orientation is inferred from the enclosing stack.
 type DividerNode struct{}
 
-func (*DividerNode) pateNode()   {}
-func (*DividerNode) pateOption() {}
+func (*DividerNode) demyNode()   {}
+func (*DividerNode) demyOption() {}
 
 // TextNode renders a string. Style defaults to Config.DefaultTextStyle when Font is empty.
+// If Class is set, the named style from Config.Styles is merged as a base before inline Style fields.
 type TextNode struct {
 	Text  string
+	Class StyleClass
 	Style Style
 }
 
-func (*TextNode) pateNode()   {}
-func (*TextNode) pateOption() {}
+func (*TextNode) demyNode()   {}
+func (*TextNode) demyOption() {}
 
 // ImageNode renders an image. Set Image directly or use Key to reference
 // a pre-loaded image in Config.Images (required for serialized contexts).
@@ -396,15 +436,15 @@ type ImageNode struct {
 	Clip  bool
 }
 
-func (*ImageNode) pateNode()   {}
-func (*ImageNode) pateOption() {}
+func (*ImageNode) demyNode()   {}
+func (*ImageNode) demyOption() {}
 
 // --- Layout option types ---
 
 // gapOpt sets spacing between stack children (pixels).
 type gapOpt float64
 
-func (gapOpt) pateOption() {}
+func (gapOpt) demyOption() {}
 
 // Gap returns a gap option for stack layouts.
 func Gap(px float64) gapOpt { return gapOpt(px) }
@@ -412,7 +452,7 @@ func Gap(px float64) gapOpt { return gapOpt(px) }
 // paddingOpt sets padding inside a container (pixels).
 type paddingOpt float64
 
-func (paddingOpt) pateOption() {}
+func (paddingOpt) demyOption() {}
 
 // Padding returns a padding option for stack and box layouts.
 func Padding(px float64) paddingOpt { return paddingOpt(px) }
@@ -423,7 +463,7 @@ type borderOpt struct {
 	color color.Color
 }
 
-func (borderOpt) pateOption() {}
+func (borderOpt) demyOption() {}
 
 // Border returns a border option for Box.
 func Border(width float64, c color.Color) borderOpt { return borderOpt{width, c} }
@@ -431,7 +471,7 @@ func Border(width float64, c color.Color) borderOpt { return borderOpt{width, c}
 // backgroundOpt sets a box fill color.
 type backgroundOpt struct{ color color.Color }
 
-func (backgroundOpt) pateOption() {}
+func (backgroundOpt) demyOption() {}
 
 // Background returns a background color option for Box.
 func Background(c color.Color) backgroundOpt { return backgroundOpt{c} }
@@ -439,7 +479,7 @@ func Background(c color.Color) backgroundOpt { return backgroundOpt{c} }
 // cornerRadiusOpt sets rounded corners (pixels).
 type cornerRadiusOpt float64
 
-func (cornerRadiusOpt) pateOption() {}
+func (cornerRadiusOpt) demyOption() {}
 
 // CornerRadius returns a corner-radius option for Box.
 func CornerRadius(px float64) cornerRadiusOpt { return cornerRadiusOpt(px) }
@@ -447,7 +487,7 @@ func CornerRadius(px float64) cornerRadiusOpt { return cornerRadiusOpt(px) }
 // clipOpt enables clipping children to a container's bounds.
 type clipOpt struct{}
 
-func (clipOpt) pateOption() {}
+func (clipOpt) demyOption() {}
 
 // Clip enables clipping when passed as a Box or Image option.
 var Clip = clipOpt{} //nolint:gochecknoglobals
@@ -455,11 +495,11 @@ var Clip = clipOpt{} //nolint:gochecknoglobals
 // childrenOpt wraps a slice of Nodes as a single Option for variadic expansion.
 type childrenOpt []Node
 
-func (childrenOpt) pateOption() {}
+func (childrenOpt) demyOption() {}
 
 // Children wraps nodes as an Option, enabling slice expansion into layout constructors:
 //
-//	pate.VStack(pate.Gap(4), pate.Children(rows...))
+//	demy.VStack(demy.Gap(4), demy.Children(rows...))
 func Children(nodes ...Node) childrenOpt { return childrenOpt(nodes) }
 
 // appendChildren appends opts that are Node or childrenOpt values to dst.
@@ -578,8 +618,11 @@ func Divider() *DividerNode { return &DividerNode{} }
 func Text(s string, opts ...TextOption) *TextNode {
 	n := &TextNode{Text: s}
 	for _, opt := range opts {
-		if v, ok := opt.(Style); ok {
+		switch v := opt.(type) {
+		case Style:
 			n.Style = v
+		case StyleClass:
+			n.Class = v
 		}
 	}
 	return n

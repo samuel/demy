@@ -1,4 +1,4 @@
-package pate
+package demy
 
 import (
 	"errors"
@@ -11,7 +11,7 @@ import (
 	"github.com/tdewolff/canvas/renderers/rasterizer"
 )
 
-// Canvas is the pate rendering context. Build a Node tree using the constructor
+// Canvas is the demy rendering context. Build a Node tree using the constructor
 // functions (VStack, HStack, Text, …), then call Render or EncodePNG.
 //
 // All dimensions are in pixels. Font sizes are in points.
@@ -26,10 +26,10 @@ type Canvas struct {
 // Returns an error if the Config has zero physical or pixel dimensions.
 func New(cfg Config) (*Canvas, error) {
 	if cfg.PhysicalWidthMM == 0 || cfg.PhysicalHeightMM == 0 {
-		return nil, errors.New("pate: Config must have non-zero physical dimensions")
+		return nil, errors.New("demy: Config must have non-zero physical dimensions")
 	}
 	if cfg.PixelWidth == 0 || cfg.PixelHeight == 0 {
-		return nil, errors.New("pate: Config must have non-zero pixel dimensions")
+		return nil, errors.New("demy: Config must have non-zero pixel dimensions")
 	}
 	return &Canvas{
 		cfg:   cfg,

@@ -1,11 +1,15 @@
-// Package scene provides JSON serialization for pate Node trees.
+// Package scene provides JSON serialization for demy Node trees.
 // Used to pass scene descriptions across process boundaries (e.g. WASM plugins).
 //
 // Color encoding:
 //   - Role names ("foreground", "background", "accent", "muted") are stored as-is
-//     and resolved against Config.Roles at render time via pate.RoleColor.
+//     and resolved against Config.Roles at render time via demy.RoleColor.
 //   - All other colors are encoded as "#rrggbb" or "#rrggbbaa" hex strings and
 //     parsed into color.RGBA at unmarshal time.
+//
+// Two serialization formats are supported:
+//   - Bare node: {"type":"vstack",...} — used by Marshal/Unmarshal
+//   - Scene envelope: {"styles":{...},"root":{...}} — used by MarshalScene/UnmarshalScene
 package scene
 
 import (
@@ -15,7 +19,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/samuel/pate"
+	"github.com/samuel/demy"
 )
 
 type Node struct {
@@ -32,6 +36,7 @@ type Node struct {
 	Weight       float64 `json:"weight,omitempty"`
 	Align        string  `json:"align,omitempty"`
 	Text         string  `json:"text,omitempty"`
+	Class        string  `json:"class,omitempty"`
 	Style        *Style  `json:"style,omitempty"`
 	ImageKey     string  `json:"image_key,omitempty"`
 	Scale        string  `json:"scale,omitempty"`
@@ -49,19 +54,25 @@ type Style struct {
 	Overflow   string  `json:"overflow,omitempty"`
 }
 
-// Marshal serializes a Node tree to JSON.
-func Marshal(n pate.Node) ([]byte, error) {
-	sn, err := NoteToSchene(n)
+// Scene is the top-level JSON envelope for a node tree with embedded style definitions.
+type Scene struct {
+	Styles map[string]Style `json:"styles,omitempty"`
+	Root   Node             `json:"root"`
+}
+
+// Marshal serializes a Node tree to JSON (bare node format, no styles envelope).
+func Marshal(n demy.Node) ([]byte, error) {
+	sn, err := nodeToScene(n)
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(sn)
 }
 
-// Unmarshal deserializes JSON to a Node tree. Role-name colors ("muted", etc.)
-// are stored as pate.RoleColor and resolved against Config.Roles at render time.
+// Unmarshal deserializes bare-node JSON to a Node tree. Role-name colors ("muted", etc.)
+// are stored as demy.RoleColor and resolved against Config.Roles at render time.
 // Image keys are resolved against Config.Images during the build pass.
-func Unmarshal(data []byte) (pate.Node, error) {
+func Unmarshal(data []byte) (demy.Node, error) {
 	var sn Node
 	if err := json.Unmarshal(data, &sn); err != nil {
 		return nil, err
@@ -69,14 +80,67 @@ func Unmarshal(data []byte) (pate.Node, error) {
 	return sceneToNode(sn)
 }
 
+// MarshalScene serializes a Node tree and named style definitions to a JSON Scene
+// envelope. Callers that consume the returned data should call UnmarshalScene and
+// merge the returned styles into Config.Styles before rendering.
+func MarshalScene(n demy.Node, styles map[string]demy.Style) ([]byte, error) {
+	root, err := nodeToScene(n)
+	if err != nil {
+		return nil, err
+	}
+	s := Scene{Root: root}
+	if len(styles) > 0 {
+		s.Styles = make(map[string]Style, len(styles))
+		for k, v := range styles {
+			s.Styles[k] = Style{
+				Font:       v.Font,
+				Size:       v.Size,
+				Weight:     weightStr(v.Weight),
+				Color:      colorStr(v.Color),
+				Align:      textAlignStr(v.Align),
+				LineHeight: v.LineHeight,
+				MaxLines:   v.MaxLines,
+				Overflow:   overflowStr(v.Overflow),
+			}
+		}
+	}
+	return json.Marshal(s)
+}
+
+// UnmarshalScene deserializes a JSON Scene envelope, returning the root node and
+// style definitions. Merge the returned styles into Config.Styles before rendering
+// so that class references in the node tree resolve correctly.
+func UnmarshalScene(data []byte) (demy.Node, map[string]demy.Style, error) {
+	var s Scene
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil, nil, err
+	}
+	n, err := sceneToNode(s.Root)
+	if err != nil {
+		return nil, nil, err
+	}
+	var outStyles map[string]demy.Style
+	if len(s.Styles) > 0 {
+		outStyles = make(map[string]demy.Style, len(s.Styles))
+		for k, ss := range s.Styles {
+			parsed, err := parseStyle(&ss)
+			if err != nil {
+				return nil, nil, fmt.Errorf("scene: style %q: %w", k, err)
+			}
+			outStyles[k] = parsed
+		}
+	}
+	return n, outStyles, nil
+}
+
 // --- marshal helpers ---
 
-func NoteToSchene(n pate.Node) (Node, error) {
+func nodeToScene(n demy.Node) (Node, error) {
 	if n == nil {
 		return Node{Type: "spacer", Weight: 0}, nil
 	}
 	switch v := n.(type) {
-	case *pate.VStackNode:
+	case *demy.VStackNode:
 		sn := Node{
 			Type:    "vstack",
 			Gap:     v.Gap,
@@ -84,14 +148,14 @@ func NoteToSchene(n pate.Node) (Node, error) {
 			Align:   alignStr(v.Align),
 		}
 		for _, child := range v.Children {
-			cs, err := NoteToSchene(child)
+			cs, err := nodeToScene(child)
 			if err != nil {
 				return Node{}, err
 			}
 			sn.Children = append(sn.Children, cs)
 		}
 		return sn, nil
-	case *pate.HStackNode:
+	case *demy.HStackNode:
 		sn := Node{
 			Type:    "hstack",
 			Gap:     v.Gap,
@@ -99,27 +163,27 @@ func NoteToSchene(n pate.Node) (Node, error) {
 			Align:   alignStr(v.Align),
 		}
 		for _, child := range v.Children {
-			cs, err := NoteToSchene(child)
+			cs, err := nodeToScene(child)
 			if err != nil {
 				return Node{}, err
 			}
 			sn.Children = append(sn.Children, cs)
 		}
 		return sn, nil
-	case *pate.ZStackNode:
+	case *demy.ZStackNode:
 		sn := Node{
 			Type:  "zstack",
 			Align: zAlignStr(v.Align),
 		}
 		for _, child := range v.Children {
-			cs, err := NoteToSchene(child)
+			cs, err := nodeToScene(child)
 			if err != nil {
 				return Node{}, err
 			}
 			sn.Children = append(sn.Children, cs)
 		}
 		return sn, nil
-	case *pate.BoxNode:
+	case *demy.BoxNode:
 		sn := Node{
 			Type:         "box",
 			Padding:      v.Padding,
@@ -130,49 +194,50 @@ func NoteToSchene(n pate.Node) (Node, error) {
 			Clip:         v.Clip,
 		}
 		for _, child := range v.Children {
-			cs, err := NoteToSchene(child)
+			cs, err := nodeToScene(child)
 			if err != nil {
 				return Node{}, err
 			}
 			sn.Children = append(sn.Children, cs)
 		}
 		return sn, nil
-	case *pate.FrameNode:
+	case *demy.FrameNode:
 		sn := Node{
 			Type:   "frame",
 			Width:  v.Width,
 			Height: v.Height,
 		}
 		for _, child := range v.Children {
-			cs, err := NoteToSchene(child)
+			cs, err := nodeToScene(child)
 			if err != nil {
 				return Node{}, err
 			}
 			sn.Children = append(sn.Children, cs)
 		}
 		return sn, nil
-	case *pate.SpacerNode:
+	case *demy.SpacerNode:
 		return Node{Type: "spacer", Weight: v.Weight}, nil
-	case *pate.WeightedNode:
+	case *demy.WeightedNode:
 		var children []Node
 		if v.Child != nil {
-			cs, err := NoteToSchene(v.Child)
+			cs, err := nodeToScene(v.Child)
 			if err != nil {
 				return Node{}, err
 			}
 			children = []Node{cs}
 		}
 		return Node{Type: "weighted", Weight: v.Weight, Children: children}, nil
-	case *pate.DividerNode:
+	case *demy.DividerNode:
 		return Node{Type: "divider"}, nil
-	case *pate.TextNode:
+	case *demy.TextNode:
 		sn := Node{
 			Type:  "text",
 			Text:  v.Text,
+			Class: string(v.Class),
 			Style: styleToScene(v.Style),
 		}
 		return sn, nil
-	case *pate.ImageNode:
+	case *demy.ImageNode:
 		return Node{
 			Type:     "image",
 			ImageKey: v.Key,
@@ -184,8 +249,8 @@ func NoteToSchene(n pate.Node) (Node, error) {
 	}
 }
 
-func styleToScene(s pate.Style) *Style {
-	if s == (pate.Style{}) {
+func styleToScene(s demy.Style) *Style {
+	if s == (demy.Style{}) {
 		return nil
 	}
 	return &Style{
@@ -202,10 +267,10 @@ func styleToScene(s pate.Style) *Style {
 
 // --- unmarshal helpers ---
 
-func sceneToNode(sn Node) (pate.Node, error) {
+func sceneToNode(sn Node) (demy.Node, error) {
 	switch sn.Type {
 	case "vstack":
-		n := &pate.VStackNode{
+		n := &demy.VStackNode{
 			Gap:     sn.Gap,
 			Padding: sn.Padding,
 			Align:   parseAlign(sn.Align),
@@ -219,7 +284,7 @@ func sceneToNode(sn Node) (pate.Node, error) {
 		}
 		return n, nil
 	case "hstack":
-		n := &pate.HStackNode{
+		n := &demy.HStackNode{
 			Gap:     sn.Gap,
 			Padding: sn.Padding,
 			Align:   parseAlign(sn.Align),
@@ -233,7 +298,7 @@ func sceneToNode(sn Node) (pate.Node, error) {
 		}
 		return n, nil
 	case "zstack":
-		n := &pate.ZStackNode{Align: parseZAlign(sn.Align)}
+		n := &demy.ZStackNode{Align: parseZAlign(sn.Align)}
 		for _, child := range sn.Children {
 			c, err := sceneToNode(child)
 			if err != nil {
@@ -251,7 +316,7 @@ func sceneToNode(sn Node) (pate.Node, error) {
 		if err != nil {
 			return nil, err
 		}
-		n := &pate.BoxNode{
+		n := &demy.BoxNode{
 			Padding:      sn.Padding,
 			BorderWidth:  sn.BorderWidth,
 			BorderColor:  bc,
@@ -268,7 +333,7 @@ func sceneToNode(sn Node) (pate.Node, error) {
 		}
 		return n, nil
 	case "frame":
-		n := &pate.FrameNode{Width: sn.Width, Height: sn.Height}
+		n := &demy.FrameNode{Width: sn.Width, Height: sn.Height}
 		for _, child := range sn.Children {
 			c, err := sceneToNode(child)
 			if err != nil {
@@ -278,9 +343,9 @@ func sceneToNode(sn Node) (pate.Node, error) {
 		}
 		return n, nil
 	case "spacer":
-		return &pate.SpacerNode{Weight: sn.Weight}, nil
+		return &demy.SpacerNode{Weight: sn.Weight}, nil
 	case "weighted":
-		var child pate.Node
+		var child demy.Node
 		if len(sn.Children) > 0 {
 			var err error
 			child, err = sceneToNode(sn.Children[0])
@@ -288,17 +353,17 @@ func sceneToNode(sn Node) (pate.Node, error) {
 				return nil, err
 			}
 		}
-		return &pate.WeightedNode{Weight: sn.Weight, Child: child}, nil
+		return &demy.WeightedNode{Weight: sn.Weight, Child: child}, nil
 	case "divider":
-		return &pate.DividerNode{}, nil
+		return &demy.DividerNode{}, nil
 	case "text":
 		style, err := parseStyle(sn.Style)
 		if err != nil {
 			return nil, err
 		}
-		return &pate.TextNode{Text: sn.Text, Style: style}, nil
+		return &demy.TextNode{Text: sn.Text, Class: demy.StyleClass(sn.Class), Style: style}, nil
 	case "image":
-		return &pate.ImageNode{
+		return &demy.ImageNode{
 			Key:   sn.ImageKey,
 			Scale: parseScale(sn.Scale),
 			Clip:  sn.Clip,
@@ -308,15 +373,15 @@ func sceneToNode(sn Node) (pate.Node, error) {
 	}
 }
 
-func parseStyle(ss *Style) (pate.Style, error) {
+func parseStyle(ss *Style) (demy.Style, error) {
 	if ss == nil {
-		return pate.Style{}, nil
+		return demy.Style{}, nil
 	}
 	clr, err := parseColor(ss.Color)
 	if err != nil {
-		return pate.Style{}, err
+		return demy.Style{}, err
 	}
-	return pate.Style{
+	return demy.Style{
 		Font:       ss.Font,
 		Size:       ss.Size,
 		Weight:     parseWeight(ss.Weight),
@@ -334,7 +399,7 @@ func colorStr(c color.Color) string {
 	if c == nil {
 		return ""
 	}
-	if rc, ok := c.(pate.RoleColor); ok {
+	if rc, ok := c.(demy.RoleColor); ok {
 		return rc.Name
 	}
 	r, g, b, a := c.RGBA()
@@ -351,7 +416,7 @@ func parseColor(s string) (color.Color, error) {
 	}
 	switch s {
 	case "foreground", "background", "accent", "muted":
-		return pate.RoleColor{Name: s}, nil
+		return demy.RoleColor{Name: s}, nil
 	}
 	if strings.HasPrefix(s, "#") {
 		hex := s[1:]
@@ -379,141 +444,141 @@ func parseColor(s string) (color.Color, error) {
 
 // --- alignment helpers ---
 
-func alignStr(a pate.Alignment) string {
+func alignStr(a demy.Alignment) string {
 	switch a {
-	case pate.AlignCenter:
+	case demy.AlignCenter:
 		return "center"
-	case pate.AlignEnd:
+	case demy.AlignEnd:
 		return "end"
 	default:
 		return "" // AlignStart is the default; omit
 	}
 }
 
-func parseAlign(s string) pate.Alignment {
+func parseAlign(s string) demy.Alignment {
 	switch s {
 	case "center":
-		return pate.AlignCenter
+		return demy.AlignCenter
 	case "end":
-		return pate.AlignEnd
+		return demy.AlignEnd
 	default:
-		return pate.AlignStart
+		return demy.AlignStart
 	}
 }
 
-func zAlignStr(a pate.ZAlignment) string {
+func zAlignStr(a demy.ZAlignment) string {
 	switch a {
-	case pate.Top:
+	case demy.Top:
 		return "top"
-	case pate.TopTrailing:
+	case demy.TopTrailing:
 		return "top-trailing"
-	case pate.Leading:
+	case demy.Leading:
 		return "leading"
-	case pate.Center:
+	case demy.Center:
 		return "center"
-	case pate.Trailing:
+	case demy.Trailing:
 		return "trailing"
-	case pate.BottomLeading:
+	case demy.BottomLeading:
 		return "bottom-leading"
-	case pate.Bottom:
+	case demy.Bottom:
 		return "bottom"
-	case pate.BottomTrailing:
+	case demy.BottomTrailing:
 		return "bottom-trailing"
 	default:
 		return "" // TopLeading is the default; omit
 	}
 }
 
-func parseZAlign(s string) pate.ZAlignment {
+func parseZAlign(s string) demy.ZAlignment {
 	switch s {
 	case "top":
-		return pate.Top
+		return demy.Top
 	case "top-trailing":
-		return pate.TopTrailing
+		return demy.TopTrailing
 	case "leading":
-		return pate.Leading
+		return demy.Leading
 	case "center":
-		return pate.Center
+		return demy.Center
 	case "trailing":
-		return pate.Trailing
+		return demy.Trailing
 	case "bottom-leading":
-		return pate.BottomLeading
+		return demy.BottomLeading
 	case "bottom":
-		return pate.Bottom
+		return demy.Bottom
 	case "bottom-trailing":
-		return pate.BottomTrailing
+		return demy.BottomTrailing
 	default:
-		return pate.TopLeading
+		return demy.TopLeading
 	}
 }
 
 // --- text helpers ---
 
-func textAlignStr(a pate.TextAlign) string {
+func textAlignStr(a demy.TextAlign) string {
 	switch a {
-	case pate.TextAlignCenter:
+	case demy.TextAlignCenter:
 		return "center"
-	case pate.TextAlignRight:
+	case demy.TextAlignRight:
 		return "right"
 	default:
 		return "" // left is default; omit
 	}
 }
 
-func parseTextAlign(s string) pate.TextAlign {
+func parseTextAlign(s string) demy.TextAlign {
 	switch s {
 	case "center":
-		return pate.TextAlignCenter
+		return demy.TextAlignCenter
 	case "right":
-		return pate.TextAlignRight
+		return demy.TextAlignRight
 	default:
-		return pate.TextAlignLeft
+		return demy.TextAlignLeft
 	}
 }
 
-func overflowStr(o pate.TextOverflow) string {
+func overflowStr(o demy.TextOverflow) string {
 	switch o {
-	case pate.TextOverflowClip:
+	case demy.TextOverflowClip:
 		return "clip"
-	case pate.TextOverflowEllipsis:
+	case demy.TextOverflowEllipsis:
 		return "ellipsis"
 	default:
 		return "" // wrap is default; omit
 	}
 }
 
-func parseOverflow(s string) pate.TextOverflow {
+func parseOverflow(s string) demy.TextOverflow {
 	switch s {
 	case "clip":
-		return pate.TextOverflowClip
+		return demy.TextOverflowClip
 	case "ellipsis":
-		return pate.TextOverflowEllipsis
+		return demy.TextOverflowEllipsis
 	default:
-		return pate.TextOverflowWrap
+		return demy.TextOverflowWrap
 	}
 }
 
 // --- font weight helpers ---
 
-func weightStr(w pate.FontStyle) string {
-	italic := w&pate.FontItalic != 0
+func weightStr(w demy.FontStyle) string {
+	italic := w&demy.FontItalic != 0
 	var s string
-	switch w &^ pate.FontItalic {
-	case pate.FontThin:
+	switch w &^ demy.FontItalic {
+	case demy.FontThin:
 		s = "thin"
-	case pate.FontExtraLight:
+	case demy.FontExtraLight:
 		s = "extra-light"
-	case pate.FontLight:
+	case demy.FontLight:
 		s = "light"
-	case pate.FontMedium:
+	case demy.FontMedium:
 		s = "medium"
-	case pate.FontSemiBold:
+	case demy.FontSemiBold:
 		s = "semi-bold"
-	case pate.FontBold:
+	case demy.FontBold:
 		s = "bold"
-	case pate.FontExtraBold:
+	case demy.FontExtraBold:
 		s = "extra-bold"
-	case pate.FontBlack:
+	case demy.FontBlack:
 		s = "black"
 	default:
 		s = "" // regular; omit
@@ -527,56 +592,56 @@ func weightStr(w pate.FontStyle) string {
 	return s
 }
 
-func parseWeight(s string) pate.FontStyle {
+func parseWeight(s string) demy.FontStyle {
 	italic := strings.HasSuffix(s, "-italic") || s == "italic"
 	base := strings.TrimSuffix(s, "-italic")
-	var w pate.FontStyle
+	var w demy.FontStyle
 	switch base {
 	case "thin":
-		w = pate.FontThin
+		w = demy.FontThin
 	case "extra-light":
-		w = pate.FontExtraLight
+		w = demy.FontExtraLight
 	case "light":
-		w = pate.FontLight
+		w = demy.FontLight
 	case "medium":
-		w = pate.FontMedium
+		w = demy.FontMedium
 	case "semi-bold":
-		w = pate.FontSemiBold
+		w = demy.FontSemiBold
 	case "bold":
-		w = pate.FontBold
+		w = demy.FontBold
 	case "extra-bold":
-		w = pate.FontExtraBold
+		w = demy.FontExtraBold
 	case "black":
-		w = pate.FontBlack
+		w = demy.FontBlack
 	default:
-		w = pate.FontRegular
+		w = demy.FontRegular
 	}
 	if italic {
-		return w | pate.FontItalic
+		return w | demy.FontItalic
 	}
 	return w
 }
 
 // --- image scale helpers ---
 
-func scaleStr(s pate.ImageScale) string {
+func scaleStr(s demy.ImageScale) string {
 	switch s {
-	case pate.ImageFill:
+	case demy.ImageFill:
 		return "fill"
-	case pate.ImageStretch:
+	case demy.ImageStretch:
 		return "stretch"
 	default:
 		return "" // fit is default; omit
 	}
 }
 
-func parseScale(s string) pate.ImageScale {
+func parseScale(s string) demy.ImageScale {
 	switch s {
 	case "fill":
-		return pate.ImageFill
+		return demy.ImageFill
 	case "stretch":
-		return pate.ImageStretch
+		return demy.ImageStretch
 	default:
-		return pate.ImageFit
+		return demy.ImageFit
 	}
 }

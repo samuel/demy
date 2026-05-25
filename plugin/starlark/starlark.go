@@ -1,5 +1,17 @@
-// Package starlarkplugin exposes pate layout constructors as Starlark builtins.
-// A plugin script must define render(data) returning a pate Node tree.
+// Package starlarkplugin exposes demy layout constructors as Starlark builtins.
+// A plugin script must define render(data) returning a demy Node tree.
+//
+// Scripts may optionally declare a module-level "styles" dict to define named styles.
+// The host retrieves these via Plugin.Styles() and merges them into Config.Styles
+// before rendering:
+//
+//	styles = {
+//	    "h1":   Style(font="sans", size=24),
+//	    "body": Style(font="sans", size=12),
+//	}
+//
+//	def render(data):
+//	    return VStack(Text(data["title"], styles["h1"]))
 //
 // Exposed globals:
 //
@@ -27,26 +39,27 @@ import (
 	sl "go.starlark.net/starlark"
 	"go.starlark.net/syntax"
 
-	"github.com/samuel/pate"
+	"github.com/samuel/demy"
 )
 
 // Plugin is a compiled Starlark script that exports a render(data) function.
 type Plugin struct {
-	globals sl.StringDict
+	globals      sl.StringDict
+	scriptStyles map[string]demy.Style
 }
 
 // Load compiles the Starlark script at path. cfg injects named styles and color
 // constants into the script's global environment.
-func Load(path string, cfg pate.Config) (*Plugin, error) {
+func Load(path string, cfg demy.Config) (*Plugin, error) {
 	return execFile(path, nil, cfg)
 }
 
 // LoadBytes compiles src as a Starlark script named filename.
-func LoadBytes(filename string, src []byte, cfg pate.Config) (*Plugin, error) {
+func LoadBytes(filename string, src []byte, cfg demy.Config) (*Plugin, error) {
 	return execFile(filename, src, cfg)
 }
 
-func execFile(filename string, src any, cfg pate.Config) (*Plugin, error) {
+func execFile(filename string, src any, cfg demy.Config) (*Plugin, error) {
 	thread := &sl.Thread{Name: filename}
 	globals, err := sl.ExecFileOptions(&syntax.FileOptions{}, thread, filename, src, newEnv(cfg))
 	if err != nil {
@@ -55,11 +68,38 @@ func execFile(filename string, src any, cfg pate.Config) (*Plugin, error) {
 	if _, ok := globals["render"]; !ok {
 		return nil, fmt.Errorf("starlarkplugin: %s must define render(data)", filename)
 	}
-	return &Plugin{globals: globals}, nil
+	p := &Plugin{globals: globals}
+	if sv, ok := globals["styles"]; ok {
+		if d, ok := sv.(*sl.Dict); ok {
+			scriptStyles := make(map[string]demy.Style, d.Len())
+			for _, item := range d.Items() {
+				k, ok := sl.AsString(item[0])
+				if !ok {
+					return nil, fmt.Errorf("starlarkplugin: styles key must be a string, got %s", item[0].Type())
+				}
+				sv, ok := item[1].(*styleValue)
+				if !ok {
+					return nil, fmt.Errorf("starlarkplugin: styles[%q] must be a Style value, got %s", k, item[1].Type())
+				}
+				scriptStyles[k] = sv.s
+			}
+			if len(scriptStyles) > 0 {
+				p.scriptStyles = scriptStyles
+			}
+		}
+	}
+	return p, nil
+}
+
+// Styles returns named style definitions declared in the script's module-level
+// "styles" dict. Merge these into Config.Styles before calling Canvas.Render so
+// that Class("h1") references in the returned node tree resolve correctly.
+func (p *Plugin) Styles() map[string]demy.Style {
+	return p.scriptStyles
 }
 
 // Render calls the script's render(data) and returns the root Node tree.
-func (p *Plugin) Render(data map[string]any) (pate.Node, error) {
+func (p *Plugin) Render(data map[string]any) (demy.Node, error) {
 	d, err := dataToStarlark(data)
 	if err != nil {
 		return nil, fmt.Errorf("starlarkplugin: %w", err)
@@ -78,7 +118,7 @@ func (p *Plugin) Render(data map[string]any) (pate.Node, error) {
 
 // --- Starlark value types ---
 
-type nodeValue struct{ n pate.Node }
+type nodeValue struct{ n demy.Node }
 
 func (v *nodeValue) String() string        { return fmt.Sprintf("<%T>", v.n) }
 func (v *nodeValue) Type() string          { return "node" }
@@ -86,7 +126,7 @@ func (v *nodeValue) Freeze()               {}
 func (v *nodeValue) Truth() sl.Bool        { return sl.True }
 func (v *nodeValue) Hash() (uint32, error) { return 0, errors.New("unhashable: node") }
 
-type optValue struct{ o pate.Option }
+type optValue struct{ o demy.Option }
 
 func (v *optValue) String() string        { return fmt.Sprintf("<%T>", v.o) }
 func (v *optValue) Type() string          { return "option" }
@@ -94,7 +134,7 @@ func (v *optValue) Freeze()               {}
 func (v *optValue) Truth() sl.Bool        { return sl.True }
 func (v *optValue) Hash() (uint32, error) { return 0, errors.New("unhashable: option") }
 
-type styleValue struct{ s pate.Style }
+type styleValue struct{ s demy.Style }
 
 func (v *styleValue) String() string        { return "<style>" }
 func (v *styleValue) Type() string          { return "style" }
@@ -104,7 +144,7 @@ func (v *styleValue) Hash() (uint32, error) { return 0, errors.New("unhashable: 
 
 // --- Environment ---
 
-func newEnv(cfg pate.Config) sl.StringDict {
+func newEnv(cfg demy.Config) sl.StringDict {
 	d := sl.StringDict{
 		// Layout constructors
 		"VStack":  sl.NewBuiltin("VStack", builtinVStack),
@@ -118,7 +158,9 @@ func newEnv(cfg pate.Config) sl.StringDict {
 		"Text":     sl.NewBuiltin("Text", builtinText),
 		"ImageKey": sl.NewBuiltin("ImageKey", builtinImageKey),
 		// Style constructor
-		"Style": sl.NewBuiltin("Style", builtinStyle),
+		"Style": sl.NewBuiltin("Style", func(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
+			return builtinStyleWithClass(args, kwargs, cfg)
+		}),
 		// Option constructors
 		"Gap":          sl.NewBuiltin("Gap", builtinGap),
 		"Padding":      sl.NewBuiltin("Padding", builtinPadding),
@@ -127,36 +169,36 @@ func newEnv(cfg pate.Config) sl.StringDict {
 		"CornerRadius": sl.NewBuiltin("CornerRadius", builtinCornerRadius),
 		"Children":     sl.NewBuiltin("Children", builtinChildren),
 		// Clip constant
-		"Clip": &optValue{pate.Clip},
+		"Clip": &optValue{demy.Clip},
 		// Cross-axis alignment (VStack/HStack)
-		"AlignStart":  &optValue{pate.AlignStart},
-		"AlignCenter": &optValue{pate.AlignCenter},
-		"AlignEnd":    &optValue{pate.AlignEnd},
+		"AlignStart":  &optValue{demy.AlignStart},
+		"AlignCenter": &optValue{demy.AlignCenter},
+		"AlignEnd":    &optValue{demy.AlignEnd},
 		// ZStack positioning
-		"TopLeading":     &optValue{pate.TopLeading},
-		"Top":            &optValue{pate.Top},
-		"TopTrailing":    &optValue{pate.TopTrailing},
-		"Leading":        &optValue{pate.Leading},
-		"Center":         &optValue{pate.Center},
-		"Trailing":       &optValue{pate.Trailing},
-		"BottomLeading":  &optValue{pate.BottomLeading},
-		"Bottom":         &optValue{pate.Bottom},
-		"BottomTrailing": &optValue{pate.BottomTrailing},
+		"TopLeading":     &optValue{demy.TopLeading},
+		"Top":            &optValue{demy.Top},
+		"TopTrailing":    &optValue{demy.TopTrailing},
+		"Leading":        &optValue{demy.Leading},
+		"Center":         &optValue{demy.Center},
+		"Trailing":       &optValue{demy.Trailing},
+		"BottomLeading":  &optValue{demy.BottomLeading},
+		"Bottom":         &optValue{demy.Bottom},
+		"BottomTrailing": &optValue{demy.BottomTrailing},
 		// Image scale
-		"ImageFit":     &optValue{pate.ImageFit},
-		"ImageFill":    &optValue{pate.ImageFill},
-		"ImageStretch": &optValue{pate.ImageStretch},
+		"ImageFit":     &optValue{demy.ImageFit},
+		"ImageFill":    &optValue{demy.ImageFill},
+		"ImageStretch": &optValue{demy.ImageStretch},
 		// Color role constants (accepted by Style(color=...) and Background(...))
 		"Foreground": sl.String("foreground"),
 		"Accent":     sl.String("accent"),
 		"Muted":      sl.String("muted"),
 		// Palette color constants (hex strings)
-		"Black":     colorHex(pate.Black),
-		"DarkGray":  colorHex(pate.DarkGray),
-		"LightGray": colorHex(pate.LightGray),
-		"White":     colorHex(pate.White),
-		"Red":       colorHex(pate.Red),
-		"Yellow":    colorHex(pate.Yellow),
+		"Black":     colorHex(demy.Black),
+		"DarkGray":  colorHex(demy.DarkGray),
+		"LightGray": colorHex(demy.LightGray),
+		"White":     colorHex(demy.White),
+		"Red":       colorHex(demy.Red),
+		"Yellow":    colorHex(demy.Yellow),
 	}
 	// Named styles from cfg.Styles are injected as capitalized globals.
 	// "h1" → H1, "body" → Body, "caption" → Caption, etc.
@@ -173,7 +215,7 @@ func builtinVStack(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl
 	if err != nil {
 		return nil, fmt.Errorf("vstack: %w", err)
 	}
-	return &nodeValue{pate.VStack(opts...)}, nil
+	return &nodeValue{demy.VStack(opts...)}, nil
 }
 
 func builtinHStack(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
@@ -181,7 +223,7 @@ func builtinHStack(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl
 	if err != nil {
 		return nil, fmt.Errorf("hstack: %w", err)
 	}
-	return &nodeValue{pate.HStack(opts...)}, nil
+	return &nodeValue{demy.HStack(opts...)}, nil
 }
 
 func builtinZStack(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
@@ -189,7 +231,7 @@ func builtinZStack(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl
 	if err != nil {
 		return nil, fmt.Errorf("zstack: %w", err)
 	}
-	return &nodeValue{pate.ZStack(opts...)}, nil
+	return &nodeValue{demy.ZStack(opts...)}, nil
 }
 
 func builtinBox(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
@@ -197,7 +239,7 @@ func builtinBox(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Va
 	if err != nil {
 		return nil, fmt.Errorf("box: %w", err)
 	}
-	return &nodeValue{pate.Box(opts...)}, nil
+	return &nodeValue{demy.Box(opts...)}, nil
 }
 
 func builtinFrame(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
@@ -216,19 +258,19 @@ func builtinFrame(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.
 	if err != nil {
 		return nil, fmt.Errorf("frame: %w", err)
 	}
-	return &nodeValue{pate.Frame(w, h, opts...)}, nil
+	return &nodeValue{demy.Frame(w, h, opts...)}, nil
 }
 
 func builtinSpacer(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
 	switch len(args) {
 	case 0:
-		return &nodeValue{pate.Spacer()}, nil
+		return &nodeValue{demy.Spacer()}, nil
 	case 1:
 		w, ok := asFloat(args[0])
 		if !ok {
 			return nil, fmt.Errorf("spacer: weight must be a number, got %s", args[0].Type())
 		}
-		return &nodeValue{pate.Spacer(w)}, nil
+		return &nodeValue{demy.Spacer(w)}, nil
 	default:
 		return nil, errors.New("spacer: expected at most 1 argument")
 	}
@@ -238,7 +280,7 @@ func builtinDivider(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (s
 	if len(args) != 0 {
 		return nil, errors.New("divider: takes no arguments")
 	}
-	return &nodeValue{pate.Divider()}, nil
+	return &nodeValue{demy.Divider()}, nil
 }
 
 func builtinText(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
@@ -249,7 +291,7 @@ func builtinText(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.V
 	if !ok {
 		return nil, fmt.Errorf("text: first argument must be a string, got %s", args[0].Type())
 	}
-	var textOpts []pate.TextOption
+	var textOpts []demy.TextOption
 	for _, arg := range args[1:] {
 		sv, ok := arg.(*styleValue)
 		if !ok {
@@ -257,7 +299,7 @@ func builtinText(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.V
 		}
 		textOpts = append(textOpts, sv.s)
 	}
-	return &nodeValue{pate.Text(s, textOpts...)}, nil
+	return &nodeValue{demy.Text(s, textOpts...)}, nil
 }
 
 func builtinImageKey(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
@@ -272,18 +314,34 @@ func builtinImageKey(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (
 	if err != nil {
 		return nil, fmt.Errorf("imageKey: %w", err)
 	}
-	return &nodeValue{pate.ImageKey(key, opts...)}, nil
+	return &nodeValue{demy.ImageKey(key, opts...)}, nil
 }
 
-func builtinStyle(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
+func builtinStyleWithClass(args sl.Tuple, kwargs []sl.Tuple, cfg demy.Config) (sl.Value, error) {
 	if len(args) > 0 {
 		return nil, errors.New("style: takes keyword arguments only")
 	}
-	var s pate.Style
+	var s demy.Style
+	// Pass 1: resolve class as base so per-field kwargs override it regardless of order.
+	for _, kv := range kwargs {
+		if key, _ := sl.AsString(kv[0]); key == "class" {
+			name, ok := sl.AsString(kv[1])
+			if !ok {
+				return nil, errors.New("style: class must be a string")
+			}
+			if classStyle, ok := cfg.Styles[name]; ok {
+				s = classStyle
+			}
+			break
+		}
+	}
+	// Pass 2: apply per-field overrides.
 	for _, kv := range kwargs {
 		key, _ := sl.AsString(kv[0])
 		val := kv[1]
 		switch key {
+		case "class":
+			// handled in pass 1
 		case "font":
 			s.Font, _ = sl.AsString(val)
 		case "size":
@@ -317,7 +375,7 @@ func builtinStyle(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple)
 			if err != nil {
 				return nil, fmt.Errorf("style: max_lines: %w", err)
 			}
-			s.MaxLines = int(n)
+			s.MaxLines = n
 		case "overflow":
 			o, ok := sl.AsString(val)
 			if !ok {
@@ -339,7 +397,7 @@ func builtinGap(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Va
 	if !ok {
 		return nil, fmt.Errorf("gap: expected number, got %s", args[0].Type())
 	}
-	return &optValue{pate.Gap(px)}, nil
+	return &optValue{demy.Gap(px)}, nil
 }
 
 func builtinPadding(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
@@ -350,7 +408,7 @@ func builtinPadding(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (s
 	if !ok {
 		return nil, fmt.Errorf("padding: expected number, got %s", args[0].Type())
 	}
-	return &optValue{pate.Padding(px)}, nil
+	return &optValue{demy.Padding(px)}, nil
 }
 
 // Background(color_string) — accepts role names ("muted", "foreground", …) or "#rrggbb" hex.
@@ -366,7 +424,7 @@ func builtinBackground(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple)
 	if err != nil {
 		return nil, fmt.Errorf("background: %w", err)
 	}
-	return &optValue{pate.Background(c)}, nil
+	return &optValue{demy.Background(c)}, nil
 }
 
 // Border(width, color_string) — color accepts role names or "#rrggbb" hex.
@@ -386,7 +444,7 @@ func builtinBorder(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl
 	if err != nil {
 		return nil, fmt.Errorf("border: %w", err)
 	}
-	return &optValue{pate.Border(w, c)}, nil
+	return &optValue{demy.Border(w, c)}, nil
 }
 
 func builtinCornerRadius(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
@@ -397,12 +455,12 @@ func builtinCornerRadius(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tupl
 	if !ok {
 		return nil, fmt.Errorf("cornerRadius: expected number, got %s", args[0].Type())
 	}
-	return &optValue{pate.CornerRadius(px)}, nil
+	return &optValue{demy.CornerRadius(px)}, nil
 }
 
 // Children accepts individual nodes or a single Starlark list of nodes.
 func builtinChildren(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	var nodes []pate.Node
+	var nodes []demy.Node
 	for _, arg := range args {
 		switch v := arg.(type) {
 		case *nodeValue:
@@ -420,19 +478,19 @@ func builtinChildren(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (
 			return nil, fmt.Errorf("children: expected node or list, got %s", arg.Type())
 		}
 	}
-	return &optValue{pate.Children(nodes...)}, nil
+	return &optValue{demy.Children(nodes...)}, nil
 }
 
 // --- Helpers ---
 
-// argsToOptions converts Starlark args to pate.Option values.
+// argsToOptions converts Starlark args to demy.Option values.
 // Accepts *nodeValue (all node types implement Option) and *optValue.
-func argsToOptions(args sl.Tuple) ([]pate.Option, error) {
-	opts := make([]pate.Option, 0, len(args))
+func argsToOptions(args sl.Tuple) ([]demy.Option, error) {
+	opts := make([]demy.Option, 0, len(args))
 	for _, arg := range args {
 		switch v := arg.(type) {
 		case *nodeValue:
-			opt, ok := v.n.(pate.Option)
+			opt, ok := v.n.(demy.Option)
 			if !ok {
 				return nil, fmt.Errorf("node %T is not an Option", v.n)
 			}
@@ -465,7 +523,7 @@ func colorHex(c color.Color) sl.String {
 func parseColorStr(s string) (color.Color, error) {
 	switch s {
 	case "foreground", "background", "accent", "muted":
-		return pate.RoleColor{Name: s}, nil
+		return demy.RoleColor{Name: s}, nil
 	}
 	if !strings.HasPrefix(s, "#") {
 		return nil, fmt.Errorf("unknown color %q (use a role name or #rrggbb hex)", s)
@@ -493,55 +551,55 @@ func parseColorStr(s string) (color.Color, error) {
 	return nil, fmt.Errorf("invalid color %q (expected #rrggbb or #rrggbbaa)", s)
 }
 
-func parseWeight(s string) pate.FontStyle {
+func parseWeight(s string) demy.FontStyle {
 	italic := strings.HasSuffix(s, "-italic") || s == "italic"
 	base := strings.TrimSuffix(s, "-italic")
-	var w pate.FontStyle
+	var w demy.FontStyle
 	switch base {
 	case "thin":
-		w = pate.FontThin
+		w = demy.FontThin
 	case "extra-light":
-		w = pate.FontExtraLight
+		w = demy.FontExtraLight
 	case "light":
-		w = pate.FontLight
+		w = demy.FontLight
 	case "medium":
-		w = pate.FontMedium
+		w = demy.FontMedium
 	case "semi-bold":
-		w = pate.FontSemiBold
+		w = demy.FontSemiBold
 	case "bold":
-		w = pate.FontBold
+		w = demy.FontBold
 	case "extra-bold":
-		w = pate.FontExtraBold
+		w = demy.FontExtraBold
 	case "black":
-		w = pate.FontBlack
+		w = demy.FontBlack
 	default:
-		w = pate.FontRegular
+		w = demy.FontRegular
 	}
 	if italic {
-		return w | pate.FontItalic
+		return w | demy.FontItalic
 	}
 	return w
 }
 
-func parseTextAlign(s string) pate.TextAlign {
+func parseTextAlign(s string) demy.TextAlign {
 	switch s {
 	case "center":
-		return pate.TextAlignCenter
+		return demy.TextAlignCenter
 	case "right":
-		return pate.TextAlignRight
+		return demy.TextAlignRight
 	default:
-		return pate.TextAlignLeft
+		return demy.TextAlignLeft
 	}
 }
 
-func parseOverflow(s string) pate.TextOverflow {
+func parseOverflow(s string) demy.TextOverflow {
 	switch s {
 	case "clip":
-		return pate.TextOverflowClip
+		return demy.TextOverflowClip
 	case "ellipsis":
-		return pate.TextOverflowEllipsis
+		return demy.TextOverflowEllipsis
 	default:
-		return pate.TextOverflowWrap
+		return demy.TextOverflowWrap
 	}
 }
 
@@ -583,7 +641,7 @@ func anyToStarlark(v any) (sl.Value, error) {
 	case int64:
 		return sl.MakeInt64(t), nil
 	case float32:
-		return sl.Float(float64(t)), nil
+		return sl.Float(t), nil
 	case float64:
 		return sl.Float(t), nil
 	case string:

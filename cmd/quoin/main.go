@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/samuel/pate"
-	"github.com/samuel/pate/deviceapi"
+	"github.com/samuel/demy"
+	"github.com/samuel/demy/deviceapi"
 	"golang.org/x/image/font/gofont/goregular"
 )
 
@@ -100,7 +100,7 @@ func main() {
 				return deviceapi.SetupResponse{
 					FriendlyID: device.ID,
 					ImageURL:   screenURL,
-					Message:    "Welcome to pated",
+					Message:    "Welcome to demyd",
 				}, nil
 			},
 		})
@@ -111,7 +111,7 @@ func main() {
 			WriteTimeout:   10 * time.Second,
 			MaxHeaderBytes: 1 << 20,
 		}
-		slog.Info("pated listening", "addr", *addr, "lat", *weatherLat, "lon", *weatherLon)
+		slog.Info("demyd listening", "addr", *addr, "lat", *weatherLat, "lon", *weatherLon)
 		log.Fatal(srv.ListenAndServe())
 		return
 	}
@@ -128,7 +128,7 @@ func main() {
 
 	mux.HandleFunc("GET /screen/"+imageName, func(w http.ResponseWriter, r *http.Request) {
 		if displayPNG == nil {
-			http.Error(w, "no image configured; start pated with -image <path>", http.StatusNotFound)
+			http.Error(w, "no image configured; start demyd with -image <path>", http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "image/png")
@@ -167,7 +167,7 @@ func main() {
 			return deviceapi.SetupResponse{
 				FriendlyID: device.ID,
 				ImageURL:   screenURL,
-				Message:    "Welcome to pated",
+				Message:    "Welcome to demyd",
 			}, nil
 		},
 	})
@@ -179,7 +179,7 @@ func main() {
 		WriteTimeout:   10 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
-	slog.Info("pated listening", "addr", *addr)
+	slog.Info("demyd listening", "addr", *addr)
 	log.Fatal(srv.ListenAndServe())
 }
 
@@ -365,11 +365,11 @@ func fetchWeather(ctx context.Context, cfg weatherCfg) (*weatherData, error) {
 
 // --- Weather rendering ---
 
-func detailRow(label, value string, labelStyle, valueStyle pate.Style) *pate.HStackNode {
-	return pate.HStack(
-		pate.Text(label, labelStyle),
-		pate.Spacer(),
-		pate.Text(value, valueStyle),
+func detailRow(label, value string, labelStyle, valueStyle demy.Style) *demy.HStackNode {
+	return demy.HStack(
+		demy.Text(label, labelStyle),
+		demy.Spacer(),
+		demy.Text(value, valueStyle),
 	)
 }
 
@@ -434,39 +434,39 @@ func renderDisplay(w io.Writer, imageFile, fontFile string) error {
 		return fmt.Errorf("decoding image: %w", err)
 	}
 
-	var font *pate.FontFamily
+	var font *demy.FontFamily
 	if fontFile != "" {
-		font, err = pate.LoadFontFile("sans", fontFile)
+		font, err = demy.LoadFontFile("sans", fontFile)
 		if err != nil {
 			return fmt.Errorf("loading font: %w", err)
 		}
 	} else {
-		font = pate.MustLoadFontBytes("sans", goregular.TTF)
+		font = demy.MustLoadFontBytes("sans", goregular.TTF)
 	}
 
-	cfg := pate.TRMNLOriginal
-	cfg.Fonts = map[string]*pate.FontFamily{"sans": font}
-	c, err := pate.New(cfg)
+	cfg := demy.TRMNLOriginal
+	cfg.Fonts = map[string]*demy.FontFamily{"sans": font}
+	c, err := demy.New(cfg)
 	if err != nil {
 		return fmt.Errorf("creating canvas: %w", err)
 	}
 
-	root := pate.ZStack(
-		pate.Image(img, pate.ImageFit),
-		pate.VStack(
-			pate.Spacer(),
-			pate.Box(pate.Background(pate.White), pate.Padding(8),
-				pate.Text("This is where the alt text would go", pate.Style{
+	root := demy.ZStack(
+		demy.Image(img, demy.ImageFit),
+		demy.VStack(
+			demy.Spacer(),
+			demy.Box(demy.Background(demy.White), demy.Padding(8),
+				demy.Text("This is where the alt text would go", demy.Style{
 					Font:  "sans",
 					Size:  11,
-					Color: pate.Black,
-					Align: pate.TextAlignCenter,
+					Color: demy.Black,
+					Align: demy.TextAlignCenter,
 				}),
 			),
 		),
 	)
 
-	return c.EncodePNG(root, w, pate.TwoBit)
+	return c.EncodePNG(root, w, demy.TwoBit)
 }
 
 // --- Device logging and HTTP middleware ---

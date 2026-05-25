@@ -8,18 +8,19 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"maps"
 	"net/http"
 	"time"
 
-	"github.com/samuel/pate"
-	"github.com/samuel/pate/scene/xmlscene"
+	"github.com/samuel/demy"
+	"github.com/samuel/demy/scene/xmlscene"
 	"golang.org/x/image/font/gofont/goregular"
 )
 
 //go:embed static
 var staticFiles embed.FS
 
-var renderCanvas *pate.Canvas
+var baseCfg demy.Config
 
 type lesson struct {
 	ID       int    `json:"id"`
@@ -30,14 +31,9 @@ type lesson struct {
 }
 
 func main() {
-	font := pate.MustLoadFontBytes("sans", goregular.TTF)
-	cfg := pate.TRMNLOriginal
-	cfg.Fonts = map[string]*pate.FontFamily{"sans": font}
-	var err error
-	renderCanvas, err = pate.New(cfg)
-	if err != nil {
-		log.Fatalf("creating canvas: %v", err)
-	}
+	font := demy.MustLoadFontBytes("sans", goregular.TTF)
+	baseCfg = demy.TRMNLOriginal
+	baseCfg.Fonts = map[string]*demy.FontFamily{"sans": font}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", indexHandler)
@@ -52,7 +48,7 @@ func main() {
 		WriteTimeout:   30 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
-	slog.Info("pate-tutorial listening", "addr", addr, "url", "http://localhost"+addr)
+	slog.Info("demy-tutorial listening", "addr", addr, "url", "http://localhost"+addr)
 	log.Fatal(srv.ListenAndServe())
 }
 
@@ -82,30 +78,41 @@ func renderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	node, err := xmlscene.Unmarshal(body)
+	node, sceneStyles, err := xmlscene.UnmarshalScene(body)
 	if err != nil {
 		writeJSONError(w, fmt.Errorf("parsing scene: %w", err), http.StatusBadRequest)
 		return
 	}
 
-	colorMode := pate.Grayscale
-	switch r.URL.Query().Get("mode") {
-	case "2bit":
-		colorMode = pate.TwoBit
-	case "1bit":
-		colorMode = pate.OneBit
+	cfg := baseCfg
+	if len(sceneStyles) > 0 {
+		cfg.Styles = make(map[string]demy.Style, len(sceneStyles))
+		maps.Copy(cfg.Styles, sceneStyles)
+	}
+	canvas, err := demy.New(cfg)
+	if err != nil {
+		writeJSONError(w, fmt.Errorf("creating canvas: %w", err), http.StatusInternalServerError)
+		return
 	}
 
-	ditherAlgo := pate.NoDithering
+	colorMode := demy.Grayscale
+	switch r.URL.Query().Get("mode") {
+	case "2bit":
+		colorMode = demy.TwoBit
+	case "1bit":
+		colorMode = demy.OneBit
+	}
+
+	ditherAlgo := demy.NoDithering
 	switch r.URL.Query().Get("dither") {
 	case "floyd":
-		ditherAlgo = pate.FloydSteinberg
+		ditherAlgo = demy.FloydSteinberg
 	case "atkinson":
-		ditherAlgo = pate.Atkinson
+		ditherAlgo = demy.Atkinson
 	}
 
 	var buf bytes.Buffer
-	if err := renderCanvas.EncodePNG(node, &buf, colorMode, ditherAlgo); err != nil {
+	if err := canvas.EncodePNG(node, &buf, colorMode, ditherAlgo); err != nil {
 		writeJSONError(w, fmt.Errorf("rendering: %w", err), http.StatusInternalServerError)
 		return
 	}

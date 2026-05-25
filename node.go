@@ -1,4 +1,4 @@
-package pate
+package demy
 
 import (
 	"image"
@@ -782,10 +782,16 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 	case *DividerNode:
 		return &dividerNode{isHorizontal: parentDir == dirVertical}, nil
 	case *TextNode:
-		style := v.Style
-		if style.Font == "" && cfg != nil {
+		var style Style
+		if cfg != nil {
 			style = cfg.DefaultTextStyle
 		}
+		if v.Class != "" && cfg != nil {
+			if classStyle, ok := cfg.Styles[string(v.Class)]; ok {
+				style = mergeStyle(style, classStyle)
+			}
+		}
+		style = mergeStyle(style, v.Style)
 		if cfg != nil {
 			style.Color = resolveColor(style.Color, cfg.Roles)
 		}
@@ -802,7 +808,7 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 		}
 		return &imageNode{img: img, scale: v.Scale, clip: v.Clip}, nil
 	default:
-		panic("pate: unknown node type")
+		panic("demy: unknown node type")
 	}
 }
 
@@ -826,5 +832,5 @@ func buildNodes(nodes []Node, cfg *Config, parentDir layoutDir) ([]node, error) 
 type imageKeyError string
 
 func (e imageKeyError) Error() string {
-	return "pate: image key " + string(e) + " not found in Config.Images"
+	return "demy: image key " + string(e) + " not found in Config.Images"
 }

@@ -1,4 +1,4 @@
-module github.com/samuel/pate
+module github.com/samuel/demy
 
 go 1.26.3
 

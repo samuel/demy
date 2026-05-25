@@ -4,10 +4,10 @@ var tutorialLessons = []lesson{
 	{
 		ID:    1,
 		Title: "Hello, World",
-		Desc:  "Every pate layout starts with a root node. Here a VStack holds a single Text node. VStack stacks children top-to-bottom. Padding adds space inside the container. Try changing the text or font size.",
-		GoEquiv: `pate.VStack(
-    pate.Padding(16),
-    pate.Text("Hello, World!", pate.Style{
+		Desc:  "Every demy layout starts with a root node. Here a VStack holds a single Text node. VStack stacks children top-to-bottom. Padding adds space inside the container. Try changing the text or font size.",
+		GoEquiv: `demy.VStack(
+    demy.Padding(16),
+    demy.Text("Hello, World!", demy.Style{
         Font: "sans",
         Size: 24,
     }),
@@ -20,15 +20,15 @@ var tutorialLessons = []lesson{
 		ID:    2,
 		Title: "Text Styles",
 		Desc:  "The Style struct controls font size, weight, alignment, and color. Weights range from \"thin\" through \"black\". Colors are hex strings like \"#555555\". Try changing size, weight, and align on different text nodes.",
-		GoEquiv: `pate.VStack(
-    pate.Padding(24), pate.Gap(12),
-    pate.Text("Regular", pate.Style{Font: "sans", Size: 16}),
-    pate.Text("Bold", pate.Style{Font: "sans", Size: 16, Weight: pate.FontBold}),
-    pate.Text("Large", pate.Style{Font: "sans", Size: 32, Weight: pate.FontBold}),
-    pate.Text("Light", pate.Style{Font: "sans", Size: 14, Weight: pate.FontLight}),
-    pate.Text("Centered", pate.Style{Font: "sans", Size: 16, Align: pate.TextAlignCenter}),
-    pate.Text("Right", pate.Style{Font: "sans", Size: 16, Align: pate.TextAlignRight}),
-    pate.Text("Gray", pate.Style{Font: "sans", Size: 16, Color: color.RGBA{R:85,G:85,B:85,A:255}}),
+		GoEquiv: `demy.VStack(
+    demy.Padding(24), demy.Gap(12),
+    demy.Text("Regular", demy.Style{Font: "sans", Size: 16}),
+    demy.Text("Bold", demy.Style{Font: "sans", Size: 16, Weight: demy.FontBold}),
+    demy.Text("Large", demy.Style{Font: "sans", Size: 32, Weight: demy.FontBold}),
+    demy.Text("Light", demy.Style{Font: "sans", Size: 14, Weight: demy.FontLight}),
+    demy.Text("Centered", demy.Style{Font: "sans", Size: 16, Align: demy.TextAlignCenter}),
+    demy.Text("Right", demy.Style{Font: "sans", Size: 16, Align: demy.TextAlignRight}),
+    demy.Text("Gray", demy.Style{Font: "sans", Size: 16, Color: color.RGBA{R:85,G:85,B:85,A:255}}),
 )`,
 		SceneXML: `<vstack padding="24" gap="12">
 	<text font="sans" size="16">Regular — default weight, 16pt</text>
@@ -44,13 +44,13 @@ var tutorialLessons = []lesson{
 		ID:    3,
 		Title: "VStack",
 		Desc:  "VStack arranges children vertically. gap controls space between children. padding adds inset inside the stack. Try adjusting gap from 4 to 32, or adding more children.",
-		GoEquiv: `pate.VStack(
-    pate.Padding(24),
-    pate.Gap(16),
-    pate.Text("Item One",   style),
-    pate.Text("Item Two",   style),
-    pate.Text("Item Three", style),
-    pate.Text("Item Four",  style),
+		GoEquiv: `demy.VStack(
+    demy.Padding(24),
+    demy.Gap(16),
+    demy.Text("Item One",   style),
+    demy.Text("Item Two",   style),
+    demy.Text("Item Three", style),
+    demy.Text("Item Four",  style),
 )`,
 		SceneXML: `<vstack padding="24" gap="16">
 	<text font="sans" size="18" weight="bold">Item One</text>
@@ -64,17 +64,17 @@ var tutorialLessons = []lesson{
 		ID:    4,
 		Title: "HStack",
 		Desc:  "HStack arranges children horizontally. The align field controls vertical (cross-axis) alignment: \"start\" (top), \"center\", or \"end\" (bottom). Nest HStacks and VStacks to build grid-like layouts.",
-		GoEquiv: `pate.HStack(
-    pate.Gap(24),
-    pate.VStack(pate.Gap(4),
-        pate.Text("Column A", boldStyle),
-        pate.Text("Row 1", bodyStyle),
-        pate.Text("Row 2", bodyStyle),
+		GoEquiv: `demy.HStack(
+    demy.Gap(24),
+    demy.VStack(demy.Gap(4),
+        demy.Text("Column A", boldStyle),
+        demy.Text("Row 1", bodyStyle),
+        demy.Text("Row 2", bodyStyle),
     ),
-    pate.VStack(pate.Gap(4),
-        pate.Text("Column B", boldStyle),
-        pate.Text("Row 1", bodyStyle),
-        pate.Text("Row 2", bodyStyle),
+    demy.VStack(demy.Gap(4),
+        demy.Text("Column B", boldStyle),
+        demy.Text("Row 1", bodyStyle),
+        demy.Text("Row 2", bodyStyle),
     ),
 )`,
 		SceneXML: `<vstack padding="24" gap="24">
@@ -111,15 +111,15 @@ var tutorialLessons = []lesson{
 		ID:    5,
 		Title: "Spacer",
 		Desc:  "Spacer() fills the remaining space in a stack, pushing adjacent siblings apart. In the header row below, it pushes the title left and date right. The vertical Spacer pushes the footer to the bottom of the screen.",
-		GoEquiv: `pate.VStack(
-    pate.Padding(24),
-    pate.HStack(
-        pate.Text("Title", boldStyle),
-        pate.Spacer(),           // pushes "Date" to the right
-        pate.Text("Date", small),
+		GoEquiv: `demy.VStack(
+    demy.Padding(24),
+    demy.HStack(
+        demy.Text("Title", boldStyle),
+        demy.Spacer(),           // pushes "Date" to the right
+        demy.Text("Date", small),
     ),
-    pate.Spacer(),               // pushes footer to bottom
-    pate.Text("Footer", small),
+    demy.Spacer(),               // pushes footer to bottom
+    demy.Text("Footer", small),
 )`,
 		SceneXML: `<vstack padding="24">
 	<hstack>
@@ -136,23 +136,23 @@ var tutorialLessons = []lesson{
 		ID:    6,
 		Title: "Box",
 		Desc:  "Box is a styled container with background color, border, corner radius, and padding. It can hold any child node. Try combining these properties — for example, a rounded box with a border and colored background.",
-		GoEquiv: `pate.Box(
-    pate.Background(pate.LightGray),
-    pate.Padding(16),
-    pate.Text("Gray background", style),
+		GoEquiv: `demy.Box(
+    demy.Background(demy.LightGray),
+    demy.Padding(16),
+    demy.Text("Gray background", style),
 )
 
-pate.Box(
-    pate.Border(2, pate.Black),
-    pate.CornerRadius(8),
-    pate.Padding(16),
-    pate.Text("Rounded border", style),
+demy.Box(
+    demy.Border(2, demy.Black),
+    demy.CornerRadius(8),
+    demy.Padding(16),
+    demy.Text("Rounded border", style),
 )
 
-pate.Box(
-    pate.Background(pate.Black),
-    pate.Padding(16),
-    pate.Text("Inverted", whiteStyle),
+demy.Box(
+    demy.Background(demy.Black),
+    demy.Padding(16),
+    demy.Text("Inverted", whiteStyle),
 )`,
 		SceneXML: `<vstack padding="24" gap="20">
 	<box padding="16" background="#dddddd">
@@ -176,19 +176,19 @@ pate.Box(
 		ID:    7,
 		Title: "Frame",
 		Desc:  "Frame(width, height) constrains its children to exact pixel dimensions. Children that are smaller are aligned within the frame; children that are larger are clipped. Try changing the frame dimensions.",
-		GoEquiv: `pate.Frame(160, 120,
-    pate.Box(
-        pate.Background(pate.LightGray),
-        pate.Padding(8),
-        pate.Text("160 x 120", style),
+		GoEquiv: `demy.Frame(160, 120,
+    demy.Box(
+        demy.Background(demy.LightGray),
+        demy.Padding(8),
+        demy.Text("160 x 120", style),
     ),
 )
 
-pate.Frame(80, 160,
-    pate.Box(
-        pate.Background(pate.Black),
-        pate.Padding(8),
-        pate.Text("80 x 160", whiteStyle),
+demy.Frame(80, 160,
+    demy.Box(
+        demy.Background(demy.Black),
+        demy.Padding(8),
+        demy.Text("80 x 160", whiteStyle),
     ),
 )`,
 		SceneXML: `<vstack padding="24" gap="24">
@@ -216,25 +216,25 @@ pate.Frame(80, 160,
 		ID:    8,
 		Title: "ZStack",
 		Desc:  "ZStack layers children on top of each other. All children share the same bounds. The align field sets where children anchor within the ZStack: \"top-leading\" (default), \"center\", \"bottom\", \"bottom-trailing\", etc.",
-		GoEquiv: `pate.ZStack(
+		GoEquiv: `demy.ZStack(
     // Background layer fills bounds
-    pate.Frame(600, 200,
-        pate.Box(pate.Background(pate.LightGray)),
+    demy.Frame(600, 200,
+        demy.Box(demy.Background(demy.LightGray)),
     ),
     // Overlay layer sits on top
-    pate.VStack(
-        pate.Padding(20), pate.Gap(8),
-        pate.Text("Overlay heading", headingStyle),
-        pate.Text("Layered content", bodyStyle),
+    demy.VStack(
+        demy.Padding(20), demy.Gap(8),
+        demy.Text("Overlay heading", headingStyle),
+        demy.Text("Layered content", bodyStyle),
     ),
 )
 
 // Center-aligned variant
-pate.ZStack(pate.Center,
-    pate.Frame(600, 100,
-        pate.Box(pate.Background(pate.Black)),
+demy.ZStack(demy.Center,
+    demy.Frame(600, 100,
+        demy.Box(demy.Background(demy.Black)),
     ),
-    pate.Text("Centered on dark", whiteStyle),
+    demy.Text("Centered on dark", whiteStyle),
 )`,
 		SceneXML: `<vstack padding="24" gap="24">
 	<text font="sans" size="13" color="#555555">ZStack layers children. Earlier children appear behind later ones.</text>
@@ -260,17 +260,17 @@ pate.ZStack(pate.Center,
 		Title: "Divider",
 		Desc:  "Divider() draws a 1px rule. In a VStack it renders horizontally; in an HStack it renders vertically. Dividers are useful for separating sections and creating column layouts.",
 		GoEquiv: `// Horizontal dividers in VStack
-pate.VStack(pate.Padding(24), pate.Gap(16),
-    pate.Text("Section A", boldStyle),
-    pate.Divider(),
-    pate.Text("Section B", boldStyle),
+demy.VStack(demy.Padding(24), demy.Gap(16),
+    demy.Text("Section A", boldStyle),
+    demy.Divider(),
+    demy.Text("Section B", boldStyle),
 )
 
 // Vertical dividers in HStack
-pate.HStack(pate.Padding(24), pate.Gap(16),
-    pate.Text("Left",  bodyStyle),
-    pate.Divider(),
-    pate.Text("Right", bodyStyle),
+demy.HStack(demy.Padding(24), demy.Gap(16),
+    demy.Text("Left",  bodyStyle),
+    demy.Divider(),
+    demy.Text("Right", bodyStyle),
 )`,
 		SceneXML: `<vstack padding="24" gap="14">
 	<text font="sans" size="20" weight="bold">Section One</text>
@@ -293,43 +293,65 @@ pate.HStack(pate.Padding(24), pate.Gap(16),
 	{
 		ID:    10,
 		Title: "Full Layout",
-		Desc:  "A realistic e-ink dashboard combining VStack, HStack, ZStack, Box, Spacer, Weighted, Divider, and Text. The Metrics column uses Weighted(1, …) to claim all remaining horizontal space after the fixed-width Weather and Tasks columns. Inside each metric row, the value text is itself Weighted so it fills the remaining row width and right-aligns flush to the column edge.",
-		GoEquiv: `pate.VStack(
-    pate.Padding(20), pate.Gap(8),
-    // Header row
-    pate.HStack(
-        pate.Text("Daily Brief", headingStyle),
-        pate.Spacer(),
-        pate.Text("Friday, May 22", smallStyle),
+		Desc:  "A realistic e-ink dashboard using style classes — defined right in the XML inside a <styles> block and referenced with class=. The <scene> wrapper lets you declare named styles once and reuse them across the layout. Try adding class=\"body\" to any text node, or override a class field inline: <text class=\"label\" size=\"16\">.",
+		GoEquiv: `// Style classes in Go use Config.Styles; in XML they live in <styles>.
+// Both resolve the same way: class base is merged, inline attrs override it.
+
+demy.VStack(
+    demy.Padding(20), demy.Gap(8),
+    demy.HStack(
+        demy.Text("Daily Brief", demy.Style{Font:"sans", Size:28, Weight:demy.FontBold}),
+        demy.Spacer(),
+        demy.Text("Friday, May 22", demy.Style{Font:"sans", Size:14}),
     ),
-    pate.Divider(),
-    // Three-column content — Metrics column claims leftover space
-    pate.HStack(pate.Gap(20),
-        weatherColumn,
-        pate.Divider(),
-        tasksColumn,
-        pate.Divider(),
-        pate.Weighted(1, metricsColumn),
+    demy.Divider(),
+    demy.HStack(demy.Gap(20),
+        demy.VStack(demy.Gap(6),
+            demy.Text("WEATHER",          demy.Class("section-label")),
+            demy.Text("72°F",             demy.Style{Font:"sans", Size:40, Weight:demy.FontBold}),
+            demy.Text("Partly Cloudy",    demy.Style{Font:"sans", Size:14}),
+            demy.Text("H: 78°  L: 65°",  demy.Class("label")),
+        ),
+        demy.Divider(),
+        demy.VStack(demy.Gap(8),
+            demy.Text("TODAY'S TASKS",           demy.Class("section-label")),
+            demy.Text("Design review at 10am",   demy.Class("body")),
+            demy.Text("Lunch with team at noon", demy.Class("body")),
+            demy.Text("Deploy v2.3 release",     demy.Class("body")),
+            demy.Text("Write weekly report",     demy.Class("body")),
+        ),
+        demy.Divider(),
+        demy.Weighted(1, demy.VStack(demy.Gap(8),
+            demy.Text("METRICS", demy.Class("section-label")),
+            metricRow("CPU",      "42%"),
+            metricRow("Memory",   "3.1 GB"),
+            metricRow("Requests", "1,247/s"),
+            metricRow("Uptime",   "14d 3h"),
+        )),
     ),
-    pate.Spacer(),
-    // Footer badge
-    pate.Box(pate.Background(pate.Black), pate.Padding(8), pate.CornerRadius(4),
-        pate.Text("Last updated 9:00 AM", whiteCenter),
+    demy.Spacer(),
+    demy.Box(demy.Background(demy.Black), demy.Padding(8), demy.CornerRadius(4),
+        demy.Text("Last updated 9:00 AM",
+            demy.Style{Font:"sans", Size:11, Color:demy.White, Align:demy.TextAlignCenter}),
     ),
 )
 
-// metric row helper — label left, value right-aligned
-func metricRow(label, value string) pate.Node {
-    return pate.HStack(
-        pate.Text(label, labelStyle),
-        pate.Spacer(),
-        pate.Text(value, pate.Style{
-            Font: "sans", Size: 13, Weight: pate.FontBold,
-            Align: pate.TextAlignRight,
-        }),
+// Class("label") and Class("value") — style defined once, used everywhere.
+func metricRow(label, value string) demy.Node {
+    return demy.HStack(
+        demy.Text(label, demy.Class("label")),
+        demy.Spacer(),
+        demy.Text(value, demy.Class("value")),
     )
 }`,
-		SceneXML: `<vstack padding="20" gap="8">
+		SceneXML: `<scene>
+<styles>
+	<style name="section-label" font="sans" size="11" weight="semi-bold" color="#777777"/>
+	<style name="body" font="sans" size="13"/>
+	<style name="label" font="sans" size="13" color="#555555"/>
+	<style name="value" font="sans" size="13" weight="bold" align="right"/>
+</styles>
+<vstack padding="20" gap="8">
 	<hstack>
 		<text font="sans" size="28" weight="bold">Daily Brief</text>
 		<spacer/>
@@ -338,42 +360,42 @@ func metricRow(label, value string) pate.Node {
 	<divider/>
 	<hstack gap="20">
 		<vstack gap="6">
-			<text font="sans" size="11" weight="semi-bold" color="#777777">WEATHER</text>
+			<text class="section-label">WEATHER</text>
 			<text font="sans" size="40" weight="bold">72°F</text>
 			<text font="sans" size="14">Partly Cloudy</text>
-			<text font="sans" size="13" color="#555555">H: 78°  L: 65°</text>
+			<text class="label">H: 78°  L: 65°</text>
 		</vstack>
 		<divider/>
 		<vstack gap="8">
-			<text font="sans" size="11" weight="semi-bold" color="#777777">TODAY'S TASKS</text>
-			<text font="sans" size="13">Design review at 10am</text>
-			<text font="sans" size="13">Lunch with team at noon</text>
-			<text font="sans" size="13">Deploy v2.3 release</text>
-			<text font="sans" size="13">Write weekly report</text>
+			<text class="section-label">TODAY'S TASKS</text>
+			<text class="body">Design review at 10am</text>
+			<text class="body">Lunch with team at noon</text>
+			<text class="body">Deploy v2.3 release</text>
+			<text class="body">Write weekly report</text>
 		</vstack>
 		<divider/>
 		<weighted weight="1">
 			<vstack gap="8">
-				<text font="sans" size="11" weight="semi-bold" color="#777777">METRICS</text>
+				<text class="section-label">METRICS</text>
 				<hstack>
-					<text font="sans" size="13" color="#555555">CPU</text>
+					<text class="label">CPU</text>
 					<spacer/>
-					<text font="sans" size="13" weight="bold" align="right">42%</text>
+					<text class="value">42%</text>
 				</hstack>
 				<hstack>
-					<text font="sans" size="13" color="#555555">Memory</text>
+					<text class="label">Memory</text>
 					<spacer/>
-					<text font="sans" size="13" weight="bold" align="right">3.1 GB</text>
+					<text class="value">3.1 GB</text>
 				</hstack>
 				<hstack>
-					<text font="sans" size="13" color="#555555">Requests</text>
+					<text class="label">Requests</text>
 					<spacer/>
-					<text font="sans" size="13" weight="bold" align="right">1,247/s</text>
+					<text class="value">1,247/s</text>
 				</hstack>
 				<hstack>
-					<text font="sans" size="13" color="#555555">Uptime</text>
+					<text class="label">Uptime</text>
 					<spacer/>
-					<text font="sans" size="13" weight="bold" align="right">14d 3h</text>
+					<text class="value">14d 3h</text>
 				</hstack>
 			</vstack>
 		</weighted>
@@ -382,6 +404,7 @@ func metricRow(label, value string) pate.Node {
 	<box background="#000000" padding="8" corner-radius="4">
 		<text font="sans" size="11" color="#ffffff" align="center">Last updated 9:00 AM — refreshes every 5 minutes</text>
 	</box>
-</vstack>`,
+</vstack>
+</scene>`,
 	},
 }

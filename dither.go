@@ -1,4 +1,4 @@
-package pate
+package demy
 
 import (
 	"image"

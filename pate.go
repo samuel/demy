@@ -439,6 +439,53 @@ type ImageNode struct {
 func (*ImageNode) demyNode()   {}
 func (*ImageNode) demyOption() {}
 
+// BarcodeType selects the barcode encoding format.
+type BarcodeType int
+
+func (BarcodeType) demyOption() {}
+
+const (
+	BarcodeTypeQR BarcodeType = iota // QR code (default)
+)
+
+// ECLevel sets the QR code error correction level. Higher levels tolerate more
+// damage but reduce data capacity.
+type ECLevel int
+
+func (ECLevel) demyOption() {}
+
+const (
+	ECLevelLow      ECLevel = iota // ~7% correction capacity
+	ECLevelMedium                  // ~15% correction capacity
+	ECLevelQuartile                // ~25% correction capacity
+	ECLevelHigh                    // ~30% correction capacity
+)
+
+// BarcodeNode renders a barcode or QR code.
+// Pass BarcodeType and ECLevel as options; defaults are BarcodeTypeQR and ECLevelMedium.
+type BarcodeNode struct {
+	Content string
+	Type    BarcodeType
+	ECLevel ECLevel
+}
+
+func (*BarcodeNode) demyNode()   {}
+func (*BarcodeNode) demyOption() {}
+
+// Barcode renders content as a barcode. Options: BarcodeType, ECLevel.
+func Barcode(content string, opts ...Option) *BarcodeNode {
+	n := &BarcodeNode{Content: content, ECLevel: ECLevelMedium}
+	for _, opt := range opts {
+		switch v := opt.(type) {
+		case BarcodeType:
+			n.Type = v
+		case ECLevel:
+			n.ECLevel = v
+		}
+	}
+	return n
+}
+
 // --- Layout option types ---
 
 // gapOpt sets spacing between stack children (pixels).

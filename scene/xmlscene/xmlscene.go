@@ -272,6 +272,15 @@ func marshalNode(enc *xml.Encoder, n demy.Node) error {
 			return err
 		}
 		return enc.EncodeToken(start.End())
+	case *demy.BarcodeNode:
+		start := xml.StartElement{Name: xml.Name{Local: "barcode"}}
+		appendStr(&start, "content", v.Content)
+		appendStr(&start, "type", barcodeTypeStr(v.Type))
+		appendStr(&start, "ec-level", ecLevelStr(v.ECLevel))
+		if err := enc.EncodeToken(start); err != nil {
+			return err
+		}
+		return enc.EncodeToken(start.End())
 	default:
 		return fmt.Errorf("xmlscene: unknown node type %T", n)
 	}
@@ -440,6 +449,15 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, erro
 			Key:   attrs["key"],
 			Scale: parseScale(attrs["scale"]),
 			Clip:  boolAttr(attrs, "clip"),
+		}, nil
+	case "barcode":
+		if err := dec.Skip(); err != nil {
+			return nil, fmt.Errorf("xmlscene: %w", err)
+		}
+		return &demy.BarcodeNode{
+			Content: attrs["content"],
+			Type:    parseBarcodeType(attrs["type"]),
+			ECLevel: parseECLevel(attrs["ec-level"]),
 		}, nil
 	default:
 		return nil, fmt.Errorf("xmlscene: unknown element %q", start.Name.Local)
@@ -846,5 +864,47 @@ func parseScale(s string) demy.ImageScale {
 		return demy.ImageStretch
 	default:
 		return demy.ImageFit
+	}
+}
+
+// --- barcode helpers ---
+
+func barcodeTypeStr(t demy.BarcodeType) string {
+	switch t {
+	default:
+		return "" // BarcodeTypeQR is the default; omit
+	}
+}
+
+func parseBarcodeType(s string) demy.BarcodeType {
+	switch s {
+	default:
+		return demy.BarcodeTypeQR
+	}
+}
+
+func ecLevelStr(l demy.ECLevel) string {
+	switch l {
+	case demy.ECLevelLow:
+		return "low"
+	case demy.ECLevelQuartile:
+		return "quartile"
+	case demy.ECLevelHigh:
+		return "high"
+	default: // ECLevelMedium is the default; omit
+		return ""
+	}
+}
+
+func parseECLevel(s string) demy.ECLevel {
+	switch s {
+	case "low":
+		return demy.ECLevelLow
+	case "quartile":
+		return demy.ECLevelQuartile
+	case "high":
+		return demy.ECLevelHigh
+	default:
+		return demy.ECLevelMedium
 	}
 }

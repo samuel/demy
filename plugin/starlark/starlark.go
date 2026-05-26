@@ -15,13 +15,15 @@
 //
 // Exposed globals:
 //
-//	Constructors: VStack, HStack, ZStack, Box, Frame, Spacer, Divider, Text, ImageKey
+//	Constructors: VStack, HStack, ZStack, Box, Frame, Spacer, Divider, Text, ImageKey, Barcode
 //	Style:        Style(font=, size=, weight=, color=, align=, line_height=, max_lines=, overflow=)
 //	Options:      Gap, Padding, Background, Border, CornerRadius, Children, Clip
 //	Alignment:    AlignStart, AlignCenter, AlignEnd
 //	ZAlignment:   TopLeading, Top, TopTrailing, Leading, Center, Trailing,
 //	              BottomLeading, Bottom, BottomTrailing
 //	ImageScale:   ImageFit, ImageFill, ImageStretch
+//	BarcodeType:  BarcodeTypeQR
+//	ECLevel:      ECLevelLow, ECLevelMedium, ECLevelQuartile, ECLevelHigh
 //	Colors:       Foreground, Accent, Muted (role strings), Black, DarkGray, LightGray,
 //	              White, Red, Yellow (hex strings)
 //
@@ -157,6 +159,7 @@ func newEnv(cfg demy.Config) sl.StringDict {
 		// Widget constructors
 		"Text":     sl.NewBuiltin("Text", builtinText),
 		"ImageKey": sl.NewBuiltin("ImageKey", builtinImageKey),
+		"Barcode":  sl.NewBuiltin("Barcode", builtinBarcode),
 		// Style constructor
 		"Style": sl.NewBuiltin("Style", func(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
 			return builtinStyleWithClass(args, kwargs, cfg)
@@ -188,6 +191,13 @@ func newEnv(cfg demy.Config) sl.StringDict {
 		"ImageFit":     &optValue{demy.ImageFit},
 		"ImageFill":    &optValue{demy.ImageFill},
 		"ImageStretch": &optValue{demy.ImageStretch},
+		// Barcode type
+		"BarcodeTypeQR": &optValue{demy.BarcodeTypeQR},
+		// QR error correction level
+		"ECLevelLow":      &optValue{demy.ECLevelLow},
+		"ECLevelMedium":   &optValue{demy.ECLevelMedium},
+		"ECLevelQuartile": &optValue{demy.ECLevelQuartile},
+		"ECLevelHigh":     &optValue{demy.ECLevelHigh},
 		// Color role constants (accepted by Style(color=...) and Background(...))
 		"Foreground": sl.String("foreground"),
 		"Accent":     sl.String("accent"),
@@ -315,6 +325,21 @@ func builtinImageKey(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (
 		return nil, fmt.Errorf("imageKey: %w", err)
 	}
 	return &nodeValue{demy.ImageKey(key, opts...)}, nil
+}
+
+func builtinBarcode(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+	if len(args) < 1 {
+		return nil, errors.New("barcode: expected at least 1 argument (content)")
+	}
+	content, ok := sl.AsString(args[0])
+	if !ok {
+		return nil, fmt.Errorf("barcode: content must be a string, got %s", args[0].Type())
+	}
+	opts, err := argsToOptions(args[1:])
+	if err != nil {
+		return nil, fmt.Errorf("barcode: %w", err)
+	}
+	return &nodeValue{demy.Barcode(content, opts...)}, nil
 }
 
 func builtinStyleWithClass(args sl.Tuple, kwargs []sl.Tuple, cfg demy.Config) (sl.Value, error) {

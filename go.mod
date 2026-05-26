@@ -3,8 +3,9 @@ module github.com/samuel/demy
 go 1.26.3
 
 require (
-	github.com/samuel/goil v0.0.0-20251014204128-4505f8450ad9
+	github.com/boombuler/barcode v1.1.0
 	github.com/tdewolff/canvas v0.0.0-20260508100355-63a7228e682d
+	go.starlark.net v0.0.0-20260522144826-ec58d4b459e2
 	golang.org/x/image v0.41.0
 )
 
@@ -21,14 +22,12 @@ require (
 	github.com/go-fonts/latin-modern v0.3.3 // indirect
 	github.com/go-text/typesetting v0.3.4 // indirect
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
-	github.com/samuel/go-spacecurves v0.0.0-20220717060915-10e6403ac198 // indirect
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef // indirect
 	github.com/srwiley/scanx v0.0.0-20190309010443-e94503791388 // indirect
 	github.com/tdewolff/font v0.0.0-20260424075104-b5eeb1e23189 // indirect
 	github.com/tdewolff/minify/v2 v2.24.13 // indirect
 	github.com/tdewolff/parse/v2 v2.8.12 // indirect
 	github.com/yuin/goldmark v1.8.2 // indirect
-	go.starlark.net v0.0.0-20260522144826-ec58d4b459e2 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect

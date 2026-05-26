@@ -40,6 +40,9 @@ type Node struct {
 	Style        *Style  `json:"style,omitempty"`
 	ImageKey     string  `json:"image_key,omitempty"`
 	Scale        string  `json:"scale,omitempty"`
+	Content      string  `json:"content,omitempty"`
+	BarcodeType  string  `json:"barcode_type,omitempty"`
+	ECLevel      string  `json:"ec_level,omitempty"`
 	Children     []Node  `json:"children,omitempty"`
 }
 
@@ -244,6 +247,13 @@ func nodeToScene(n demy.Node) (Node, error) {
 			Scale:    scaleStr(v.Scale),
 			Clip:     v.Clip,
 		}, nil
+	case *demy.BarcodeNode:
+		return Node{
+			Type:        "barcode",
+			Content:     v.Content,
+			BarcodeType: barcodeTypeStr(v.Type),
+			ECLevel:     ecLevelStr(v.ECLevel),
+		}, nil
 	default:
 		return Node{}, fmt.Errorf("scene: unknown node type %T", n)
 	}
@@ -367,6 +377,12 @@ func sceneToNode(sn Node) (demy.Node, error) {
 			Key:   sn.ImageKey,
 			Scale: parseScale(sn.Scale),
 			Clip:  sn.Clip,
+		}, nil
+	case "barcode":
+		return &demy.BarcodeNode{
+			Content: sn.Content,
+			Type:    parseBarcodeType(sn.BarcodeType),
+			ECLevel: parseECLevel(sn.ECLevel),
 		}, nil
 	default:
 		return nil, fmt.Errorf("scene: unknown node type %q", sn.Type)
@@ -643,5 +659,47 @@ func parseScale(s string) demy.ImageScale {
 		return demy.ImageStretch
 	default:
 		return demy.ImageFit
+	}
+}
+
+// --- barcode helpers ---
+
+func barcodeTypeStr(t demy.BarcodeType) string {
+	switch t {
+	default:
+		return "" // BarcodeTypeQR is the default; omit
+	}
+}
+
+func parseBarcodeType(s string) demy.BarcodeType {
+	switch s {
+	default:
+		return demy.BarcodeTypeQR
+	}
+}
+
+func ecLevelStr(l demy.ECLevel) string {
+	switch l {
+	case demy.ECLevelLow:
+		return "low"
+	case demy.ECLevelQuartile:
+		return "quartile"
+	case demy.ECLevelHigh:
+		return "high"
+	default: // ECLevelMedium is the default; omit
+		return ""
+	}
+}
+
+func parseECLevel(s string) demy.ECLevel {
+	switch s {
+	case "low":
+		return demy.ECLevelLow
+	case "quartile":
+		return demy.ECLevelQuartile
+	case "high":
+		return demy.ECLevelHigh
+	default:
+		return demy.ECLevelMedium
 	}
 }

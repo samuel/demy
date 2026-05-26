@@ -5,6 +5,8 @@ import (
 	"image/color"
 	"math"
 
+	"github.com/boombuler/barcode"
+	"github.com/boombuler/barcode/qr"
 	cv "github.com/tdewolff/canvas"
 	"github.com/tdewolff/canvas/renderers/rasterizer"
 )
@@ -693,6 +695,54 @@ func (n *imageNode) draw(dctx *drawCtx) {
 	dctx.ctx.FitImage(n.img, rect, fit)
 }
 
+// --- barcodeNode ---
+
+type barcodeNode struct {
+	content string
+	btype   BarcodeType
+	ecLevel ECLevel
+	bounds  nodeRect
+}
+
+func (n *barcodeNode) measure(mctx *measureCtx) nodeSize {
+	w := mctx.availW
+	h := mctx.availH
+	if h > 1e9 {
+		h = w
+	}
+	if w > 1e9 {
+		w = h
+	}
+	return nodeSize{w: w, h: h}
+}
+
+func (n *barcodeNode) layout(bounds nodeRect) { n.bounds = bounds }
+
+func (n *barcodeNode) draw(dctx *drawCtx) {
+	w := int(math.Round(n.bounds.w))
+	h := int(math.Round(n.bounds.h))
+	if w <= 0 || h <= 0 {
+		return
+	}
+	var (
+		bc  barcode.Barcode
+		err error
+	)
+	switch n.btype {
+	default: // BarcodeTypeQR
+		bc, err = qr.Encode(n.content, qr.ErrorCorrectionLevel(n.ecLevel), qr.Auto)
+	}
+	if err != nil {
+		return
+	}
+	scaled, err := barcode.Scale(bc, w, h)
+	if err != nil {
+		return
+	}
+	dpmm := dctx.dpmm
+	dctx.ctx.DrawImage(n.bounds.x/dpmm, n.bounds.y/dpmm, scaled, cv.DPMM(dpmm))
+}
+
 // --- Build bridge: exported Node tree → internal node tree ---
 
 // buildNode converts an exported Node into the internal node used by the
@@ -807,6 +857,8 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 			}
 		}
 		return &imageNode{img: img, scale: v.Scale, clip: v.Clip}, nil
+	case *BarcodeNode:
+		return &barcodeNode{content: v.Content, btype: v.Type, ecLevel: v.ECLevel}, nil
 	default:
 		panic("demy: unknown node type")
 	}

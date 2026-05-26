@@ -168,15 +168,53 @@ func (n *hstackNode) measure(mctx *measureCtx) nodeSize {
 	innerH := math.Max(0, mctx.availH-2*n.padding)
 	innerW := math.Max(0, mctx.availW-2*n.padding)
 	n.measuredSizes = make([]nodeSize, len(n.children))
-	var totalW, maxH float64
+
+	// Pass 1: measure all children at full available width.
 	for i, child := range n.children {
-		s := child.measure(&measureCtx{
+		n.measuredSizes[i] = child.measure(&measureCtx{
 			fonts:  mctx.fonts,
 			dpmm:   mctx.dpmm,
 			availW: innerW,
 			availH: innerH,
 		})
-		n.measuredSizes[i] = s
+	}
+
+	// Pass 2: if variable-width children collectively overflow the available
+	// space (after reserving gaps and fixed-width children like frameNode),
+	// shrink them proportionally and re-measure so heights are correct.
+	totalGaps := math.Max(0, float64(len(n.children)-1)) * n.gap
+	var fixedSizeW, variableSizeW float64
+	for i, child := range n.children {
+		switch child.(type) {
+		case *spacerNode, *weightedNode:
+		case *frameNode:
+			fixedSizeW += n.measuredSizes[i].w
+		default:
+			variableSizeW += n.measuredSizes[i].w
+		}
+	}
+	availForVar := innerW - totalGaps - fixedSizeW
+	if variableSizeW > availForVar && variableSizeW > 0 {
+		shrinkScale := math.Max(0, availForVar) / variableSizeW
+		for i, child := range n.children {
+			switch child.(type) {
+			case *spacerNode, *weightedNode, *frameNode:
+			default:
+				newW := n.measuredSizes[i].w * shrinkScale
+				n.measuredSizes[i] = child.measure(&measureCtx{
+					fonts:  mctx.fonts,
+					dpmm:   mctx.dpmm,
+					availW: newW,
+					availH: innerH,
+				})
+			}
+		}
+	}
+
+	// Accumulate totals from (possibly updated) measured sizes.
+	var totalW, maxH float64
+	for i, child := range n.children {
+		s := n.measuredSizes[i]
 		if i > 0 {
 			totalW += n.gap
 		}

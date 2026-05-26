@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image/png"
 	"io"
 	"os"
 
@@ -10,6 +11,119 @@ import (
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/goregular"
 )
+
+const weatherTempalte = `<scene>
+<styles>
+  <style name="sub" font="sans" size="11" color="#555555" align="center" />
+  <style name="detail-label" font="sans" size="11" color="#555555" />
+  <style name="detail-value" font="sans" size="11" weight="bold" 
+align="right" />
+  <style name="forecast-day" font="sans" size="10" weight="bold" 
+align="center" />
+  <style name="forecast-high" font="sans" size="12" weight="bold" 
+align="center" />
+  <style name="forecast-low" font="sans" size="10" color="#555555" align="center" />
+</styles>
+<vstack padding="16">
+	<hstack>
+		<text font="sans" size="18" weight="bold">WEATHER</text>
+		<spacer weight="1"></spacer>
+		<text font="sans" size="12" color="#555555">London</text>
+	</hstack>
+	<box padding="6"></box>
+	<divider></divider>
+	<box padding="6"></box>
+	<hstack gap="16" align="center">
+		<vstack gap="6" align="center">
+			<hstack gap="4" align="end">
+				<text font="sans" size="64" weight="bold" align="center">20</text>
+				<vstack>
+					<text font="sans" size="20" weight="bold">F</text>
+					<spacer weight="1"></spacer>
+				</vstack>
+			</hstack>
+			<text font="sans" size="13" align="center">Clear Sky</text>
+			<text class="sub">Feels like 21F</text>
+			<text class="sub">H: 21F   L: 11F</text>
+		</vstack>
+		<spacer weight="1"></spacer>
+		<frame width="240" height="220">
+			<box padding="12" border-width="1" border-color="#555555" corner-radius="4">
+				<vstack gap="12">
+					<hstack>
+						<text class="detail-label">Humidity</text>
+						<spacer weight="1"></spacer>
+						<text class="detail-value">35%</text>
+					</hstack>
+					<hstack>
+						<text class="detail-label">Wind</text>
+						<spacer weight="1"></spacer>
+						<text class="detail-value">10 mph SW</text>
+					</hstack>
+					<hstack>
+						<text class="detail-label">UV Index</text>
+						<spacer weight="1"></spacer>
+						<text class="detail-value">2</text>
+					</hstack>
+					<hstack>
+						<text class="detail-label">Precip</text>
+						<spacer weight="1"></spacer>
+						<text class="detail-value">0.00 inch</text>
+					</hstack>
+					<box padding="2"></box>
+					<text font="sans" size="9" color="#aaaaaa" align="right">Updated 1:53 AM</text>
+				</vstack>
+			</box>
+		</frame>
+	</hstack>
+	<box padding="6"></box>
+	<divider></divider>
+	<box padding="6"></box>
+	<hstack>
+		<vstack gap="3" align="center">
+			<text class="forecast-day">Tue</text>
+			<text class="forecast-high">21°</text>
+			<text class="forecast-low">11°</text>
+		</vstack>
+		<spacer weight="1"></spacer>
+		<vstack gap="3" align="center">
+			<text font="sans" size="10" weight="bold" align="center">Wed</text>
+			<text font="sans" size="12" weight="bold" align="center">28°</text>
+			<text font="sans" size="10" color="#555555" align="center">28°</text>
+		</vstack>
+		<spacer weight="1"></spacer>
+		<vstack gap="3" align="center">
+			<text font="sans" size="10" weight="bold" align="center">Thu</text>
+			<text font="sans" size="12" weight="bold" align="center">24°</text>
+			<text font="sans" size="10" color="#555555" align="center">38°</text>
+		</vstack>
+		<spacer weight="1"></spacer>
+		<vstack gap="3" align="center">
+			<text font="sans" size="10" weight="bold" align="center">Fri</text>
+			<text font="sans" size="12" weight="bold" align="center">12°</text>
+			<text font="sans" size="10" color="#555555" align="center">98°</text>
+		</vstack>
+		<spacer weight="1"></spacer>
+		<vstack gap="3" align="center">
+			<text font="sans" size="10" weight="bold" align="center">Sat</text>
+			<text font="sans" size="12" weight="bold" align="center">42°</text>
+			<text font="sans" size="10" color="#555555" align="center">11°</text>
+		</vstack>
+		<spacer weight="1"></spacer>
+		<vstack gap="3" align="center">
+			<text font="sans" size="10" weight="bold" align="center">Sun</text>
+			<text font="sans" size="12" weight="bold" align="center">32°</text>
+			<text font="sans" size="10" color="#555555" align="center">10°</text>
+		</vstack>
+		<spacer weight="1"></spacer>
+		<vstack gap="3" align="center">
+			<text font="sans" size="10" weight="bold" align="center">Mon</text>
+			<text font="sans" size="12" weight="bold" align="center">22°</text>
+			<text font="sans" size="10" color="#555555" align="center">48°</text>
+		</vstack>
+	</hstack>
+</vstack>
+</scene>`
 
 func renderWeather(w io.Writer, data *weatherData, location string) error {
 	font := demy.MustLoadFontBytes("sans", goregular.TTF)
@@ -122,5 +236,9 @@ func renderWeather(w io.Writer, data *weatherData, location string) error {
 	b, err := xmlscene.Marshal(root)
 	_ = os.WriteFile("scene.xml", b, 0644)
 
-	return c.EncodePNG(root, w, demy.TwoBit)
+	outImg, err := c.Render(root, demy.TwoBit)
+	if err != nil {
+		return fmt.Errorf("rendering canvas: %w", err)
+	}
+	return png.Encode(w, outImg)
 }

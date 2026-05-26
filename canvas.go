@@ -4,8 +4,6 @@ import (
 	"errors"
 	"image"
 	"image/color"
-	"image/png"
-	"io"
 
 	cv "github.com/tdewolff/canvas"
 	"github.com/tdewolff/canvas/renderers/rasterizer"
@@ -100,23 +98,18 @@ func (c *Canvas) rasterize(cvs *cv.Canvas) *image.RGBA {
 	return img
 }
 
-// Render lays out and rasterizes root, returning the full grayscale image.
-func (c *Canvas) Render(root Node) (image.Image, error) {
+// Render lays out and rasterizes root with the given color mode and optional
+// dithering algorithm (default FloydSteinberg).
+func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image, error) {
 	cvs, err := c.draw(root)
 	if err != nil {
 		return nil, err
 	}
-	return c.rasterize(cvs), nil
-}
-
-// EncodePNG renders root and writes a PNG with the given color mode and optional
-// dithering algorithm (default FloydSteinberg).
-func (c *Canvas) EncodePNG(root Node, w io.Writer, mode ColorMode, algo ...Dither) error {
-	cvs, err := c.draw(root)
-	if err != nil {
-		return err
-	}
 	rgba := c.rasterize(cvs)
+	if mode == RGBA {
+		return rgba, nil
+	}
+
 	gray := toGray(rgba)
 
 	algorithm := NoDithering
@@ -149,8 +142,10 @@ func (c *Canvas) EncodePNG(root Node, w io.Writer, mode ColorMode, algo ...Dithe
 	case BWRed:
 		// TODO: two-pass black+red encoder
 		out = gray
-	default: // Grayscale
+	case Grayscale:
+		out = gray
+	default:
 		out = gray
 	}
-	return png.Encode(w, out)
+	return out, nil
 }

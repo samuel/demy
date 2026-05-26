@@ -13,6 +13,19 @@
 //	def render(data):
 //	    return VStack(Text(data["title"], styles["h1"]))
 //
+// To inject custom Go functions into the script environment, create an Environment
+// and call Add* methods before loading the script:
+//
+//	env := &starlarkplugin.Environment{}
+//	env.AddModule("svc", map[string]starlarkplugin.BuiltinFunc{
+//	    "fetch": func(thread *starlark.Thread, args starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+//	        ctx := starlarkplugin.ContextFromThread(thread)
+//	        // ... use ctx to call a remote service ...
+//	    },
+//	})
+//	p, err := env.Load("display.star", cfg)
+//	node, err := p.Render(r.Context(), data)
+//
 // Exposed globals:
 //
 //	Constructors: VStack, HStack, ZStack, Box, Frame, Spacer, Divider, Text, ImageKey, Barcode
@@ -31,18 +44,113 @@
 package starlarkplugin
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"image/color"
+	"maps"
 	"strconv"
 	"strings"
 	"unicode"
 
 	sl "go.starlark.net/starlark"
+	slstruct "go.starlark.net/starlarkstruct"
 	"go.starlark.net/syntax"
 
 	"github.com/samuel/demy"
 )
+
+// BuiltinFunc is the signature for Go functions exposed as Starlark builtins.
+// Use ContextFromThread(thread) to retrieve the context.Context passed to Render.
+type BuiltinFunc func(thread *sl.Thread, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error)
+
+// Environment holds user-registered globals merged into the Starlark execution
+// environment when a script is compiled. Its zero value is valid (no extra globals).
+type Environment struct {
+	extras sl.StringDict
+}
+
+func (e *Environment) initExtras() {
+	if e.extras == nil {
+		e.extras = make(sl.StringDict)
+	}
+}
+
+// AddBuiltin registers a Go function as a named Starlark global.
+// If the name conflicts with a demy built-in it will shadow it.
+func (e *Environment) AddBuiltin(name string, fn BuiltinFunc) *Environment {
+	e.initExtras()
+	e.extras[name] = sl.NewBuiltin(name, func(t *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
+		return fn(t, args, kwargs)
+	})
+	return e
+}
+
+// AddValue registers an arbitrary Starlark value as a named global.
+func (e *Environment) AddValue(name string, v sl.Value) *Environment {
+	e.initExtras()
+	e.extras[name] = v
+	return e
+}
+
+// AddModule registers a group of functions as a named Starlark module, accessible
+// in scripts as module.fn(args). Uses starlarkstruct.Module internally.
+func (e *Environment) AddModule(name string, fns map[string]BuiltinFunc) *Environment {
+	e.initExtras()
+	members := make(sl.StringDict, len(fns))
+	for fnName, fn := range fns {
+		members[fnName] = sl.NewBuiltin(fnName, func(t *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
+			return fn(t, args, kwargs)
+		})
+	}
+	e.extras[name] = &slstruct.Module{Name: name, Members: members}
+	return e
+}
+
+// Load compiles the Starlark script at path.
+func (e *Environment) Load(path string, cfg demy.Config) (*Plugin, error) {
+	return execFile(path, nil, cfg, e.extras)
+}
+
+// LoadBytes compiles src as a Starlark script named filename.
+func (e *Environment) LoadBytes(filename string, src []byte, cfg demy.Config) (*Plugin, error) {
+	return execFile(filename, src, cfg, e.extras)
+}
+
+// contextKey is the thread-local key used to propagate context.Context through Render.
+const contextKey = "demy/ctx"
+
+// ContextFromThread retrieves the context.Context set by Render.
+// Returns context.Background() if no context has been set.
+func ContextFromThread(t *sl.Thread) context.Context {
+	if v := t.Local(contextKey); v != nil {
+		return v.(context.Context) //nolint:forcetypeassert
+	}
+	return context.Background()
+}
+
+// ToStarlark converts a Go value to a Starlark value.
+// Supported types: nil, bool, int, int32, int64, float32, float64, string,
+// map[string]any, []any.
+func ToStarlark(v any) (sl.Value, error) {
+	return anyToStarlark(v)
+}
+
+// WrapNode wraps a demy.Node as a Starlark value that can be returned from a
+// BuiltinFunc and passed to layout constructors in scripts.
+func WrapNode(n demy.Node) sl.Value {
+	return &nodeValue{n}
+}
+
+// UnwrapNode extracts a demy.Node from a Starlark value produced by WrapNode or
+// a layout constructor. Returns false if v is not a node value.
+func UnwrapNode(v sl.Value) (demy.Node, bool) {
+	nv, ok := v.(*nodeValue)
+	if !ok {
+		return nil, false
+	}
+	return nv.n, true
+}
 
 // Plugin is a compiled Starlark script that exports a render(data) function.
 type Plugin struct {
@@ -50,20 +158,11 @@ type Plugin struct {
 	scriptStyles map[string]demy.Style
 }
 
-// Load compiles the Starlark script at path. cfg injects named styles and color
-// constants into the script's global environment.
-func Load(path string, cfg demy.Config) (*Plugin, error) {
-	return execFile(path, nil, cfg)
-}
-
-// LoadBytes compiles src as a Starlark script named filename.
-func LoadBytes(filename string, src []byte, cfg demy.Config) (*Plugin, error) {
-	return execFile(filename, src, cfg)
-}
-
-func execFile(filename string, src any, cfg demy.Config) (*Plugin, error) {
+func execFile(filename string, src any, cfg demy.Config, extras sl.StringDict) (*Plugin, error) {
+	env := newEnv(cfg)
+	maps.Copy(env, extras)
 	thread := &sl.Thread{Name: filename}
-	globals, err := sl.ExecFileOptions(&syntax.FileOptions{}, thread, filename, src, newEnv(cfg))
+	globals, err := sl.ExecFileOptions(&syntax.FileOptions{}, thread, filename, src, env)
 	if err != nil {
 		return nil, fmt.Errorf("starlarkplugin: load %s: %w", filename, err)
 	}
@@ -101,12 +200,17 @@ func (p *Plugin) Styles() map[string]demy.Style {
 }
 
 // Render calls the script's render(data) and returns the root Node tree.
-func (p *Plugin) Render(data map[string]any) (demy.Node, error) {
+// ctx is propagated to user-provided builtins via ContextFromThread.
+func (p *Plugin) Render(ctx context.Context, data map[string]any) (demy.Node, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	d, err := dataToStarlark(data)
 	if err != nil {
 		return nil, fmt.Errorf("starlarkplugin: %w", err)
 	}
 	thread := &sl.Thread{Name: "render"}
+	thread.SetLocal(contextKey, ctx)
 	result, err := sl.Call(thread, p.globals["render"], sl.Tuple{d}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("starlarkplugin: render: %w", err)

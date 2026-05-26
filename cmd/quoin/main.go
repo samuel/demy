@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	_ "image/jpeg"
+	"image/png"
 	_ "image/png"
 	"io"
 	"log"
@@ -466,7 +467,11 @@ func renderDisplay(w io.Writer, imageFile, fontFile string) error {
 		),
 	)
 
-	return c.EncodePNG(root, w, demy.TwoBit)
+	outImg, err := c.Render(root, demy.TwoBit)
+	if err != nil {
+		return fmt.Errorf("rendering canvas: %w", err)
+	}
+	return png.Encode(w, outImg)
 }
 
 // --- Device logging and HTTP middleware ---

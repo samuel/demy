@@ -34,19 +34,19 @@ func TestParseDeviceHeaders_MissingID(t *testing.T) {
 
 func TestParseDeviceHeaders_AllFields(t *testing.T) {
 	r := newRequest("GET", "/", map[string]string{
-		"ID":              "AA:BB:CC:DD:EE:FF",
-		"ACCESS_TOKEN":    "tok",
-		"BATTERY_VOLTAGE": "3.7",
-		"FW_VERSION":      "1.2.3",
-		"HEIGHT":          "480",
-		"MODEL":           "esp32",
-		"PERCENT_CHARGED": "80",
-		"REFRESH_RATE":    "130",
-		"RSSI":            "-54",
-		"SENSORS":         "temp",
-		"UPDATE_SOURCE":   "timer",
-		"USER_AGENT":      "TRMNL",
-		"WIDTH":           "800",
+		HeaderID:             "AA:BB:CC:DD:EE:FF",
+		HeaderAccessToken:    "tok",
+		HeaderBatteryVoltage: "3.7",
+		HeaderFWVersion:      "1.2.3",
+		HeaderHeight:         "480",
+		HeaderModel:          "esp32",
+		HeaderPercentCharged: "80",
+		HeaderRefreshRate:    "130",
+		HeaderRSSI:           "-54",
+		HeaderSensors:        "temp",
+		HeaderUpdateSource:   "timer",
+		HeaderUserAgent:      "TRMNL",
+		HeaderWidth:          "800",
 	}, nil)
 	r.Host = "192.168.1.10"
 

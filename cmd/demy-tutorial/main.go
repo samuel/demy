@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"image/png"
 	"io"
 	"log"
 	"log/slog"
@@ -112,7 +113,12 @@ func renderHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var buf bytes.Buffer
-	if err := canvas.EncodePNG(node, &buf, colorMode, ditherAlgo); err != nil {
+	img, err := canvas.Render(node, colorMode, ditherAlgo)
+	if err != nil {
+		writeJSONError(w, fmt.Errorf("rendering: %w", err), http.StatusInternalServerError)
+		return
+	}
+	if err := png.Encode(&buf, img); err != nil {
 		writeJSONError(w, fmt.Errorf("rendering: %w", err), http.StatusInternalServerError)
 		return
 	}

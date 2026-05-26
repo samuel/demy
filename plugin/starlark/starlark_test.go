@@ -1,12 +1,14 @@
 package starlarkplugin_test
 
 import (
+	"context"
 	"testing"
 
-	starlarkplugin "github.com/samuel/demy/plugin/starlark"
+	sl "go.starlark.net/starlark"
 	"golang.org/x/image/font/gofont/goregular"
 
 	"github.com/samuel/demy"
+	starlarkplugin "github.com/samuel/demy/plugin/starlark"
 )
 
 func TestRenderBasic(t *testing.T) {
@@ -35,12 +37,13 @@ def render(data):
     )
 `)
 
-	p, err := starlarkplugin.LoadBytes("test.star", script, cfg)
+	var env starlarkplugin.Environment
+	p, err := env.LoadBytes("test.star", script, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	node, err := p.Render(map[string]any{
+	node, err := p.Render(context.Background(), map[string]any{
 		"title":  "Weather",
 		"footer": "Updated 12:34",
 		"count":  "3 items",
@@ -58,7 +61,7 @@ def render(data):
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Render(node); err != nil {
+	if _, err := c.Render(node, demy.RGBA); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -88,11 +91,12 @@ def render(data):
     )
 `)
 
-	p, err := starlarkplugin.LoadBytes("layout.star", script, cfg)
+	var env starlarkplugin.Environment
+	p, err := env.LoadBytes("layout.star", script, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	node, err := p.Render(nil)
+	node, err := p.Render(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +104,7 @@ def render(data):
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Render(node); err != nil {
+	if _, err := c.Render(node, demy.RGBA); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -125,7 +129,8 @@ def render(data):
     )
 `)
 
-	p, err := starlarkplugin.LoadBytes("test.star", script, cfg)
+	var env starlarkplugin.Environment
+	p, err := env.LoadBytes("test.star", script, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +155,7 @@ def render(data):
 	}
 
 	// Verify render works with script-defined styles used directly.
-	node, err := p.Render(map[string]any{"title": "Hello", "body": "world"})
+	node, err := p.Render(context.Background(), map[string]any{"title": "Hello", "body": "world"})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -158,7 +163,7 @@ def render(data):
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Render(node); err != nil {
+	if _, err := c.Render(node, demy.RGBA); err != nil {
 		t.Fatalf("canvas.Render: %v", err)
 	}
 }
@@ -169,7 +174,8 @@ func TestStylesDictBadValue(t *testing.T) {
 styles = {"h1": VStack()}
 def render(data): return VStack()
 `)
-	_, err := starlarkplugin.LoadBytes("bad.star", script, cfg)
+	var env starlarkplugin.Environment
+	_, err := env.LoadBytes("bad.star", script, cfg)
 	if err == nil {
 		t.Fatal("expected error for non-Style value in styles dict")
 	}
@@ -177,7 +183,8 @@ def render(data): return VStack()
 
 func TestRenderMissingRenderFunction(t *testing.T) {
 	cfg := demy.TRMNLOriginal
-	_, err := starlarkplugin.LoadBytes("bad.star", []byte(`x = 1`), cfg)
+	var env starlarkplugin.Environment
+	_, err := env.LoadBytes("bad.star", []byte(`x = 1`), cfg)
 	if err == nil {
 		t.Fatal("expected error for missing render function")
 	}
@@ -185,12 +192,121 @@ func TestRenderMissingRenderFunction(t *testing.T) {
 
 func TestRenderBadReturnType(t *testing.T) {
 	cfg := demy.TRMNLOriginal
-	p, err := starlarkplugin.LoadBytes("bad.star", []byte(`def render(data): return 42`), cfg)
+	var env starlarkplugin.Environment
+	p, err := env.LoadBytes("bad.star", []byte(`def render(data): return 42`), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = p.Render(nil)
+	_, err = p.Render(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected error for non-node return type")
+	}
+}
+
+func TestAddBuiltin(t *testing.T) {
+	cfg := demy.TRMNLOriginal
+	cfg.Fonts = map[string]*demy.FontFamily{
+		"sans": demy.MustLoadFontBytes("sans", goregular.TTF),
+	}
+	cfg.DefaultTextStyle = demy.Style{Font: "sans", Size: 12}
+
+	var env starlarkplugin.Environment
+	env.AddBuiltin("greet", func(_ *sl.Thread, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+		var name string
+		if err := sl.UnpackPositionalArgs("greet", args, nil, 1, &name); err != nil {
+			return nil, err
+		}
+		return sl.String("Hello, " + name + "!"), nil
+	})
+
+	script := []byte(`
+def render(data):
+    return VStack(Text(greet(data["name"])))
+`)
+	p, err := env.LoadBytes("test.star", script, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := p.Render(context.Background(), map[string]any{"name": "World"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := demy.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Render(node, demy.RGBA); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAddModule(t *testing.T) {
+	cfg := demy.TRMNLOriginal
+	cfg.Fonts = map[string]*demy.FontFamily{
+		"sans": demy.MustLoadFontBytes("sans", goregular.TTF),
+	}
+	cfg.DefaultTextStyle = demy.Style{Font: "sans", Size: 12}
+
+	var env starlarkplugin.Environment
+	env.AddModule("data_svc", map[string]starlarkplugin.BuiltinFunc{
+		"get_title": func(_ *sl.Thread, _ sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+			return sl.String("Module Title"), nil
+		},
+	})
+
+	script := []byte(`
+def render(data):
+    return VStack(Text(data_svc.get_title()))
+`)
+	p, err := env.LoadBytes("test.star", script, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := p.Render(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := demy.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Render(node, demy.RGBA); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestContextPropagation(t *testing.T) {
+	cfg := demy.TRMNLOriginal
+	cfg.Fonts = map[string]*demy.FontFamily{
+		"sans": demy.MustLoadFontBytes("sans", goregular.TTF),
+	}
+	cfg.DefaultTextStyle = demy.Style{Font: "sans", Size: 12}
+
+	type ctxKey struct{}
+	ctx := context.WithValue(context.Background(), ctxKey{}, "from-context")
+
+	var receivedVal string
+	var env starlarkplugin.Environment
+	env.AddBuiltin("ctx_val", func(thread *sl.Thread, _ sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+		c := starlarkplugin.ContextFromThread(thread)
+		if v, ok := c.Value(ctxKey{}).(string); ok {
+			receivedVal = v
+		}
+		return sl.String(receivedVal), nil
+	})
+
+	script := []byte(`
+def render(data):
+    return VStack(Text(ctx_val()))
+`)
+	p, err := env.LoadBytes("test.star", script, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Render(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if receivedVal != "from-context" {
+		t.Fatalf("context value not propagated: got %q", receivedVal)
 	}
 }

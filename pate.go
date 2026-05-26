@@ -255,10 +255,11 @@ func (ZAlignment) demyOption() {}
 type ColorMode int
 
 const (
-	Grayscale ColorMode = iota // 8-bit grayscale
-	OneBit                     // 1-bit black/white
-	TwoBit                     // 2-bit 4-shade (black/dark/light/white)
-	BWRed                      // black+white+red two-layer encoder
+	RGBA      ColorMode = iota
+	Grayscale           // 8-bit grayscale
+	OneBit              // 1-bit black/white
+	TwoBit              // 2-bit 4-shade (black/dark/light/white)
+	BWRed               // black+white+red two-layer encoder
 )
 
 // Dither selects the dithering algorithm used in OneBit and TwoBit modes.

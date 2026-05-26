@@ -292,6 +292,87 @@ demy.HStack(demy.Padding(24), demy.Gap(16),
 	},
 	{
 		ID:    10,
+		Title: "Grid",
+		Desc:  "Grid lays children in a 2D grid where column widths and row heights are shared across all cells — unlike nested HStacks, every row sees the same column widths. Columns are required; rows default to auto-sizing. Children fill cells row-by-row, left-to-right.\n\nThree track types:\n• <auto/> — sizes to the widest child in that column (or tallest in that row)\n• <fixed size=\"N\"/> — exact pixel width/height\n• <fr weight=\"N\"/> — proportional share of remaining space (like CSS fr units)\n\nUse <row> to group cells for each row — purely structural, makes the layout easier to read. Try changing the fr weight on the second column from 1 to 2, or swap <auto/> for <fixed size=\"100\"/>.",
+		GoEquiv: `demy.Grid(
+    demy.Columns(
+        demy.GridAuto(),    // label column: sizes to widest content
+        demy.GridFr(1),     // value column: takes remaining space
+        demy.GridFixed(72), // badge column: always 72px
+    ),
+    demy.ColGap(10),
+    demy.RowGap(10),
+    demy.Padding(14),
+    demy.GridRow(demy.Text("METRIC", labelStyle), demy.Text("VALUE", labelStyle), demy.Text("TREND", labelStyle)),
+    demy.GridRow(demy.Text("Temperature", bodyStyle), demy.Text("72 °F", boldStyle),   demy.Text("↑ +3°", badgeStyle)),
+    demy.GridRow(demy.Text("Humidity",    bodyStyle), demy.Text("58 %",  boldStyle),   demy.Text("→ 0%",  badgeStyle)),
+    demy.GridRow(demy.Text("Wind",        bodyStyle), demy.Text("12 mph", boldStyle),  demy.Text("↓ −4",  badgeStyle)),
+    demy.GridRow(demy.Text("Pressure",    bodyStyle), demy.Text("1012 hPa", boldStyle), demy.Text("↑ +2", badgeStyle)),
+)`,
+		SceneXML: `<vstack padding="14" gap="10">
+	<text font="sans" size="13" color="#666666">Grid aligns column widths across every row. Use &lt;row&gt; to group each row's cells — purely structural, the grid flattens them internally. The label column (auto) sizes to the widest label; the value column (fr) expands to fill; the badge column (fixed 72px) is always the same.</text>
+	<grid col-gap="16" row-gap="10">
+		<columns>
+			<auto/>
+			<fr weight="1"/>
+			<fixed size="72"/>
+		</columns>
+		<row>
+			<text font="sans" size="11" weight="semi-bold" color="#888888">METRIC</text>
+			<text font="sans" size="11" weight="semi-bold" color="#888888">VALUE</text>
+			<text font="sans" size="11" weight="semi-bold" color="#888888" align="right">TREND</text>
+		</row>
+		<row>
+			<text font="sans" size="14">Temperature</text>
+			<text font="sans" size="14" weight="bold">72 °F</text>
+			<text font="sans" size="13" color="#555555" align="right">↑ +3°</text>
+		</row>
+		<row>
+			<text font="sans" size="14">Humidity</text>
+			<text font="sans" size="14" weight="bold">58 %</text>
+			<text font="sans" size="13" color="#555555" align="right">→ 0%</text>
+		</row>
+	</grid>
+	<divider/>
+	<text font="sans" size="13" color="#666666">Two equal fr columns — each gets half the available width:</text>
+	<grid col-gap="8" row-gap="8">
+		<columns>
+			<fr weight="1"/>
+			<fr weight="1"/>
+		</columns>
+		<row>
+			<box padding="10" background="#eeeeee" corner-radius="6">
+				<vstack gap="3">
+					<text font="sans" size="11" color="#888888">INDOOR</text>
+					<text font="sans" size="22" weight="bold">21 °C</text>
+				</vstack>
+			</box>
+			<box padding="10" background="#eeeeee" corner-radius="6">
+				<vstack gap="3">
+					<text font="sans" size="11" color="#888888">OUTDOOR</text>
+					<text font="sans" size="22" weight="bold">14 °C</text>
+				</vstack>
+			</box>
+		</row>
+		<row>
+			<box padding="10" background="#eeeeee" corner-radius="6">
+				<vstack gap="3">
+					<text font="sans" size="11" color="#888888">HUMIDITY</text>
+					<text font="sans" size="22" weight="bold">58 %</text>
+				</vstack>
+			</box>
+			<box padding="10" background="#eeeeee" corner-radius="6">
+				<vstack gap="3">
+					<text font="sans" size="11" color="#888888">WIND</text>
+					<text font="sans" size="22" weight="bold">12 mph</text>
+				</vstack>
+			</box>
+		</row>
+	</grid>
+</vstack>`,
+	},
+	{
+		ID:    11,
 		Title: "Full Layout",
 		Desc:  "A realistic e-ink dashboard using style classes — defined right in the XML inside a <styles> block and referenced with class=. The <scene> wrapper lets you declare named styles once and reuse them across the layout. Try adding class=\"body\" to any text node, or override a class field inline: <text class=\"label\" size=\"16\">.",
 		GoEquiv: `// Style classes in Go use Config.Styles; in XML they live in <styles>.

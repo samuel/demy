@@ -28,9 +28,11 @@
 //
 // Exposed globals:
 //
-//	Constructors: VStack, HStack, ZStack, Box, Frame, Spacer, Divider, Text, ImageKey, Barcode
+//	Constructors: VStack, HStack, ZStack, Box, Frame, Spacer, Divider(size=, color=), Grid, GridRow, Text, ImageKey, Barcode
 //	Style:        Style(font=, size=, weight=, color=, align=, line_height=, max_lines=, overflow=)
-//	Options:      Gap, Padding, Background, Border, CornerRadius, Children, Clip
+//	Options:      Gap, Padding, Background, Border, CornerRadius, Children, Clip,
+//	              Columns, Rows, RowGap, ColGap
+//	Grid tracks:  GridFixed(px), GridAuto(), GridFr(weight)
 //	Alignment:    AlignStart, AlignCenter, AlignEnd
 //	ZAlignment:   TopLeading, Top, TopTrailing, Leading, Center, Trailing,
 //	              BottomLeading, Bottom, BottomTrailing
@@ -248,6 +250,14 @@ func (v *styleValue) Freeze()               {}
 func (v *styleValue) Truth() sl.Bool        { return sl.True }
 func (v *styleValue) Hash() (uint32, error) { return 0, errors.New("unhashable: style") }
 
+type trackValue struct{ t demy.GridTrack }
+
+func (v *trackValue) String() string        { return "<track>" }
+func (v *trackValue) Type() string          { return "track" }
+func (v *trackValue) Freeze()               {}
+func (v *trackValue) Truth() sl.Bool        { return sl.True }
+func (v *trackValue) Hash() (uint32, error) { return 0, errors.New("unhashable: track") }
+
 // --- Environment ---
 
 func newEnv(cfg demy.Config) sl.StringDict {
@@ -260,6 +270,17 @@ func newEnv(cfg demy.Config) sl.StringDict {
 		"Frame":   sl.NewBuiltin("Frame", builtinFrame),
 		"Spacer":  sl.NewBuiltin("Spacer", builtinSpacer),
 		"Divider": sl.NewBuiltin("Divider", builtinDivider),
+		"Grid":    sl.NewBuiltin("Grid", builtinGrid),
+		"GridRow": sl.NewBuiltin("GridRow", builtinGridRow),
+		// Grid track constructors
+		"GridFixed": sl.NewBuiltin("GridFixed", builtinGridFixed),
+		"GridAuto":  sl.NewBuiltin("GridAuto", builtinGridAuto),
+		"GridFr":    sl.NewBuiltin("GridFr", builtinGridFr),
+		// Grid layout options
+		"Columns": sl.NewBuiltin("Columns", builtinColumns),
+		"Rows":    sl.NewBuiltin("Rows", builtinRows),
+		"RowGap":  sl.NewBuiltin("RowGap", builtinRowGap),
+		"ColGap":  sl.NewBuiltin("ColGap", builtinColGap),
 		// Widget constructors
 		"Text":     sl.NewBuiltin("Text", builtinText),
 		"ImageKey": sl.NewBuiltin("ImageKey", builtinImageKey),
@@ -390,11 +411,35 @@ func builtinSpacer(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl
 	}
 }
 
-func builtinDivider(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+func builtinDivider(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
 	if len(args) != 0 {
-		return nil, errors.New("divider: takes no arguments")
+		return nil, errors.New("divider: takes keyword arguments only (size, color)")
 	}
-	return &nodeValue{demy.Divider()}, nil
+	n := demy.Divider()
+	for _, kv := range kwargs {
+		key, _ := sl.AsString(kv[0])
+		switch key {
+		case "size":
+			sz, ok := asFloat(kv[1])
+			if !ok {
+				return nil, fmt.Errorf("divider: size must be a number, got %s", kv[1].Type())
+			}
+			n.Size = sz
+		case "color":
+			cs, ok := sl.AsString(kv[1])
+			if !ok {
+				return nil, fmt.Errorf("divider: color must be a string, got %s", kv[1].Type())
+			}
+			c, err := parseColorStr(cs)
+			if err != nil {
+				return nil, fmt.Errorf("divider: %w", err)
+			}
+			n.Color = c
+		default:
+			return nil, fmt.Errorf("divider: unknown keyword argument %q", key)
+		}
+	}
+	return &nodeValue{n}, nil
 }
 
 func builtinText(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
@@ -585,6 +630,116 @@ func builtinCornerRadius(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tupl
 		return nil, fmt.Errorf("cornerRadius: expected number, got %s", args[0].Type())
 	}
 	return &optValue{demy.CornerRadius(px)}, nil
+}
+
+func builtinGrid(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+	opts, err := argsToOptions(args)
+	if err != nil {
+		return nil, fmt.Errorf("grid: %w", err)
+	}
+	return &nodeValue{demy.Grid(opts...)}, nil
+}
+
+func builtinGridRow(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+	var children []demy.Node
+	for _, arg := range args {
+		nv, ok := arg.(*nodeValue)
+		if !ok {
+			return nil, fmt.Errorf("GridRow: expected node, got %s", arg.Type())
+		}
+		children = append(children, nv.n)
+	}
+	return &nodeValue{demy.GridRow(children...)}, nil
+}
+
+func builtinGridFixed(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+	if len(args) != 1 {
+		return nil, errors.New("GridFixed: expected 1 argument (px)")
+	}
+	px, ok := asFloat(args[0])
+	if !ok {
+		return nil, fmt.Errorf("GridFixed: expected number, got %s", args[0].Type())
+	}
+	return &trackValue{demy.GridFixed(px)}, nil
+}
+
+func builtinGridAuto(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+	if len(args) != 0 {
+		return nil, errors.New("GridAuto: takes no arguments")
+	}
+	return &trackValue{demy.GridAuto()}, nil
+}
+
+func builtinGridFr(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+	if len(args) != 1 {
+		return nil, errors.New("GridFr: expected 1 argument (weight)")
+	}
+	w, ok := asFloat(args[0])
+	if !ok {
+		return nil, fmt.Errorf("GridFr: expected number, got %s", args[0].Type())
+	}
+	return &trackValue{demy.GridFr(w)}, nil
+}
+
+// parseTracks converts variadic Starlark args (trackValue or *sl.List of trackValue) to []demy.GridTrack.
+func parseTracks(args sl.Tuple) ([]demy.GridTrack, error) {
+	var tracks []demy.GridTrack
+	for _, arg := range args {
+		switch v := arg.(type) {
+		case *trackValue:
+			tracks = append(tracks, v.t)
+		case *sl.List:
+			for i := range v.Len() {
+				item := v.Index(i)
+				tv, ok := item.(*trackValue)
+				if !ok {
+					return nil, fmt.Errorf("list item must be a track, got %s", item.Type())
+				}
+				tracks = append(tracks, tv.t)
+			}
+		default:
+			return nil, fmt.Errorf("expected track or list of tracks, got %s", arg.Type())
+		}
+	}
+	return tracks, nil
+}
+
+func builtinColumns(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+	tracks, err := parseTracks(args)
+	if err != nil {
+		return nil, fmt.Errorf("columns: %w", err)
+	}
+	return &optValue{demy.Columns(tracks...)}, nil
+}
+
+func builtinRows(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+	tracks, err := parseTracks(args)
+	if err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+	return &optValue{demy.Rows(tracks...)}, nil
+}
+
+func builtinRowGap(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+	if len(args) != 1 {
+		return nil, errors.New("RowGap: expected 1 argument")
+	}
+	px, ok := asFloat(args[0])
+	if !ok {
+		return nil, fmt.Errorf("RowGap: expected number, got %s", args[0].Type())
+	}
+	return &optValue{demy.RowGap(px)}, nil
+}
+
+func builtinColGap(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+	if len(args) != 1 {
+		return nil, errors.New("ColGap: expected 1 argument")
+	}
+	px, ok := asFloat(args[0])
+	if !ok {
+		return nil, fmt.Errorf("ColGap: expected number, got %s", args[0].Type())
+	}
+	return &optValue{demy.ColGap(px)}, nil
 }
 
 // Children accepts individual nodes or a single Starlark list of nodes.

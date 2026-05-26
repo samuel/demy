@@ -3,10 +3,8 @@ package deviceapi
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/httputil"
 )
 
 // Handler holds the application callbacks for each device API endpoint.
@@ -33,8 +31,6 @@ func Register(mux *http.ServeMux, h Handler) {
 }
 
 func (h Handler) serveDisplay(w http.ResponseWriter, r *http.Request) {
-	b, _ := httputil.DumpRequest(r, true)
-	fmt.Println(string(b))
 	device, err := parseDeviceHeaders(r)
 	if err != nil {
 		http.Error(w, "missing required ID header", http.StatusUnauthorized)

@@ -78,6 +78,81 @@ func TestMarshalSceneNoStyles(t *testing.T) {
 	}
 }
 
+func TestMarshalGridRoundTrip(t *testing.T) {
+	root := &demy.GridNode{
+		Columns: []demy.GridTrack{demy.GridFixed(100), demy.GridAuto(), demy.GridFr(1)},
+		Rows:    []demy.GridTrack{demy.GridAuto(), demy.GridFixed(40)},
+		RowGap:  4,
+		ColGap:  8,
+		Padding: 12,
+		Children: []demy.Node{
+			&demy.TextNode{Text: "a"},
+			&demy.TextNode{Text: "b"},
+			&demy.TextNode{Text: "c"},
+		},
+	}
+	data, err := xmlscene.Marshal(root)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	t.Logf("XML:\n%s", data)
+	got, err := xmlscene.Unmarshal(data)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(root, got) {
+		t.Errorf("node mismatch\nwant: %#v\ngot:  %#v", root, got)
+	}
+}
+
+func TestMarshalGridNoRows(t *testing.T) {
+	root := &demy.GridNode{
+		Columns:  []demy.GridTrack{demy.GridFr(1), demy.GridFr(2)},
+		Children: []demy.Node{&demy.TextNode{Text: "x"}, &demy.TextNode{Text: "y"}},
+	}
+	data, err := xmlscene.Marshal(root)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	got, err := xmlscene.Unmarshal(data)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(root, got) {
+		t.Errorf("node mismatch\nwant: %#v\ngot:  %#v", root, got)
+	}
+}
+
+func TestMarshalGridRowRoundTrip(t *testing.T) {
+	root := &demy.GridNode{
+		Columns: []demy.GridTrack{demy.GridAuto(), demy.GridFr(1)},
+		RowGap:  6,
+		ColGap:  8,
+		Children: []demy.Node{
+			&demy.GridRowNode{Children: []demy.Node{
+				&demy.TextNode{Text: "Name"},
+				&demy.TextNode{Text: "Value"},
+			}},
+			&demy.GridRowNode{Children: []demy.Node{
+				&demy.TextNode{Text: "Temp"},
+				&demy.TextNode{Text: "72 °F"},
+			}},
+		},
+	}
+	data, err := xmlscene.Marshal(root)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	t.Logf("XML:\n%s", data)
+	got, err := xmlscene.Unmarshal(data)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(root, got) {
+		t.Errorf("node mismatch\nwant: %#v\ngot:  %#v", root, got)
+	}
+}
+
 func TestExecuteScene(t *testing.T) {
 	const tmpl = `<scene>
 <styles>

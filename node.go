@@ -271,7 +271,7 @@ func (n *hstackNode) layout(bounds nodeRect) {
 			fillCrossAxis = true
 		default:
 			childW = n.measuredSizes[i].w
-			childH = n.measuredSizes[i].h
+			childH = math.Min(n.measuredSizes[i].h, innerH)
 		}
 		if fillCrossAxis {
 			childH = innerH
@@ -551,20 +551,29 @@ func (n *weightedNode) draw(dctx *drawCtx) { n.child.draw(dctx) }
 
 type dividerNode struct {
 	isHorizontal bool
+	color        color.Color
+	size         float64
 	bounds       nodeRect
 }
 
 func (n *dividerNode) measure(mctx *measureCtx) nodeSize {
-	if n.isHorizontal {
-		return nodeSize{w: mctx.availW, h: 1}
+	sz := n.size
+	if sz == 0 {
+		sz = 1
 	}
-	return nodeSize{w: 1, h: mctx.availH}
+	if n.isHorizontal {
+		return nodeSize{w: mctx.availW, h: sz}
+	}
+	return nodeSize{w: sz, h: mctx.availH}
 }
 
 func (n *dividerNode) layout(bounds nodeRect) { n.bounds = bounds }
 
 func (n *dividerNode) draw(dctx *drawCtx) {
-	col := dctx.roles.Muted
+	col := n.color
+	if col == nil {
+		col = dctx.roles.Muted
+	}
 	if col == nil {
 		col = dctx.roles.Foreground
 	}
@@ -573,8 +582,16 @@ func (n *dividerNode) draw(dctx *drawCtx) {
 	}
 	dctx.ctx.SetFillColor(col)
 	dctx.ctx.SetStrokeColor(color.Transparent)
-	xMM := n.bounds.x / dctx.dpmm
-	yMM := n.bounds.y / dctx.dpmm
+	var xPx, yPx float64
+	if n.isHorizontal {
+		xPx = n.bounds.x
+		yPx = math.Round(n.bounds.y)
+	} else {
+		xPx = math.Round(n.bounds.x)
+		yPx = n.bounds.y
+	}
+	xMM := xPx / dctx.dpmm
+	yMM := yPx / dctx.dpmm
 	wMM := n.bounds.w / dctx.dpmm
 	hMM := n.bounds.h / dctx.dpmm
 	dctx.ctx.DrawPath(xMM, yMM, cv.Rectangle(wMM, hMM))
@@ -781,6 +798,306 @@ func (n *barcodeNode) draw(dctx *drawCtx) {
 	dctx.ctx.DrawImage(n.bounds.x/dpmm, n.bounds.y/dpmm, scaled, cv.DPMM(dpmm))
 }
 
+// --- gridNode ---
+
+type gridNode struct {
+	columns  []GridTrack
+	rows     []GridTrack
+	rowGap   float64
+	colGap   float64
+	padding  float64
+	children []node
+
+	// computed during measure / finalized in layout
+	numCols    int
+	numRows    int
+	colWidths  []float64
+	rowHeights []float64
+	cellSizes  []nodeSize // len == numRows*numCols; zero for empty slots
+	bounds     nodeRect
+
+	// retained from measure for deferred re-measure of children in Fr rows
+	measureFonts map[string]*FontFamily
+	measureDPMM  float64
+}
+
+func (n *gridNode) measure(mctx *measureCtx) nodeSize {
+	if len(n.columns) == 0 {
+		return nodeSize{}
+	}
+	n.measureFonts = mctx.fonts
+	n.measureDPMM = mctx.dpmm
+	n.numCols = len(n.columns)
+	numChildren := len(n.children)
+	n.numRows = (numChildren + n.numCols - 1) / n.numCols
+	if n.numRows == 0 {
+		return nodeSize{}
+	}
+	// Cap numRows to explicit row definitions when provided.
+	if len(n.rows) > 0 && len(n.rows) < n.numRows {
+		n.numRows = len(n.rows)
+	}
+
+	innerW := math.Max(0, mctx.availW-2*n.padding)
+	innerH := math.Max(0, mctx.availH-2*n.padding)
+	totalColGaps := math.Max(0, float64(n.numCols-1)) * n.colGap
+	availForCols := math.Max(0, innerW-totalColGaps)
+
+	// Phase 1: compute rough column widths for first-pass child measurement.
+	roughColWidths := n.computeColWidths(availForCols, nil)
+
+	// Phase 2: measure all children with rough column widths.
+	total := n.numRows * n.numCols
+	n.cellSizes = make([]nodeSize, total)
+	for i, child := range n.children {
+		if i >= total {
+			break
+		}
+		col := i % n.numCols
+		n.cellSizes[i] = child.measure(&measureCtx{
+			fonts:  mctx.fonts,
+			dpmm:   mctx.dpmm,
+			availW: roughColWidths[col],
+			availH: math.MaxFloat32,
+		})
+	}
+
+	// Phase 3: finalize column widths using measured content for auto tracks.
+	n.colWidths = n.computeColWidths(availForCols, n.cellSizes)
+
+	// Phase 4: re-measure children whose column width changed noticeably,
+	// so row heights reflect the final layout (e.g. text re-wrapping).
+	for i, child := range n.children {
+		if i >= total {
+			break
+		}
+		col := i % n.numCols
+		if math.Abs(n.colWidths[col]-roughColWidths[col]) > 0.5 {
+			n.cellSizes[i] = child.measure(&measureCtx{
+				fonts:  mctx.fonts,
+				dpmm:   mctx.dpmm,
+				availW: n.colWidths[col],
+				availH: math.MaxFloat32,
+			})
+		}
+	}
+
+	// Phase 5: compute row heights (Fr rows contribute 0 here; finalized in layout).
+	totalRowGaps := math.Max(0, float64(n.numRows-1)) * n.rowGap
+	availForRows := math.Max(0, innerH-totalRowGaps)
+	n.rowHeights = n.computeRowHeights(availForRows, n.cellSizes)
+
+	totalW := totalColGaps
+	for _, w := range n.colWidths {
+		totalW += w
+	}
+	totalH := totalRowGaps
+	for _, h := range n.rowHeights {
+		totalH += h
+	}
+	return nodeSize{w: totalW + 2*n.padding, h: totalH + 2*n.padding}
+}
+
+func (n *gridNode) layout(bounds nodeRect) {
+	n.bounds = bounds
+	innerW := math.Max(0, bounds.w-2*n.padding)
+	innerH := math.Max(0, bounds.h-2*n.padding)
+	totalColGaps := math.Max(0, float64(n.numCols-1)) * n.colGap
+	totalRowGaps := math.Max(0, float64(n.numRows-1)) * n.rowGap
+	availForCols := math.Max(0, innerW-totalColGaps)
+	availForRows := math.Max(0, innerH-totalRowGaps)
+
+	// Re-derive column widths with actual bounds (parent may have given us a
+	// different width than what measure was called with).
+	n.colWidths = n.computeColWidths(availForCols, n.cellSizes)
+
+	// Finalize Fr row heights using actual available height.
+	n.rowHeights = n.finalizeRowHeights(availForRows, n.cellSizes)
+
+	total := n.numRows * n.numCols
+
+	// Re-measure children in Fr rows — they now have a definite height.
+	for row := range n.numRows {
+		rowTrack := n.rowTrack(row)
+		if rowTrack.kind != gridTrackFr {
+			continue
+		}
+		for col := range n.numCols {
+			idx := row*n.numCols + col
+			if idx >= len(n.children) || idx >= total {
+				break
+			}
+			n.cellSizes[idx] = n.children[idx].measure(&measureCtx{
+				fonts:  n.measureFonts,
+				dpmm:   n.measureDPMM,
+				availW: n.colWidths[col],
+				availH: n.rowHeights[row],
+			})
+		}
+	}
+
+	// Compute cumulative column and row offsets.
+	colOffsets := make([]float64, n.numCols)
+	x := 0.0
+	for col := range n.numCols {
+		colOffsets[col] = x
+		x += n.colWidths[col] + n.colGap
+	}
+	rowOffsets := make([]float64, n.numRows)
+	y := 0.0
+	for row := range n.numRows {
+		rowOffsets[row] = y
+		y += n.rowHeights[row] + n.rowGap
+	}
+
+	// Lay out children in their cells.
+	originX := bounds.x + n.padding
+	originY := bounds.y + n.padding
+	for i, child := range n.children {
+		if i >= total {
+			break
+		}
+		col := i % n.numCols
+		row := i / n.numCols
+		if row >= n.numRows {
+			break
+		}
+		child.layout(nodeRect{
+			x: originX + colOffsets[col],
+			y: originY + rowOffsets[row],
+			w: n.colWidths[col],
+			h: n.rowHeights[row],
+		})
+	}
+}
+
+func (n *gridNode) draw(dctx *drawCtx) {
+	for _, child := range n.children {
+		child.draw(dctx)
+	}
+}
+
+// rowTrack returns the GridTrack for the given row, defaulting to gridTrackAuto.
+func (n *gridNode) rowTrack(row int) GridTrack {
+	if row < len(n.rows) {
+		return n.rows[row]
+	}
+	return GridTrack{kind: gridTrackAuto}
+}
+
+// computeColWidths calculates column widths for the given available width.
+// If cellSizes is nil, auto columns are estimated by splitting remaining space evenly.
+func (n *gridNode) computeColWidths(availForCols float64, cellSizes []nodeSize) []float64 {
+	widths := make([]float64, n.numCols)
+
+	// Sum fixed widths and count non-fixed tracks.
+	var fixedW float64
+	var nonFixedCount int
+	var totalFrWeight float64
+	for _, col := range n.columns {
+		switch col.kind {
+		case gridTrackFixed:
+			fixedW += col.size
+		case gridTrackAuto, gridTrackFr:
+			nonFixedCount++
+			if col.kind == gridTrackFr {
+				totalFrWeight += col.weight
+			}
+		}
+	}
+
+	// Pass 1: assign fixed tracks.
+	for c, col := range n.columns {
+		if col.kind == gridTrackFixed {
+			widths[c] = col.size
+		}
+	}
+
+	// Pass 2: auto tracks — use measured content max if available, else split evenly.
+	var autoFixedW float64 // fixed + final-auto contribution
+	for c, col := range n.columns {
+		if col.kind != gridTrackAuto {
+			continue
+		}
+		if cellSizes == nil {
+			// Rough estimate: split remaining evenly among non-fixed tracks.
+			remaining := math.Max(0, availForCols-fixedW)
+			if nonFixedCount > 0 {
+				widths[c] = remaining / float64(nonFixedCount)
+			}
+		} else {
+			var maxW float64
+			for row := range n.numRows {
+				idx := row*n.numCols + c
+				if idx < len(cellSizes) {
+					if w := cellSizes[idx].w; w > maxW {
+						maxW = w
+					}
+				}
+			}
+			widths[c] = maxW
+		}
+		autoFixedW += widths[c]
+	}
+	fixedTotal := fixedW + autoFixedW
+
+	// Pass 3: distribute remaining width to Fr tracks.
+	if totalFrWeight > 0 {
+		remaining := math.Max(0, availForCols-fixedTotal)
+		for c, col := range n.columns {
+			if col.kind == gridTrackFr {
+				widths[c] = remaining * col.weight / totalFrWeight
+			}
+		}
+	}
+	return widths
+}
+
+// computeRowHeights calculates row heights from measured cell sizes.
+// Fr rows return 0 (deferred to finalizeRowHeights with actual bounds).
+func (n *gridNode) computeRowHeights(availForRows float64, cellSizes []nodeSize) []float64 {
+	heights := make([]float64, n.numRows)
+	var fixedAutoH float64
+	var totalFrWeight float64
+	for row := range n.numRows {
+		track := n.rowTrack(row)
+		switch track.kind {
+		case gridTrackFixed:
+			heights[row] = track.size
+			fixedAutoH += track.size
+		case gridTrackAuto:
+			var maxH float64
+			for col := range n.numCols {
+				idx := row*n.numCols + col
+				if idx < len(cellSizes) {
+					if h := cellSizes[idx].h; h > maxH {
+						maxH = h
+					}
+				}
+			}
+			heights[row] = maxH
+			fixedAutoH += maxH
+		case gridTrackFr:
+			totalFrWeight += track.weight
+		}
+	}
+	if totalFrWeight > 0 {
+		remaining := math.Max(0, availForRows-fixedAutoH)
+		for row := range n.numRows {
+			if n.rowTrack(row).kind == gridTrackFr {
+				heights[row] = remaining * n.rowTrack(row).weight / totalFrWeight
+			}
+		}
+	}
+	return heights
+}
+
+// finalizeRowHeights is like computeRowHeights but always distributes Fr rows
+// using the actual available height from layout bounds.
+func (n *gridNode) finalizeRowHeights(availForRows float64, cellSizes []nodeSize) []float64 {
+	return n.computeRowHeights(availForRows, cellSizes)
+}
+
 // --- Build bridge: exported Node tree → internal node tree ---
 
 // buildNode converts an exported Node into the internal node used by the
@@ -868,7 +1185,7 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 		}
 		return &weightedNode{weight: w, child: child}, nil
 	case *DividerNode:
-		return &dividerNode{isHorizontal: parentDir == dirVertical}, nil
+		return &dividerNode{isHorizontal: parentDir == dirVertical, color: v.Color, size: v.Size}, nil
 	case *TextNode:
 		var style Style
 		if cfg != nil {
@@ -897,6 +1214,27 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 		return &imageNode{img: img, scale: v.Scale, clip: v.Clip}, nil
 	case *BarcodeNode:
 		return &barcodeNode{content: v.Content, btype: v.Type, ecLevel: v.ECLevel}, nil
+	case *GridNode:
+		flat := make([]Node, 0, len(v.Children))
+		for _, child := range v.Children {
+			if row, ok := child.(*GridRowNode); ok {
+				flat = append(flat, row.Children...)
+			} else {
+				flat = append(flat, child)
+			}
+		}
+		children, err := buildNodes(flat, cfg, dirVertical)
+		if err != nil {
+			return nil, err
+		}
+		return &gridNode{
+			columns:  v.Columns,
+			rows:     v.Rows,
+			rowGap:   v.RowGap,
+			colGap:   v.ColGap,
+			padding:  v.Padding,
+			children: children,
+		}, nil
 	default:
 		panic("demy: unknown node type")
 	}

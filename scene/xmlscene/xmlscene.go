@@ -246,6 +246,8 @@ func marshalNode(enc *xml.Encoder, n demy.Node) error {
 		return marshalContainer(enc, start, children)
 	case *demy.DividerNode:
 		start := xml.StartElement{Name: xml.Name{Local: "divider"}}
+		appendFloat(&start, "size", v.Size)
+		appendStr(&start, "color", colorStr(v.Color))
 		if err := enc.EncodeToken(start); err != nil {
 			return err
 		}
@@ -281,9 +283,71 @@ func marshalNode(enc *xml.Encoder, n demy.Node) error {
 			return err
 		}
 		return enc.EncodeToken(start.End())
+	case *demy.GridNode:
+		start := xml.StartElement{Name: xml.Name{Local: "grid"}}
+		appendFloat(&start, "padding", v.Padding)
+		appendFloat(&start, "row-gap", v.RowGap)
+		appendFloat(&start, "col-gap", v.ColGap)
+		if err := enc.EncodeToken(start); err != nil {
+			return err
+		}
+		if len(v.Columns) > 0 {
+			colsElem := xml.StartElement{Name: xml.Name{Local: "columns"}}
+			if err := enc.EncodeToken(colsElem); err != nil {
+				return err
+			}
+			for _, t := range v.Columns {
+				if err := marshalTrack(enc, t); err != nil {
+					return err
+				}
+			}
+			if err := enc.EncodeToken(colsElem.End()); err != nil {
+				return err
+			}
+		}
+		if len(v.Rows) > 0 {
+			rowsElem := xml.StartElement{Name: xml.Name{Local: "rows"}}
+			if err := enc.EncodeToken(rowsElem); err != nil {
+				return err
+			}
+			for _, t := range v.Rows {
+				if err := marshalTrack(enc, t); err != nil {
+					return err
+				}
+			}
+			if err := enc.EncodeToken(rowsElem.End()); err != nil {
+				return err
+			}
+		}
+		for _, child := range v.Children {
+			if err := marshalNode(enc, child); err != nil {
+				return err
+			}
+		}
+		return enc.EncodeToken(start.End())
+	case *demy.GridRowNode:
+		return marshalContainer(enc, xml.StartElement{Name: xml.Name{Local: "row"}}, v.Children)
 	default:
 		return fmt.Errorf("xmlscene: unknown node type %T", n)
 	}
+}
+
+func marshalTrack(enc *xml.Encoder, t demy.GridTrack) error {
+	var elem xml.StartElement
+	switch {
+	case t.IsFixed():
+		elem = xml.StartElement{Name: xml.Name{Local: "fixed"}}
+		appendFloat(&elem, "size", t.Size())
+	case t.IsFr():
+		elem = xml.StartElement{Name: xml.Name{Local: "fr"}}
+		appendFloat(&elem, "weight", t.Weight())
+	default:
+		elem = xml.StartElement{Name: xml.Name{Local: "auto"}}
+	}
+	if err := enc.EncodeToken(elem); err != nil {
+		return err
+	}
+	return enc.EncodeToken(elem.End())
 }
 
 func marshalContainer(enc *xml.Encoder, start xml.StartElement, children []demy.Node) error {
@@ -430,7 +494,11 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, erro
 		if err := dec.Skip(); err != nil {
 			return nil, fmt.Errorf("xmlscene: %w", err)
 		}
-		return &demy.DividerNode{}, nil
+		clr, err := parseColor(attrs["color"])
+		if err != nil {
+			return nil, fmt.Errorf("xmlscene divider color: %w", err)
+		}
+		return &demy.DividerNode{Color: clr, Size: floatAttr(attrs, "size")}, nil
 	case "text":
 		text, err := unmarshalTextContent(dec)
 		if err != nil {
@@ -459,8 +527,88 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, erro
 			Type:    parseBarcodeType(attrs["type"]),
 			ECLevel: parseECLevel(attrs["ec-level"]),
 		}, nil
+	case "grid":
+		n := &demy.GridNode{
+			Padding: floatAttr(attrs, "padding"),
+			RowGap:  floatAttr(attrs, "row-gap"),
+			ColGap:  floatAttr(attrs, "col-gap"),
+		}
+		var err error
+		n.Columns, n.Rows, n.Children, err = unmarshalGridContents(dec)
+		if err != nil {
+			return nil, err
+		}
+		return n, nil
+	case "row":
+		children, err := unmarshalChildren(dec)
+		if err != nil {
+			return nil, err
+		}
+		return &demy.GridRowNode{Children: children}, nil
 	default:
 		return nil, fmt.Errorf("xmlscene: unknown element %q", start.Name.Local)
+	}
+}
+
+// unmarshalGridContents reads the children of a <grid> element, separating
+// <columns> and <rows> sub-elements from child nodes.
+func unmarshalGridContents(dec *xml.Decoder) (columns, rows []demy.GridTrack, children []demy.Node, err error) {
+	for {
+		tok, tokErr := dec.Token()
+		if tokErr != nil {
+			return nil, nil, nil, fmt.Errorf("xmlscene: %w", tokErr)
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "columns":
+				columns, err = unmarshalTracks(dec)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+			case "rows":
+				rows, err = unmarshalTracks(dec)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+			default:
+				child, childErr := unmarshalElement(dec, t)
+				if childErr != nil {
+					return nil, nil, nil, childErr
+				}
+				children = append(children, child)
+			}
+		case xml.EndElement:
+			return columns, rows, children, nil
+		}
+	}
+}
+
+// unmarshalTracks reads <auto/>, <fixed size="..."/>, or <fr weight="..."/> elements.
+func unmarshalTracks(dec *xml.Decoder) ([]demy.GridTrack, error) {
+	var tracks []demy.GridTrack
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, fmt.Errorf("xmlscene: %w", err)
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			a := attrMap(t.Attr)
+			switch t.Name.Local {
+			case "fixed":
+				tracks = append(tracks, demy.GridFixed(floatAttr(a, "size")))
+			case "fr":
+				tracks = append(tracks, demy.GridFr(floatAttr(a, "weight")))
+			default: // "auto" or unknown
+				tracks = append(tracks, demy.GridAuto())
+			}
+			if err := dec.Skip(); err != nil {
+				return nil, fmt.Errorf("xmlscene: %w", err)
+			}
+		case xml.EndElement:
+			return tracks, nil
+		}
 	}
 }
 

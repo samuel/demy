@@ -168,6 +168,69 @@ def render(data):
 	}
 }
 
+func TestGridBuiltins(t *testing.T) {
+	cfg := demy.TRMNLOriginal
+	cfg.Fonts = map[string]*demy.FontFamily{
+		"sans": demy.MustLoadFontBytes("sans", goregular.TTF),
+	}
+	cfg.DefaultTextStyle = demy.Style{Font: "sans", Size: 12}
+
+	script := []byte(`
+def render(data):
+    return Grid(
+        Columns(GridFixed(120), GridAuto(), GridFr(1), GridFr(2)),
+        Rows(GridAuto(), GridFixed(40)),
+        RowGap(4),
+        ColGap(8),
+        Padding(12),
+        Text("a"), Text("b"), Text("c"), Text("d"),
+        Text("e"), Text("f"), Text("g"), Text("h"),
+    )
+`)
+
+	var env starlarkplugin.Environment
+	p, err := env.LoadBytes("grid.star", script, cfg)
+	if err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	node, err := p.Render(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	c, err := demy.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Render(node, demy.RGBA); err != nil {
+		t.Fatalf("canvas.Render: %v", err)
+	}
+}
+
+func TestGridGapBuiltin(t *testing.T) {
+	// Gap() should set both RowGap and ColGap in Grid.
+	cfg := demy.TRMNLOriginal
+	script := []byte(`
+def render(data):
+    return Grid(Columns(GridFr(1), GridFr(1)), Gap(6), Text("x"), Text("y"))
+`)
+	var env starlarkplugin.Environment
+	p, err := env.LoadBytes("gap.star", script, cfg)
+	if err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	node, err := p.Render(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	g, ok := node.(*demy.GridNode)
+	if !ok {
+		t.Fatalf("expected *GridNode, got %T", node)
+	}
+	if g.RowGap != 6 || g.ColGap != 6 {
+		t.Errorf("want RowGap=6 ColGap=6, got %v %v", g.RowGap, g.ColGap)
+	}
+}
+
 func TestStylesDictBadValue(t *testing.T) {
 	cfg := demy.TRMNLOriginal
 	script := []byte(`
@@ -308,5 +371,50 @@ def render(data):
 	}
 	if receivedVal != "from-context" {
 		t.Fatalf("context value not propagated: got %q", receivedVal)
+	}
+}
+
+func TestGridRowBuiltin(t *testing.T) {
+	cfg := demy.TRMNLOriginal
+	cfg.Fonts = map[string]*demy.FontFamily{
+		"sans": demy.MustLoadFontBytes("sans", goregular.TTF),
+	}
+	cfg.DefaultTextStyle = demy.Style{Font: "sans", Size: 12}
+
+	script := []byte(`
+def render(data):
+    return Grid(
+        Columns(GridAuto(), GridFr(1)),
+        RowGap(4),
+        ColGap(8),
+        GridRow(Text("Name"), Text("Value")),
+        GridRow(Text("Temp"), Text("72 F")),
+    )
+`)
+	var env starlarkplugin.Environment
+	p, err := env.LoadBytes("gridrow.star", script, cfg)
+	if err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	node, err := p.Render(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	g, ok := node.(*demy.GridNode)
+	if !ok {
+		t.Fatalf("expected *GridNode, got %T", node)
+	}
+	if len(g.Children) != 2 {
+		t.Fatalf("want 2 GridRowNode children, got %d", len(g.Children))
+	}
+	if _, ok := g.Children[0].(*demy.GridRowNode); !ok {
+		t.Errorf("expected *GridRowNode, got %T", g.Children[0])
+	}
+	c, err := demy.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Render(node, demy.RGBA); err != nil {
+		t.Fatalf("canvas.Render: %v", err)
 	}
 }

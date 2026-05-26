@@ -35,21 +35,16 @@ func TestHomeAssistant(t *testing.T) {
 	}
 	t.Logf("Connected to Home Assistant %s", cfg.Version)
 
-	states, err := client.GetStateForEntity(ctx, "weather.pirateweather")
-	// states, err := client.GetStateForEntity(ctx, "weather.home")
+	cals, err := client.GetCalendars(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := json.MarshalIndent(states, "", "  ")
+	b, _ := json.MarshalIndent(cals, "", "  ")
+	t.Logf("Calendars: %s", b)
+	events, err := client.GetCalendarEvents(ctx, "calendar.family", time.Now(), time.Now().AddDate(0, 0, 14))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log(string(b))
-
-	res, err := client.GetWeatherForecasts(ctx, "weather.pirateweather", "daily")
-	b, err = json.MarshalIndent(res, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Log(string(b))
+	b, _ = json.MarshalIndent(events, "", "  ")
+	t.Logf("Events: %s", b)
 }

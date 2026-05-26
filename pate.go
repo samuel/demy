@@ -411,8 +411,13 @@ type WeightedNode struct {
 func (*WeightedNode) demyNode()   {}
 func (*WeightedNode) demyOption() {}
 
-// DividerNode draws a 1px rule. Orientation is inferred from the enclosing stack.
-type DividerNode struct{}
+// DividerNode draws a rule. Orientation is inferred from the enclosing stack.
+// Size is the line thickness in pixels (0 defaults to 1). Color overrides the
+// default muted-role color.
+type DividerNode struct {
+	Color color.Color
+	Size  float64
+}
 
 func (*DividerNode) demyNode()   {}
 func (*DividerNode) demyOption() {}
@@ -472,6 +477,106 @@ type BarcodeNode struct {
 
 func (*BarcodeNode) demyNode()   {}
 func (*BarcodeNode) demyOption() {}
+
+// gridTrackKind distinguishes the three sizing modes for a grid track.
+type gridTrackKind uint8
+
+const (
+	gridTrackAuto  gridTrackKind = iota // size to content (max child size in that track)
+	gridTrackFixed                      // exact pixel size
+	gridTrackFr                         // fractional share of remaining space
+)
+
+// GridTrack defines the sizing of a single column or row in a GridNode.
+// Construct with GridAuto(), GridFixed(), or GridFr() — the fields are unexported.
+type GridTrack struct {
+	kind   gridTrackKind
+	size   float64 // gridTrackFixed: exact pixels
+	weight float64 // gridTrackFr: fractional weight
+}
+
+// IsAuto reports whether the track sizes to content.
+func (t GridTrack) IsAuto() bool { return t.kind == gridTrackAuto }
+
+// IsFixed reports whether the track has an exact pixel size.
+func (t GridTrack) IsFixed() bool { return t.kind == gridTrackFixed }
+
+// IsFr reports whether the track is a fractional-unit track.
+func (t GridTrack) IsFr() bool { return t.kind == gridTrackFr }
+
+// Size returns the pixel size for a GridFixed track; 0 for other kinds.
+func (t GridTrack) Size() float64 { return t.size }
+
+// Weight returns the fractional weight for a GridFr track; 0 for other kinds.
+func (t GridTrack) Weight() float64 { return t.weight }
+
+// GridAuto returns a track that sizes to the widest/tallest child in it.
+func GridAuto() GridTrack { return GridTrack{kind: gridTrackAuto} }
+
+// GridFixed returns a track with an exact pixel size.
+func GridFixed(px float64) GridTrack { return GridTrack{kind: gridTrackFixed, size: px} }
+
+// GridFr returns a track that receives a proportional share of the remaining
+// space after fixed and auto tracks are sized. A weight of 1 is the default.
+func GridFr(weight float64) GridTrack { return GridTrack{kind: gridTrackFr, weight: weight} }
+
+// GridNode lays children out in a 2D grid. Columns are required; rows default to
+// GridAuto() when not specified. Children fill cells row-by-row, left-to-right.
+type GridNode struct {
+	Columns  []GridTrack // required — length defines number of columns
+	Rows     []GridTrack // optional — missing rows are treated as GridAuto()
+	RowGap   float64
+	ColGap   float64
+	Padding  float64
+	Children []Node
+}
+
+func (*GridNode) demyNode()   {}
+func (*GridNode) demyOption() {}
+
+// GridRowNode groups the cells of one row in a GridNode.
+// It is a purely structural container: Grid flattens its children into the
+// cell list during the build pass. Bare cells and GridRow children may be
+// mixed freely in the same Grid.
+type GridRowNode struct {
+	Children []Node
+}
+
+func (*GridRowNode) demyNode()   {}
+func (*GridRowNode) demyOption() {}
+
+// Grid lays children in a 2D grid. Options: Columns (required), Rows, Gap,
+// RowGap, ColGap, Padding, child Nodes, Children.
+// Gap() sets both RowGap and ColGap; RowGap/ColGap override the individual axis.
+func Grid(opts ...Option) *GridNode {
+	n := &GridNode{}
+	for _, opt := range opts {
+		switch v := opt.(type) {
+		case columnsOpt:
+			n.Columns = []GridTrack(v)
+		case rowsOpt:
+			n.Rows = []GridTrack(v)
+		case gapOpt:
+			n.RowGap = float64(v)
+			n.ColGap = float64(v)
+		case rowGapOpt:
+			n.RowGap = float64(v)
+		case colGapOpt:
+			n.ColGap = float64(v)
+		case paddingOpt:
+			n.Padding = float64(v)
+		}
+	}
+	n.Children = appendChildren(n.Children, opts)
+	return n
+}
+
+// GridRow groups cell nodes for one row of a Grid. Children fill that row's
+// cells left-to-right. GridRow nodes are flattened by Grid at build time;
+// they have no layout effect when used outside a Grid.
+func GridRow(children ...Node) *GridRowNode {
+	return &GridRowNode{Children: children}
+}
 
 // Barcode renders content as a barcode. Options: BarcodeType, ECLevel.
 func Barcode(content string, opts ...Option) *BarcodeNode {
@@ -539,6 +644,38 @@ func (clipOpt) demyOption() {}
 
 // Clip enables clipping when passed as a Box or Image option.
 var Clip = clipOpt{} //nolint:gochecknoglobals
+
+// columnsOpt sets column track definitions on a GridNode.
+type columnsOpt []GridTrack
+
+func (columnsOpt) demyOption() {}
+
+// rowsOpt sets explicit row track definitions on a GridNode.
+type rowsOpt []GridTrack
+
+func (rowsOpt) demyOption() {}
+
+// rowGapOpt sets the gap between grid rows (pixels).
+type rowGapOpt float64
+
+func (rowGapOpt) demyOption() {}
+
+// colGapOpt sets the gap between grid columns (pixels).
+type colGapOpt float64
+
+func (colGapOpt) demyOption() {}
+
+// Columns returns a grid option that defines column track sizes.
+func Columns(tracks ...GridTrack) columnsOpt { return columnsOpt(tracks) }
+
+// Rows returns a grid option that defines explicit row track sizes.
+func Rows(tracks ...GridTrack) rowsOpt { return rowsOpt(tracks) }
+
+// RowGap returns an option that sets the gap between rows in a Grid (pixels).
+func RowGap(px float64) rowGapOpt { return rowGapOpt(px) }
+
+// ColGap returns an option that sets the gap between columns in a Grid (pixels).
+func ColGap(px float64) colGapOpt { return colGapOpt(px) }
 
 // childrenOpt wraps a slice of Nodes as a single Option for variadic expansion.
 type childrenOpt []Node
@@ -657,8 +794,9 @@ func Weighted(weight float64, child Node) *WeightedNode {
 	return &WeightedNode{Weight: weight, Child: child}
 }
 
-// Divider draws a 1px rule. Orientation is inferred from the enclosing stack
-// at render time: horizontal in a VStack, vertical in an HStack.
+// Divider draws a rule. Orientation is inferred from the enclosing stack at
+// render time: horizontal in a VStack, vertical in an HStack. Size defaults to
+// 1px; Color defaults to the muted role color.
 func Divider() *DividerNode { return &DividerNode{} }
 
 // Text renders s with the given style options. When no TextOption is provided,

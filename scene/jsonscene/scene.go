@@ -22,28 +22,41 @@ import (
 	"github.com/samuel/demy"
 )
 
+// GridTrackDef serializes a single GridTrack.
+type GridTrackDef struct {
+	Kind   string  `json:"kind"`             // "auto", "fixed", or "fr"
+	Size   float64 `json:"size,omitempty"`   // gridTrackFixed only
+	Weight float64 `json:"weight,omitempty"` // gridTrackFr only
+}
+
 type Node struct {
-	Type         string  `json:"type"`
-	Gap          float64 `json:"gap,omitempty"`
-	Padding      float64 `json:"padding,omitempty"`
-	BorderWidth  float64 `json:"border_width,omitempty"`
-	BorderColor  string  `json:"border_color,omitempty"`
-	Background   string  `json:"background,omitempty"`
-	CornerRadius float64 `json:"corner_radius,omitempty"`
-	Clip         bool    `json:"clip,omitempty"`
-	Width        float64 `json:"width,omitempty"`
-	Height       float64 `json:"height,omitempty"`
-	Weight       float64 `json:"weight,omitempty"`
-	Align        string  `json:"align,omitempty"`
-	Text         string  `json:"text,omitempty"`
-	Class        string  `json:"class,omitempty"`
-	Style        *Style  `json:"style,omitempty"`
-	ImageKey     string  `json:"image_key,omitempty"`
-	Scale        string  `json:"scale,omitempty"`
-	Content      string  `json:"content,omitempty"`
-	BarcodeType  string  `json:"barcode_type,omitempty"`
-	ECLevel      string  `json:"ec_level,omitempty"`
-	Children     []Node  `json:"children,omitempty"`
+	Type         string         `json:"type"`
+	Gap          float64        `json:"gap,omitempty"`
+	Padding      float64        `json:"padding,omitempty"`
+	BorderWidth  float64        `json:"border_width,omitempty"`
+	BorderColor  string         `json:"border_color,omitempty"`
+	Background   string         `json:"background,omitempty"`
+	CornerRadius float64        `json:"corner_radius,omitempty"`
+	Clip         bool           `json:"clip,omitempty"`
+	Width        float64        `json:"width,omitempty"`
+	Height       float64        `json:"height,omitempty"`
+	Weight       float64        `json:"weight,omitempty"`
+	Color        string         `json:"color,omitempty"`
+	Size         float64        `json:"size,omitempty"`
+	Align        string         `json:"align,omitempty"`
+	Columns      []GridTrackDef `json:"columns,omitempty"`
+	Rows         []GridTrackDef `json:"rows,omitempty"`
+	RowGap       float64        `json:"row_gap,omitempty"`
+	ColGap       float64        `json:"col_gap,omitempty"`
+	Text         string         `json:"text,omitempty"`
+	Class        string         `json:"class,omitempty"`
+	Style        *Style         `json:"style,omitempty"`
+	ImageKey     string         `json:"image_key,omitempty"`
+	Scale        string         `json:"scale,omitempty"`
+	Content      string         `json:"content,omitempty"`
+	BarcodeType  string         `json:"barcode_type,omitempty"`
+	ECLevel      string         `json:"ec_level,omitempty"`
+	Children     []Node         `json:"children,omitempty"`
 }
 
 type Style struct {
@@ -231,7 +244,7 @@ func nodeToScene(n demy.Node) (Node, error) {
 		}
 		return Node{Type: "weighted", Weight: v.Weight, Children: children}, nil
 	case *demy.DividerNode:
-		return Node{Type: "divider"}, nil
+		return Node{Type: "divider", Color: colorStr(v.Color), Size: v.Size}, nil
 	case *demy.TextNode:
 		sn := Node{
 			Type:  "text",
@@ -254,6 +267,33 @@ func nodeToScene(n demy.Node) (Node, error) {
 			BarcodeType: barcodeTypeStr(v.Type),
 			ECLevel:     ecLevelStr(v.ECLevel),
 		}, nil
+	case *demy.GridNode:
+		sn := Node{
+			Type:    "grid",
+			Padding: v.Padding,
+			RowGap:  v.RowGap,
+			ColGap:  v.ColGap,
+			Columns: trackDefsFromTracks(v.Columns),
+			Rows:    trackDefsFromTracks(v.Rows),
+		}
+		for _, child := range v.Children {
+			cs, err := nodeToScene(child)
+			if err != nil {
+				return Node{}, err
+			}
+			sn.Children = append(sn.Children, cs)
+		}
+		return sn, nil
+	case *demy.GridRowNode:
+		sn := Node{Type: "row"}
+		for _, child := range v.Children {
+			cs, err := nodeToScene(child)
+			if err != nil {
+				return Node{}, err
+			}
+			sn.Children = append(sn.Children, cs)
+		}
+		return sn, nil
 	default:
 		return Node{}, fmt.Errorf("scene: unknown node type %T", n)
 	}
@@ -365,7 +405,11 @@ func sceneToNode(sn Node) (demy.Node, error) {
 		}
 		return &demy.WeightedNode{Weight: sn.Weight, Child: child}, nil
 	case "divider":
-		return &demy.DividerNode{}, nil
+		clr, err := parseColor(sn.Color)
+		if err != nil {
+			return nil, fmt.Errorf("divider color: %w", err)
+		}
+		return &demy.DividerNode{Color: clr, Size: sn.Size}, nil
 	case "text":
 		style, err := parseStyle(sn.Style)
 		if err != nil {
@@ -384,6 +428,32 @@ func sceneToNode(sn Node) (demy.Node, error) {
 			Type:    parseBarcodeType(sn.BarcodeType),
 			ECLevel: parseECLevel(sn.ECLevel),
 		}, nil
+	case "grid":
+		n := &demy.GridNode{
+			Padding: sn.Padding,
+			RowGap:  sn.RowGap,
+			ColGap:  sn.ColGap,
+			Columns: tracksFromDefs(sn.Columns),
+			Rows:    tracksFromDefs(sn.Rows),
+		}
+		for _, child := range sn.Children {
+			c, err := sceneToNode(child)
+			if err != nil {
+				return nil, err
+			}
+			n.Children = append(n.Children, c)
+		}
+		return n, nil
+	case "row":
+		n := &demy.GridRowNode{}
+		for _, child := range sn.Children {
+			c, err := sceneToNode(child)
+			if err != nil {
+				return nil, err
+			}
+			n.Children = append(n.Children, c)
+		}
+		return n, nil
 	default:
 		return nil, fmt.Errorf("scene: unknown node type %q", sn.Type)
 	}
@@ -407,6 +477,44 @@ func parseStyle(ss *Style) (demy.Style, error) {
 		MaxLines:   ss.MaxLines,
 		Overflow:   parseOverflow(ss.Overflow),
 	}, nil
+}
+
+// --- grid track helpers ---
+
+func trackDefsFromTracks(tracks []demy.GridTrack) []GridTrackDef {
+	if len(tracks) == 0 {
+		return nil
+	}
+	defs := make([]GridTrackDef, len(tracks))
+	for i, t := range tracks {
+		switch {
+		case t.IsFixed():
+			defs[i] = GridTrackDef{Kind: "fixed", Size: t.Size()}
+		case t.IsFr():
+			defs[i] = GridTrackDef{Kind: "fr", Weight: t.Weight()}
+		default:
+			defs[i] = GridTrackDef{Kind: "auto"}
+		}
+	}
+	return defs
+}
+
+func tracksFromDefs(defs []GridTrackDef) []demy.GridTrack {
+	if len(defs) == 0 {
+		return nil
+	}
+	tracks := make([]demy.GridTrack, len(defs))
+	for i, d := range defs {
+		switch d.Kind {
+		case "fixed":
+			tracks[i] = demy.GridFixed(d.Size)
+		case "fr":
+			tracks[i] = demy.GridFr(d.Weight)
+		default: // "auto" or unknown
+			tracks[i] = demy.GridAuto()
+		}
+	}
+	return tracks
 }
 
 // --- color helpers ---

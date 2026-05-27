@@ -79,7 +79,7 @@ func renderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	node, sceneStyles, err := xmlscene.UnmarshalScene(body)
+	node, sceneStyles, err := xmlscene.UnmarshalScene(body, baseCfg)
 	if err != nil {
 		writeJSONError(w, fmt.Errorf("parsing scene: %w", err), http.StatusBadRequest)
 		return

@@ -18,12 +18,15 @@ type imageDitherRegion struct {
 // Canvas is the demy rendering context. Build a Node tree using the constructor
 // functions (VStack, HStack, Text, …), then call Render or EncodePNG.
 //
-// All dimensions are in pixels. Font sizes are in points.
+// Layout dimensions are in logical pixels; font sizes are in points.
+// The scale factor (Config.Scale) maps logical pixels to physical pixels.
 // The origin is top-left (0,0); Y increases downward.
 type Canvas struct {
-	cfg   Config
-	dpmm  float64
-	Roles Roles
+	cfg          Config
+	physicalDPMM float64 // raw display pixel density; used only by rasterizer
+	dpmm         float64 // logical DPMM (physical / scale); used for all layout
+	scale        float64
+	Roles        Roles
 }
 
 // New creates a Canvas from the given Config.
@@ -35,12 +38,24 @@ func New(cfg Config) (*Canvas, error) {
 	if cfg.PixelWidth == 0 || cfg.PixelHeight == 0 {
 		return nil, errors.New("demy: Config must have non-zero pixel dimensions")
 	}
+	scale := cfg.EffectiveScale()
 	return &Canvas{
-		cfg:   cfg,
-		dpmm:  cfg.DPMM(),
-		Roles: cfg.Roles,
+		cfg:          cfg,
+		physicalDPMM: cfg.PhysicalDPMM(),
+		dpmm:         cfg.DPMM(),
+		scale:        scale,
+		Roles:        cfg.Roles,
 	}, nil
 }
+
+// Scale returns the display scale factor (logical pixels to physical pixels).
+func (c *Canvas) Scale() float64 { return c.scale }
+
+// LogicalWidth returns the canvas width in logical pixels (physical pixels / Scale).
+func (c *Canvas) LogicalWidth() float64 { return float64(c.cfg.PixelWidth) / c.scale }
+
+// LogicalHeight returns the canvas height in logical pixels (physical pixels / Scale).
+func (c *Canvas) LogicalHeight() float64 { return float64(c.cfg.PixelHeight) / c.scale }
 
 // MustNew creates a Canvas and panics on error.
 func MustNew(cfg Config) *Canvas {
@@ -58,23 +73,23 @@ func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, error) {
 	ctx := cv.NewContext(cvs)
 	ctx.SetCoordSystem(cv.CartesianIV)
 
-	wPx := float64(c.cfg.PixelWidth)
-	hPx := float64(c.cfg.PixelHeight)
-
 	internal, err := buildNode(root, &c.cfg, dirVertical)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	wLogical := float64(c.cfg.PixelWidth) / c.scale
+	hLogical := float64(c.cfg.PixelHeight) / c.scale
+
 	mctx := &measureCtx{
 		fonts:  c.cfg.Fonts,
 		dpmm:   c.dpmm,
-		availW: wPx,
-		availH: hPx,
+		availW: wLogical,
+		availH: hLogical,
 	}
 	internal.measure(mctx)
 
-	bounds := nodeRect{x: 0, y: 0, w: wPx, h: hPx}
+	bounds := nodeRect{x: 0, y: 0, w: wLogical, h: hLogical}
 	internal.layout(bounds)
 
 	bg := c.cfg.Roles.Background
@@ -88,6 +103,7 @@ func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, error) {
 	dctx := &drawCtx{
 		ctx:   ctx,
 		dpmm:  c.dpmm,
+		scale: c.scale,
 		roles: c.Roles,
 		fonts: c.cfg.Fonts,
 	}
@@ -98,7 +114,7 @@ func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, error) {
 // rasterize converts a rendered cv.Canvas into a pixel image.
 func (c *Canvas) rasterize(cvs *cv.Canvas) *image.RGBA {
 	img := image.NewRGBA(image.Rect(0, 0, c.cfg.PixelWidth, c.cfg.PixelHeight))
-	ras := newVectorRenderer(img, c.dpmm)
+	ras := newVectorRenderer(img, c.physicalDPMM)
 	cvs.RenderTo(ras)
 	return img
 }
@@ -108,12 +124,15 @@ func (c *Canvas) rasterize(cvs *cv.Canvas) *image.RGBA {
 // Dither field will have their pixel region re-dithered after global quantization,
 // allowing selective dithering of images while keeping text crisp.
 func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image, error) {
+	if mode == Unset {
+		mode = c.cfg.ColorMode
+	}
 	cvs, regions, err := c.draw(root)
 	if err != nil {
 		return nil, err
 	}
 	rgba := c.rasterize(cvs)
-	if mode == RGBA {
+	if mode == RGBA || mode == Unset {
 		return rgba, nil
 	}
 

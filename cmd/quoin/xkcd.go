@@ -33,9 +33,13 @@ func (p *XKCDPlugin) Render(ctx context.Context, cfg demy.Config) ([]byte, error
 		return nil, err
 	}
 
-	img, err := fetchImage(ctx, comic.imageURL)
+	retinaURL := strings.Replace(comic.imageURL, ".png", "_2x.png", 1)
+	img, err := fetchImage(ctx, retinaURL)
 	if err != nil {
-		return nil, fmt.Errorf("fetching xkcd image: %w", err)
+		img, err = fetchImage(ctx, comic.imageURL)
+		if err != nil {
+			return nil, fmt.Errorf("fetching xkcd image: %w", err)
+		}
 	}
 
 	font := demy.MustLoadFontBytes("sans", goregular.TTF)
@@ -183,7 +187,7 @@ func renderXKCD(w io.Writer, comic *xkcdComic, cfg demy.Config) error {
 		ComicNum: xmlEsc(comic.comicNum),
 	}
 
-	root, styles, err := xmlscene.ExecuteScene([]byte(xkcdTemplate), tmplData)
+	root, styles, err := xmlscene.ExecuteScene([]byte(xkcdTemplate), tmplData, cfg)
 	if err != nil {
 		return fmt.Errorf("executing xkcd template: %w", err)
 	}
@@ -194,7 +198,7 @@ func renderXKCD(w io.Writer, comic *xkcdComic, cfg demy.Config) error {
 		return fmt.Errorf("creating canvas: %w", err)
 	}
 
-	outImg, err := c.Render(root, demy.TwoBit)
+	outImg, err := c.Render(root, effectiveColorMode(cfg))
 	if err != nil {
 		return fmt.Errorf("rendering canvas: %w", err)
 	}

@@ -16,7 +16,8 @@ func TestRenderWeather(t *testing.T) {
 	if err := font.AddStyle(gobold.TTF, demy.FontBold); err != nil {
 		t.Fatal(err)
 	}
-	cfg := demy.TRMNLOriginal
+	cfg := demy.TRMNLX
+	// cfg := demy.TRMNLOriginal
 	cfg.Fonts = map[string]*demy.FontFamily{"sans": font}
 
 	b := &bytes.Buffer{}

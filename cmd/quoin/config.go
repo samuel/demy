@@ -64,6 +64,7 @@ type CanvasConfig struct {
 	Height           int                    `yaml:"height"`             // pixels; 0 = use preset
 	PhysicalWidthMM  float64                `yaml:"physical_width_mm"`  // 0 = use preset
 	PhysicalHeightMM float64                `yaml:"physical_height_mm"` // 0 = use preset
+	ColorMode        string                 `yaml:"color_mode"`         // "1bit", "2bit", "4bit", "grayscale", "rgba"; empty = use preset
 	Palette          []string               `yaml:"palette"`            // list of "#rrggbb" color strings
 	Roles            *RolesConfig           `yaml:"roles"`
 	DefaultStyle     *StyleConfig           `yaml:"default_style"`
@@ -103,9 +104,10 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 }
 
 var knownPlugins = map[string]bool{
-	"weather":  true,
-	"calendar": true,
-	"xkcd":     true,
+	"weather":   true,
+	"calendar":  true,
+	"xkcd":      true,
+	"grayscale": true,
 }
 
 // loadConfig reads, expands env vars, parses, and validates the YAML config at path.
@@ -180,6 +182,11 @@ func (cfg *Config) validate() error {
 			if dev.Canvas != nil && dev.Canvas.Preset != "" {
 				if _, ok := canvasPresets[dev.Canvas.Preset]; !ok {
 					errs = append(errs, fmt.Sprintf("account %q device %q: unknown canvas preset %q", acc.Name, dev.ID, dev.Canvas.Preset))
+				}
+			}
+			if dev.Canvas != nil && dev.Canvas.ColorMode != "" {
+				if _, err := parseColorMode(dev.Canvas.ColorMode); err != nil {
+					errs = append(errs, fmt.Sprintf("account %q device %q: %v", acc.Name, dev.ID, err))
 				}
 			}
 		}
@@ -285,6 +292,14 @@ func buildDemyConfig(cc *CanvasConfig, headers deviceapi.DeviceHeaders) (demy.Co
 			return demy.Config{}, fmt.Errorf("default_style: %w", err)
 		}
 		cfg.DefaultTextStyle = s
+	}
+
+	if cc.ColorMode != "" {
+		mode, err := parseColorMode(cc.ColorMode)
+		if err != nil {
+			return demy.Config{}, fmt.Errorf("color_mode: %w", err)
+		}
+		cfg.ColorMode = mode
 	}
 
 	if len(cc.Styles) > 0 {
@@ -414,4 +429,33 @@ func parseTextOverflow(s string) (demy.TextOverflow, error) {
 	default:
 		return 0, fmt.Errorf("unknown text overflow %q", s)
 	}
+}
+
+// parseColorMode converts a YAML color_mode string to a demy.ColorMode.
+// Empty string returns (0, nil) meaning "unset; inherit from preset".
+func parseColorMode(s string) (demy.ColorMode, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return 0, nil
+	case "rgba":
+		return demy.RGBA, nil
+	case "grayscale":
+		return demy.Grayscale, nil
+	case "1bit":
+		return demy.OneBit, nil
+	case "2bit":
+		return demy.TwoBit, nil
+	case "4bit":
+		return demy.FourBit, nil
+	default:
+		return 0, fmt.Errorf("unknown color_mode %q: must be rgba, grayscale, 1bit, 2bit, or 4bit", s)
+	}
+}
+
+// effectiveColorMode returns cfg.ColorMode, falling back to TwoBit when unset.
+func effectiveColorMode(cfg demy.Config) demy.ColorMode {
+	if cfg.ColorMode != demy.Unset {
+		return cfg.ColorMode
+	}
+	return demy.RGBA
 }

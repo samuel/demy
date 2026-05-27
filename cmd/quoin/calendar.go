@@ -207,7 +207,7 @@ func renderCalendar(w io.Writer, events []calendarEvent, now time.Time, cfg demy
 		Days:        days,
 	}
 
-	root, styles, err := xmlscene.ExecuteScene([]byte(calendarTemplate), tmplData)
+	root, styles, err := xmlscene.ExecuteScene([]byte(calendarTemplate), tmplData, cfg)
 	if err != nil {
 		return fmt.Errorf("executing calendar template: %w", err)
 	}
@@ -218,7 +218,7 @@ func renderCalendar(w io.Writer, events []calendarEvent, now time.Time, cfg demy
 		return fmt.Errorf("creating canvas: %w", err)
 	}
 
-	outImg, err := c.Render(root, demy.TwoBit)
+	outImg, err := c.Render(root, effectiveColorMode(cfg))
 	if err != nil {
 		return fmt.Errorf("rendering canvas: %w", err)
 	}

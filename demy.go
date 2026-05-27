@@ -6,6 +6,7 @@ package demy
 import (
 	"image"
 	"image/color"
+	"math"
 
 	cv "github.com/tdewolff/canvas"
 )
@@ -105,57 +106,46 @@ type Config struct {
 	PixelHeight      int
 	PhysicalWidthMM  float64
 	PhysicalHeightMM float64
+	// Scale is the display scale factor (logical pixels to physical pixels).
+	// 0 auto-computes from DPMM (1 for ~125 PPI displays, 2 for ~250 PPI).
+	// Set to 1 for pixel-accurate layout.
+	Scale            float64
 	Palette          []color.Color
 	Roles            Roles
+	ColorMode        ColorMode
 	Fonts            map[string]*FontFamily
 	Images           map[string]image.Image // pre-loaded images by key, for plugin contexts
 	DefaultTextStyle Style                  // fallback when Text() receives no style opts
 	Styles           map[string]Style       // named typographic scale (body, caption, h1, …)
 }
 
-// DPMM returns dots per millimetre for this Config.
-func (cfg Config) DPMM() float64 {
+// PhysicalDPMM returns physical dots per millimetre for this Config.
+// This is the raw display pixel density. For layout calculations use DPMM().
+func (cfg Config) PhysicalDPMM() float64 {
 	if cfg.PhysicalWidthMM == 0 {
 		return 0
 	}
 	return float64(cfg.PixelWidth) / cfg.PhysicalWidthMM
 }
 
-// Pt converts n points to pixels based on the display PPI.
+// DPMM returns logical dots per millimetre (PhysicalDPMM / EffectiveScale).
+// Use this to convert physical units (mm, pt) to logical pixels for layout.
+func (cfg Config) DPMM() float64 { return cfg.PhysicalDPMM() / cfg.EffectiveScale() }
+
+// EffectiveScale returns the resolved display scale factor.
+// When Config.Scale is 0, it auto-computes as max(1, round(PhysicalDPMM/5)).
+func (cfg Config) EffectiveScale() float64 {
+	if cfg.Scale != 0 {
+		return cfg.Scale
+	}
+	return math.Max(1, math.Round(cfg.PhysicalDPMM()/5.0))
+}
+
+// Pt converts n points to logical pixels based on the display scale and PPI.
 func (cfg Config) Pt(n float64) float64 { return n * cfg.DPMM() * 25.4 / 72 }
 
-// MM converts n millimetres to pixels based on the display PPI.
+// MM converts n millimetres to logical pixels based on the display scale and PPI.
 func (cfg Config) MM(n float64) float64 { return n * cfg.DPMM() }
-
-// TRMNLOriginal is the preset Config for the TRMNL Original display (800×480 px, ~163×98 mm).
-var TRMNLOriginal = Config{
-	PixelWidth:       800,
-	PixelHeight:      480,
-	PhysicalWidthMM:  163,
-	PhysicalHeightMM: 98,
-	Palette:          []color.Color{Black, DarkGray, LightGray, White},
-	Roles: Roles{
-		Foreground: Black,
-		Background: White,
-		Accent:     DarkGray,
-		Muted:      LightGray,
-	},
-}
-
-// TRMNLX is the preset Config for the TRMNL X display (1872×1407 px, ~209×157 mm).
-var TRMNLX = Config{
-	PixelWidth:       1872,
-	PixelHeight:      1407,
-	PhysicalWidthMM:  209,
-	PhysicalHeightMM: 157,
-	Palette:          []color.Color{Black, DarkGray, LightGray, White},
-	Roles: Roles{
-		Foreground: Black,
-		Background: White,
-		Accent:     DarkGray,
-		Muted:      LightGray,
-	},
-}
 
 // TextAlign controls horizontal text alignment within a text box.
 type TextAlign int
@@ -270,12 +260,13 @@ func (ZAlignment) demyOption() {}
 type ColorMode int
 
 const (
-	RGBA      ColorMode = iota
-	Grayscale           // 8-bit grayscale
-	OneBit              // 1-bit black/white
-	TwoBit              // 2-bit 4-shade (black/dark/light/white)
-	FourBit             // 4-bit 16-shade grayscale (TRMNL X)
-	BWRed               // black+white+red two-layer encoder
+	Unset     ColorMode = iota // used to signify the color mode from the config should be used
+	RGBA                       // 32-bit RGBA
+	Grayscale                  // 8-bit grayscale
+	OneBit                     // 1-bit black/white
+	TwoBit                     // 2-bit 4-shade (black/dark/light/white)
+	FourBit                    // 4-bit 16-shade grayscale (TRMNL X)
+	BWRed                      // black+white+red two-layer encoder
 )
 
 // Dither selects the dithering algorithm used in OneBit and TwoBit modes.
@@ -430,7 +421,7 @@ func (*WeightedNode) demyNode()   {}
 func (*WeightedNode) demyOption() {}
 
 // DividerNode draws a rule. Orientation is inferred from the enclosing stack.
-// Size is the line thickness in pixels (0 defaults to 1). Color overrides the
+// Size is the line thickness in logical pixels (0 defaults to 1). Color overrides the
 // default muted-role color.
 type DividerNode struct {
 	Color color.Color

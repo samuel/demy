@@ -102,6 +102,8 @@ func newPlugin(ha HAConfig, loc *time.Location, sc ScreenConfig) (Plugin, error)
 		return newCalendarPlugin(ha, loc, sc.Config)
 	case "xkcd":
 		return newXKCDPlugin(ha, loc, sc.Config)
+	case "grayscale":
+		return newGrayscalePlugin(ha, loc, sc.Config)
 	default:
 		return nil, fmt.Errorf("unknown plugin %q", sc.Plugin)
 	}

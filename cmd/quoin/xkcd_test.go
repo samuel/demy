@@ -21,21 +21,12 @@ func TestRenderXKCD(t *testing.T) {
 			comicImg.SetGray(x, y, color.Gray{Y: v})
 		}
 	}
-	// f, err := os.Open("flag_design_2x.png")
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-	// defer f.Close()
-	// comicImg, err := png.Decode(f)
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
 
 	font := demy.MustLoadFontBytes("sans", goregular.TTF)
 	if err := font.AddStyle(gobold.TTF, demy.FontBold); err != nil {
 		t.Fatal(err)
 	}
-	cfg := demy.TRMNLOriginal
+	cfg := demy.TRMNLX // Original
 	cfg.Fonts = map[string]*demy.FontFamily{"sans": font}
 	cfg.Images = map[string]image.Image{"comic": comicImg}
 

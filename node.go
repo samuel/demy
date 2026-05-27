@@ -34,7 +34,8 @@ type measureCtx struct {
 // drawCtx carries context for the draw pass.
 type drawCtx struct {
 	ctx           *cv.Context
-	dpmm          float64
+	dpmm          float64 // logical DPMM (physical DPMM / scale)
+	scale         float64
 	roles         Roles
 	fonts         map[string]*FontFamily
 	ditherRegions []imageDitherRegion
@@ -750,10 +751,10 @@ func (n *imageNode) draw(dctx *drawCtx) {
 	dctx.ctx.FitImage(n.img, rect, fit)
 	if n.dither != NoDithering {
 		px := image.Rect(
-			int(math.Round(n.bounds.x)),
-			int(math.Round(n.bounds.y)),
-			int(math.Round(n.bounds.x+bw)),
-			int(math.Round(n.bounds.y+bh)),
+			int(math.Round(n.bounds.x*dctx.scale)),
+			int(math.Round(n.bounds.y*dctx.scale)),
+			int(math.Round((n.bounds.x+bw)*dctx.scale)),
+			int(math.Round((n.bounds.y+bh)*dctx.scale)),
 		)
 		dctx.ditherRegions = append(dctx.ditherRegions, imageDitherRegion{bounds: px, algo: n.dither})
 	}

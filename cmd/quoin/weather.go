@@ -105,9 +105,9 @@ const weatherTemplate = `<scene>
       {{- end}}
     </vstack>
     <spacer weight="1"></spacer>
-    <frame width="240" height="220">
+    <frame width="50mm" height="45mm">
       <box padding="12" border-width="1" border-color="#555555" corner-radius="4">
-        <vstack gap="12">
+        <vstack gap="2.4mm">
           <hstack>
             <text class="detail-label">Humidity</text>
             <spacer weight="1"></spacer>
@@ -226,7 +226,7 @@ func renderWeather(w io.Writer, data *weatherData, location string, loc *time.Lo
 		Daily:     daily,
 	}
 
-	root, styles, err := xmlscene.ExecuteScene([]byte(weatherTemplate), tmplData)
+	root, styles, err := xmlscene.ExecuteScene([]byte(weatherTemplate), tmplData, cfg)
 	if err != nil {
 		return fmt.Errorf("executing weather template: %w", err)
 	}
@@ -237,7 +237,7 @@ func renderWeather(w io.Writer, data *weatherData, location string, loc *time.Lo
 		return fmt.Errorf("creating canvas: %w", err)
 	}
 
-	outImg, err := c.Render(root, demy.TwoBit)
+	outImg, err := c.Render(root, effectiveColorMode(cfg))
 	if err != nil {
 		return fmt.Errorf("rendering canvas: %w", err)
 	}

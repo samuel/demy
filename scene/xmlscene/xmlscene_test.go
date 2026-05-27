@@ -28,7 +28,7 @@ func TestMarshalSceneRoundTrip(t *testing.T) {
 	}
 	t.Logf("XML:\n%s", data)
 
-	gotNode, gotStyles, err := xmlscene.UnmarshalScene(data)
+	gotNode, gotStyles, err := xmlscene.UnmarshalScene(data, demy.Config{})
 	if err != nil {
 		t.Fatalf("UnmarshalScene: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestUnmarshalSceneFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	gotNode, gotStyles, err := xmlscene.UnmarshalScene(data)
+	gotNode, gotStyles, err := xmlscene.UnmarshalScene(data, demy.Config{})
 	if err != nil {
 		t.Fatalf("UnmarshalScene fallback: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestMarshalSceneNoStyles(t *testing.T) {
 		t.Fatalf("MarshalScene: %v", err)
 	}
 	t.Logf("XML:\n%s", data)
-	gotNode, gotStyles, err := xmlscene.UnmarshalScene(data)
+	gotNode, gotStyles, err := xmlscene.UnmarshalScene(data, demy.Config{})
 	if err != nil {
 		t.Fatalf("UnmarshalScene: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestMarshalGridRoundTrip(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 	t.Logf("XML:\n%s", data)
-	got, err := xmlscene.Unmarshal(data)
+	got, err := xmlscene.Unmarshal(data, demy.Config{})
 	if err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestMarshalGridNoRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	got, err := xmlscene.Unmarshal(data)
+	got, err := xmlscene.Unmarshal(data, demy.Config{})
 	if err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestMarshalGridRowRoundTrip(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 	t.Logf("XML:\n%s", data)
-	got, err := xmlscene.Unmarshal(data)
+	got, err := xmlscene.Unmarshal(data, demy.Config{})
 	if err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestExecuteScene(t *testing.T) {
 </scene>`
 
 	data := struct{ Title, Sub string }{"Hello", "World"}
-	gotNode, gotStyles, err := xmlscene.ExecuteScene([]byte(tmpl), data)
+	gotNode, gotStyles, err := xmlscene.ExecuteScene([]byte(tmpl), data, demy.Config{})
 	if err != nil {
 		t.Fatalf("ExecuteScene: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 	t.Logf("XML:\n%s", data)
 
-	got, err := xmlscene.Unmarshal(data)
+	got, err := xmlscene.Unmarshal(data, demy.Config{})
 	if err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestNilRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal(nil): %v", err)
 	}
-	got, err := xmlscene.Unmarshal(data)
+	got, err := xmlscene.Unmarshal(data, demy.Config{})
 	if err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestExecute(t *testing.T) {
 		Items: []string{"one", "two"},
 	}
 
-	got, err := xmlscene.Execute([]byte(tmpl), data)
+	got, err := xmlscene.Execute([]byte(tmpl), data, demy.Config{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -319,5 +319,76 @@ func TestExecute(t *testing.T) {
 		if tn.Text != text {
 			t.Errorf("children[%d].Text: want %q, got %q", i, text, tn.Text)
 		}
+	}
+}
+
+func TestPhysicalUnits(t *testing.T) {
+	// TRMNL Original: 800×480px, 163×98mm → DPMM ≈ 4.908
+	cfg := demy.TRMNLOriginal
+	dpmm := cfg.DPMM()
+
+	const src = `<vstack gap="4mm" padding="2pt">
+<frame width="50mm" height="45mm">
+<text size="12pt">hello</text>
+</frame>
+</vstack>`
+
+	got, err := xmlscene.Unmarshal([]byte(src), cfg)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	vs, ok := got.(*demy.VStackNode)
+	if !ok {
+		t.Fatalf("expected *VStackNode, got %T", got)
+	}
+
+	wantGap := 4 * dpmm
+	if vs.Gap != wantGap {
+		t.Errorf("gap: want %v, got %v", wantGap, vs.Gap)
+	}
+	wantPadding := 2 * dpmm * 25.4 / 72
+	if vs.Padding != wantPadding {
+		t.Errorf("padding: want %v, got %v", wantPadding, vs.Padding)
+	}
+
+	fr, ok := vs.Children[0].(*demy.FrameNode)
+	if !ok {
+		t.Fatalf("expected *FrameNode, got %T", vs.Children[0])
+	}
+	wantW := 50 * dpmm
+	wantH := 45 * dpmm
+	if fr.Width != wantW {
+		t.Errorf("frame width: want %v, got %v", wantW, fr.Width)
+	}
+	if fr.Height != wantH {
+		t.Errorf("frame height: want %v, got %v", wantH, fr.Height)
+	}
+
+	txt, ok := fr.Children[0].(*demy.TextNode)
+	if !ok {
+		t.Fatalf("expected *TextNode, got %T", fr.Children[0])
+	}
+	wantSize := 12 * dpmm * 25.4 / 72
+	if txt.Style.Size != wantSize {
+		t.Errorf("text size: want %v, got %v", wantSize, txt.Style.Size)
+	}
+}
+
+func TestPhysicalUnitsBarePixels(t *testing.T) {
+	// Zero-value Config (no physical dims): bare numbers still work as pixels.
+	const src = `<frame width="100" height="50px"></frame>`
+	got, err := xmlscene.Unmarshal([]byte(src), demy.Config{})
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	fr, ok := got.(*demy.FrameNode)
+	if !ok {
+		t.Fatalf("expected *FrameNode, got %T", got)
+	}
+	if fr.Width != 100 {
+		t.Errorf("width: want 100, got %v", fr.Width)
+	}
+	if fr.Height != 50 {
+		t.Errorf("height: want 50, got %v", fr.Height)
 	}
 }

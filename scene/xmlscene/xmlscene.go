@@ -18,6 +18,18 @@
 // Color encoding matches the scene package: role names ("foreground", "background",
 // "accent", "muted") are stored as-is and resolved at render time via demy.RoleColor;
 // other colors are "#rrggbb" or "#rrggbbaa" hex strings.
+//
+// # Physical unit support
+//
+// Dimension attributes (width, height, padding, gap, size, etc.) accept an optional
+// unit suffix when a demy.Config with physical dimensions is supplied:
+//
+//   - Bare number or "px" suffix → pixels (e.g. "240" or "240px")
+//   - "mm" suffix → millimeters × DPMM (e.g. "50mm")
+//   - "pt" suffix → typographic points × DPMM (e.g. "12pt")
+//
+// Marshal always outputs bare pixel values; physical units are resolved at parse time
+// and are not round-tripped.
 package xmlscene
 
 import (
@@ -55,8 +67,10 @@ func Marshal(n demy.Node) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Unmarshal deserializes XML to a Node tree.
-func Unmarshal(data []byte) (demy.Node, error) {
+// Unmarshal deserializes XML to a Node tree. Pass a demy.Config with physical
+// dimensions set to enable "mm" and "pt" unit suffixes in dimension attributes.
+func Unmarshal(data []byte, cfg demy.Config) (demy.Node, error) {
+	uctx := newUnmarshalCtx(cfg)
 	dec := xml.NewDecoder(bytes.NewReader(data))
 	for {
 		tok, err := dec.Token()
@@ -67,13 +81,14 @@ func Unmarshal(data []byte) (demy.Node, error) {
 			return nil, fmt.Errorf("xmlscene: %w", err)
 		}
 		if start, ok := tok.(xml.StartElement); ok {
-			return unmarshalElement(dec, start)
+			return unmarshalElement(dec, start, uctx)
 		}
 	}
 }
 
 // Execute renders a text/template that produces XML and unmarshals the result.
-func Execute(tmplSrc []byte, data any) (demy.Node, error) {
+// Pass a demy.Config with physical dimensions set to enable "mm" and "pt" unit suffixes.
+func Execute(tmplSrc []byte, data any, cfg demy.Config) (demy.Node, error) {
 	t, err := template.New("scene").Parse(string(tmplSrc))
 	if err != nil {
 		return nil, fmt.Errorf("xmlscene: template parse: %w", err)
@@ -82,7 +97,7 @@ func Execute(tmplSrc []byte, data any) (demy.Node, error) {
 	if err := t.Execute(&buf, data); err != nil {
 		return nil, fmt.Errorf("xmlscene: template execute: %w", err)
 	}
-	return Unmarshal(buf.Bytes())
+	return Unmarshal(buf.Bytes(), cfg)
 }
 
 // MarshalScene serializes a Node tree and named style definitions to an indented
@@ -154,7 +169,9 @@ func MarshalScene(n demy.Node, styles map[string]demy.Style) ([]byte, error) {
 // The document may be a bare node element or a <scene> wrapper containing
 // <styles> and a root element. Merge returned styles into Config.Styles before
 // rendering so that class references resolve correctly.
-func UnmarshalScene(data []byte) (demy.Node, map[string]demy.Style, error) {
+// Pass a demy.Config with physical dimensions set to enable "mm" and "pt" unit suffixes.
+func UnmarshalScene(data []byte, cfg demy.Config) (demy.Node, map[string]demy.Style, error) {
+	uctx := newUnmarshalCtx(cfg)
 	dec := xml.NewDecoder(bytes.NewReader(data))
 	for {
 		tok, err := dec.Token()
@@ -166,9 +183,9 @@ func UnmarshalScene(data []byte) (demy.Node, map[string]demy.Style, error) {
 		}
 		if start, ok := tok.(xml.StartElement); ok {
 			if start.Name.Local == "scene" {
-				return unmarshalScene(dec)
+				return unmarshalScene(dec, uctx)
 			}
-			n, err := unmarshalElement(dec, start)
+			n, err := unmarshalElement(dec, start, uctx)
 			return n, nil, err
 		}
 	}
@@ -176,7 +193,8 @@ func UnmarshalScene(data []byte) (demy.Node, map[string]demy.Style, error) {
 
 // ExecuteScene renders a text/template that produces XML and unmarshals the result,
 // returning the root Node and any style definitions embedded in the document.
-func ExecuteScene(tmplSrc []byte, data any) (demy.Node, map[string]demy.Style, error) {
+// Pass a demy.Config with physical dimensions set to enable "mm" and "pt" unit suffixes.
+func ExecuteScene(tmplSrc []byte, data any, cfg demy.Config) (demy.Node, map[string]demy.Style, error) {
 	t, err := template.New("scene").Parse(string(tmplSrc))
 	if err != nil {
 		return nil, nil, fmt.Errorf("xmlscene: template parse: %w", err)
@@ -185,7 +203,7 @@ func ExecuteScene(tmplSrc []byte, data any) (demy.Node, map[string]demy.Style, e
 	if err := t.Execute(&buf, data); err != nil {
 		return nil, nil, fmt.Errorf("xmlscene: template execute: %w", err)
 	}
-	return UnmarshalScene(buf.Bytes())
+	return UnmarshalScene(buf.Bytes(), cfg)
 }
 
 // --- marshal ---
@@ -405,18 +423,62 @@ func appendStyleAttrs(start *xml.StartElement, s demy.Style) {
 	appendStr(start, "overflow", overflowStr(s.Overflow))
 }
 
+// --- unmarshal context ---
+
+// unmarshalCtx carries per-parse state (DPMM) for resolving physical unit suffixes.
+type unmarshalCtx struct {
+	dpmm float64
+}
+
+// newUnmarshalCtx creates an unmarshalCtx from a Config. Returns zero dpmm when
+// the Config lacks physical dimensions, which disables mm/pt unit resolution.
+func newUnmarshalCtx(cfg demy.Config) unmarshalCtx {
+	if cfg.PhysicalWidthMM == 0 {
+		return unmarshalCtx{}
+	}
+	return unmarshalCtx{dpmm: cfg.DPMM()}
+}
+
+// dim parses a dimension attribute value, resolving any physical unit suffix.
+func (uctx unmarshalCtx) dim(attrs map[string]string, name string) float64 {
+	return parseDim(attrs[name], uctx.dpmm)
+}
+
+// parseDim converts a dimension string to pixels.
+// Supported suffixes: "mm", "pt", "px". A bare number is treated as pixels.
+// Returns 0 when dpmm is 0 and a physical unit suffix is used.
+func parseDim(s string, dpmm float64) float64 {
+	if s == "" {
+		return 0
+	}
+	switch {
+	case strings.HasSuffix(s, "mm"):
+		v, _ := strconv.ParseFloat(s[:len(s)-2], 64)
+		return v * dpmm
+	case strings.HasSuffix(s, "pt"):
+		v, _ := strconv.ParseFloat(s[:len(s)-2], 64)
+		return v * dpmm * 25.4 / 72
+	case strings.HasSuffix(s, "px"):
+		v, _ := strconv.ParseFloat(s[:len(s)-2], 64)
+		return v
+	default:
+		v, _ := strconv.ParseFloat(s, 64)
+		return v
+	}
+}
+
 // --- unmarshal ---
 
-func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, error) {
+func unmarshalElement(dec *xml.Decoder, start xml.StartElement, uctx unmarshalCtx) (demy.Node, error) {
 	attrs := attrMap(start.Attr)
 	switch start.Name.Local {
 	case "vstack":
 		n := &demy.VStackNode{
-			Gap:     floatAttr(attrs, "gap"),
-			Padding: floatAttr(attrs, "padding"),
+			Gap:     uctx.dim(attrs, "gap"),
+			Padding: uctx.dim(attrs, "padding"),
 			Align:   parseAlign(attrs["align"]),
 		}
-		children, err := unmarshalChildren(dec)
+		children, err := unmarshalChildren(dec, uctx)
 		if err != nil {
 			return nil, err
 		}
@@ -424,11 +486,11 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, erro
 		return n, nil
 	case "hstack":
 		n := &demy.HStackNode{
-			Gap:     floatAttr(attrs, "gap"),
-			Padding: floatAttr(attrs, "padding"),
+			Gap:     uctx.dim(attrs, "gap"),
+			Padding: uctx.dim(attrs, "padding"),
 			Align:   parseAlign(attrs["align"]),
 		}
-		children, err := unmarshalChildren(dec)
+		children, err := unmarshalChildren(dec, uctx)
 		if err != nil {
 			return nil, err
 		}
@@ -436,7 +498,7 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, erro
 		return n, nil
 	case "zstack":
 		n := &demy.ZStackNode{Align: parseZAlign(attrs["align"])}
-		children, err := unmarshalChildren(dec)
+		children, err := unmarshalChildren(dec, uctx)
 		if err != nil {
 			return nil, err
 		}
@@ -452,14 +514,14 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, erro
 			return nil, err
 		}
 		n := &demy.BoxNode{
-			Padding:      floatAttr(attrs, "padding"),
-			BorderWidth:  floatAttr(attrs, "border-width"),
+			Padding:      uctx.dim(attrs, "padding"),
+			BorderWidth:  uctx.dim(attrs, "border-width"),
 			BorderColor:  bc,
 			Background:   bg,
-			CornerRadius: floatAttr(attrs, "corner-radius"),
+			CornerRadius: uctx.dim(attrs, "corner-radius"),
 			Clip:         boolAttr(attrs, "clip"),
 		}
-		children, err := unmarshalChildren(dec)
+		children, err := unmarshalChildren(dec, uctx)
 		if err != nil {
 			return nil, err
 		}
@@ -467,10 +529,10 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, erro
 		return n, nil
 	case "frame":
 		n := &demy.FrameNode{
-			Width:  floatAttr(attrs, "width"),
-			Height: floatAttr(attrs, "height"),
+			Width:  uctx.dim(attrs, "width"),
+			Height: uctx.dim(attrs, "height"),
 		}
-		children, err := unmarshalChildren(dec)
+		children, err := unmarshalChildren(dec, uctx)
 		if err != nil {
 			return nil, err
 		}
@@ -482,7 +544,7 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, erro
 		}
 		return &demy.SpacerNode{Weight: floatAttr(attrs, "weight")}, nil
 	case "weighted":
-		children, err := unmarshalChildren(dec)
+		children, err := unmarshalChildren(dec, uctx)
 		if err != nil {
 			return nil, err
 		}
@@ -499,13 +561,13 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, erro
 		if err != nil {
 			return nil, fmt.Errorf("xmlscene divider color: %w", err)
 		}
-		return &demy.DividerNode{Color: clr, Size: floatAttr(attrs, "size")}, nil
+		return &demy.DividerNode{Color: clr, Size: uctx.dim(attrs, "size")}, nil
 	case "text":
 		text, err := unmarshalTextContent(dec)
 		if err != nil {
 			return nil, err
 		}
-		style, err := styleFromAttrs(attrs)
+		style, err := styleFromAttrs(attrs, uctx)
 		if err != nil {
 			return nil, err
 		}
@@ -531,18 +593,18 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, erro
 		}, nil
 	case "grid":
 		n := &demy.GridNode{
-			Padding: floatAttr(attrs, "padding"),
-			RowGap:  floatAttr(attrs, "row-gap"),
-			ColGap:  floatAttr(attrs, "col-gap"),
+			Padding: uctx.dim(attrs, "padding"),
+			RowGap:  uctx.dim(attrs, "row-gap"),
+			ColGap:  uctx.dim(attrs, "col-gap"),
 		}
 		var err error
-		n.Columns, n.Rows, n.Children, err = unmarshalGridContents(dec)
+		n.Columns, n.Rows, n.Children, err = unmarshalGridContents(dec, uctx)
 		if err != nil {
 			return nil, err
 		}
 		return n, nil
 	case "row":
-		children, err := unmarshalChildren(dec)
+		children, err := unmarshalChildren(dec, uctx)
 		if err != nil {
 			return nil, err
 		}
@@ -554,7 +616,7 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, erro
 
 // unmarshalGridContents reads the children of a <grid> element, separating
 // <columns> and <rows> sub-elements from child nodes.
-func unmarshalGridContents(dec *xml.Decoder) (columns, rows []demy.GridTrack, children []demy.Node, err error) {
+func unmarshalGridContents(dec *xml.Decoder, uctx unmarshalCtx) (columns, rows []demy.GridTrack, children []demy.Node, err error) {
 	for {
 		tok, tokErr := dec.Token()
 		if tokErr != nil {
@@ -564,17 +626,17 @@ func unmarshalGridContents(dec *xml.Decoder) (columns, rows []demy.GridTrack, ch
 		case xml.StartElement:
 			switch t.Name.Local {
 			case "columns":
-				columns, err = unmarshalTracks(dec)
+				columns, err = unmarshalTracks(dec, uctx)
 				if err != nil {
 					return nil, nil, nil, err
 				}
 			case "rows":
-				rows, err = unmarshalTracks(dec)
+				rows, err = unmarshalTracks(dec, uctx)
 				if err != nil {
 					return nil, nil, nil, err
 				}
 			default:
-				child, childErr := unmarshalElement(dec, t)
+				child, childErr := unmarshalElement(dec, t, uctx)
 				if childErr != nil {
 					return nil, nil, nil, childErr
 				}
@@ -587,7 +649,7 @@ func unmarshalGridContents(dec *xml.Decoder) (columns, rows []demy.GridTrack, ch
 }
 
 // unmarshalTracks reads <auto/>, <fixed size="..."/>, or <fr weight="..."/> elements.
-func unmarshalTracks(dec *xml.Decoder) ([]demy.GridTrack, error) {
+func unmarshalTracks(dec *xml.Decoder, uctx unmarshalCtx) ([]demy.GridTrack, error) {
 	var tracks []demy.GridTrack
 	for {
 		tok, err := dec.Token()
@@ -599,7 +661,7 @@ func unmarshalTracks(dec *xml.Decoder) ([]demy.GridTrack, error) {
 			a := attrMap(t.Attr)
 			switch t.Name.Local {
 			case "fixed":
-				tracks = append(tracks, demy.GridFixed(floatAttr(a, "size")))
+				tracks = append(tracks, demy.GridFixed(uctx.dim(a, "size")))
 			case "fr":
 				tracks = append(tracks, demy.GridFr(floatAttr(a, "weight")))
 			default: // "auto" or unknown
@@ -614,7 +676,7 @@ func unmarshalTracks(dec *xml.Decoder) ([]demy.GridTrack, error) {
 	}
 }
 
-func unmarshalStyles(dec *xml.Decoder) (map[string]demy.Style, error) {
+func unmarshalStyles(dec *xml.Decoder, uctx unmarshalCtx) (map[string]demy.Style, error) {
 	styles := make(map[string]demy.Style)
 	for {
 		tok, err := dec.Token()
@@ -637,7 +699,7 @@ func unmarshalStyles(dec *xml.Decoder) (map[string]demy.Style, error) {
 				}
 				continue
 			}
-			style, err := styleFromAttrs(attrs)
+			style, err := styleFromAttrs(attrs, uctx)
 			if err != nil {
 				return nil, err
 			}
@@ -651,7 +713,7 @@ func unmarshalStyles(dec *xml.Decoder) (map[string]demy.Style, error) {
 	}
 }
 
-func unmarshalScene(dec *xml.Decoder) (demy.Node, map[string]demy.Style, error) {
+func unmarshalScene(dec *xml.Decoder, uctx unmarshalCtx) (demy.Node, map[string]demy.Style, error) {
 	var (
 		root   demy.Node
 		styles map[string]demy.Style
@@ -664,13 +726,13 @@ func unmarshalScene(dec *xml.Decoder) (demy.Node, map[string]demy.Style, error) 
 		switch t := tok.(type) {
 		case xml.StartElement:
 			if t.Name.Local == "styles" {
-				s, err := unmarshalStyles(dec)
+				s, err := unmarshalStyles(dec, uctx)
 				if err != nil {
 					return nil, nil, err
 				}
 				styles = s
 			} else {
-				n, err := unmarshalElement(dec, t)
+				n, err := unmarshalElement(dec, t, uctx)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -682,7 +744,7 @@ func unmarshalScene(dec *xml.Decoder) (demy.Node, map[string]demy.Style, error) 
 	}
 }
 
-func unmarshalChildren(dec *xml.Decoder) ([]demy.Node, error) {
+func unmarshalChildren(dec *xml.Decoder, uctx unmarshalCtx) ([]demy.Node, error) {
 	var children []demy.Node
 	for {
 		tok, err := dec.Token()
@@ -691,7 +753,7 @@ func unmarshalChildren(dec *xml.Decoder) ([]demy.Node, error) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			child, err := unmarshalElement(dec, t)
+			child, err := unmarshalElement(dec, t, uctx)
 			if err != nil {
 				return nil, err
 			}
@@ -743,7 +805,7 @@ func boolAttr(attrs map[string]string, name string) bool {
 	return attrs[name] == "true"
 }
 
-func styleFromAttrs(attrs map[string]string) (demy.Style, error) {
+func styleFromAttrs(attrs map[string]string, uctx unmarshalCtx) (demy.Style, error) {
 	clr, err := parseColor(attrs["color"])
 	if err != nil {
 		return demy.Style{}, err
@@ -754,11 +816,11 @@ func styleFromAttrs(attrs map[string]string) (demy.Style, error) {
 	}
 	return demy.Style{
 		Font:       attrs["font"],
-		Size:       floatAttr(attrs, "size"),
+		Size:       uctx.dim(attrs, "size"),
 		Weight:     parseWeight(attrs["weight"]),
 		Color:      clr,
 		Align:      parseTextAlign(attrs["align"]),
-		LineHeight: floatAttr(attrs, "line-height"),
+		LineHeight: uctx.dim(attrs, "line-height"),
 		MaxLines:   maxLines,
 		Overflow:   parseOverflow(attrs["overflow"]),
 	}, nil

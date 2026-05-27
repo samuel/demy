@@ -41,7 +41,7 @@ type HAConfig struct {
 // ScreenConfig defines one display screen: a plugin plus its config.
 type ScreenConfig struct {
 	Name    string         `yaml:"name"`
-	Plugin  string         `yaml:"plugin"`  // "weather" or "calendar"
+	Plugin  string         `yaml:"plugin"`  // "weather", "calendar", or "xkcd"
 	Refresh Duration       `yaml:"refresh"` // render cache TTL; default 15m
 	Config  map[string]any `yaml:"config"`  // plugin-specific settings
 }
@@ -104,6 +104,7 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 var knownPlugins = map[string]bool{
 	"weather":  true,
 	"calendar": true,
+	"xkcd":     true,
 }
 
 // loadConfig reads, expands env vars, parses, and validates the YAML config at path.

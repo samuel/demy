@@ -72,13 +72,13 @@ const calendarTemplate = `<scene>
   <style name="more" font="sans" size="6" color="#888888" />
 </styles>
 <vstack padding="16">
-	<box background="muted" border-width="1" border-color="#000000" corner-radius="10" padding="6">
-		<hstack>
-		<text font="sans" size="16" weight="bold">CALENDAR</text>
-		<spacer weight="1"></spacer>
-		<text font="sans" size="12" color="#555555">{{.CurrentDate}}</text>
-		</hstack>
-	</box>
+	<hstack>
+	<text font="sans" size="16" weight="bold">CALENDAR</text>
+	<spacer weight="1"></spacer>
+	<text font="sans" size="12" color="#555555">{{.CurrentDate}}</text>
+	</hstack>
+	<box padding="4" />
+	<divider />
   <box padding="4"></box>
 	<hstack gap="8">
 		{{- range $i, $day := .Days}}

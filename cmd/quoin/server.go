@@ -100,6 +100,8 @@ func newPlugin(ha HAConfig, loc *time.Location, sc ScreenConfig) (Plugin, error)
 		return newWeatherPlugin(ha, loc, sc.Config)
 	case "calendar":
 		return newCalendarPlugin(ha, loc, sc.Config)
+	case "xkcd":
+		return newXKCDPlugin(ha, loc, sc.Config)
 	default:
 		return nil, fmt.Errorf("unknown plugin %q", sc.Plugin)
 	}
@@ -149,13 +151,13 @@ func (srv *Server) onDisplay(ctx context.Context, device deviceapi.DeviceHeaders
 	}
 
 	slog.Debug("rendering image", "device_id", device.ID)
-	pngBytes, err := current.cache.PNG(ctx, demyCfg)
+	pngBytes, renderedAt, err := current.cache.PNG(ctx, demyCfg)
 	if err != nil {
 		return deviceapi.DisplayResponse{}, fmt.Errorf("rendering screen %q: %w", current.name, err)
 	}
 	slog.Debug("done rendering image", "device_id", device.ID)
 
-	filename := current.cache.renderedFilename(current.name)
+	filename := renderedFilename(current.name, renderedAt)
 	host := hostFromCtx(ctx)
 	imageURL := fmt.Sprintf("http://%s/image/%s/%s", host, device.ID, filename)
 	slog.Debug("stored image", "device_id", device.ID, "filename", filename, "image_url", imageURL)

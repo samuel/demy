@@ -750,10 +750,10 @@ func (n *imageNode) draw(dctx *drawCtx) {
 	dctx.ctx.FitImage(n.img, rect, fit)
 	if n.dither != NoDithering {
 		px := image.Rect(
-			int(n.bounds.x),
-			int(n.bounds.y),
-			int(n.bounds.x+bw),
-			int(n.bounds.y+bh),
+			int(math.Round(n.bounds.x)),
+			int(math.Round(n.bounds.y)),
+			int(math.Round(n.bounds.x+bw)),
+			int(math.Round(n.bounds.y+bh)),
 		)
 		dctx.ditherRegions = append(dctx.ditherRegions, imageDitherRegion{bounds: px, algo: n.dither})
 	}

@@ -266,7 +266,7 @@ const (
 type Dither int
 
 const (
-	NoDithering Dither = iota - 1
+	NoDithering Dither = iota
 	FloydSteinberg
 	Atkinson
 )

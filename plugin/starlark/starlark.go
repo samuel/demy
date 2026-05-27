@@ -37,6 +37,7 @@
 //	ZAlignment:   TopLeading, Top, TopTrailing, Leading, Center, Trailing,
 //	              BottomLeading, Bottom, BottomTrailing
 //	ImageScale:   ImageFit, ImageFill, ImageStretch
+//	Dither:       FloydSteinberg, Atkinson (pass as option to ImageKey for per-region dithering)
 //	BarcodeType:  BarcodeTypeQR
 //	ECLevel:      ECLevelLow, ECLevelMedium, ECLevelQuartile, ECLevelHigh
 //	Colors:       Foreground, Accent, Muted (role strings), Black, DarkGray, LightGray,
@@ -316,6 +317,9 @@ func newEnv(cfg demy.Config) sl.StringDict {
 		"ImageFit":     &optValue{demy.ImageFit},
 		"ImageFill":    &optValue{demy.ImageFill},
 		"ImageStretch": &optValue{demy.ImageStretch},
+		// Image dither algorithms (passed as option to ImageKey)
+		"FloydSteinberg": &optValue{demy.FloydSteinberg},
+		"Atkinson":       &optValue{demy.Atkinson},
 		// Barcode type
 		"BarcodeTypeQR": &optValue{demy.BarcodeTypeQR},
 		// QR error correction level

@@ -1,0 +1,37 @@
+accounts:
+  - name: home
+    timezone: America/Los_Angeles
+    home_assistant:
+      url: http://homeassistant.local:8123
+      token: ${HASS_TOKEN}
+    screens:
+      - name: weather
+        plugin: weather
+        refresh: 15m
+        config:
+          entity: weather.home
+          location: San Francisco, CA
+          units: imperial
+      - name: calendar
+        plugin: calendar
+        refresh: 15m
+        config:
+          calendars:
+            - calendar.family
+            - calendar.work
+    devices:
+      - id: "AA:BB:CC:DD:EE:FF"
+        name: living-room
+        refresh_rate: 300
+        canvas:
+          preset: TRMNLOriginal
+        playlist:
+          - weather
+          - calendar
+      - id: "11:22:33:44:55:66"
+        name: bedroom
+        refresh_rate: 600
+        canvas:
+          preset: TRMNLOriginal
+        playlist:
+          - calendar

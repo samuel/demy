@@ -5,6 +5,10 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/samuel/demy"
+	"golang.org/x/image/font/gofont/gobold"
+	"golang.org/x/image/font/gofont/goregular"
 )
 
 func TestRenderCalendar(t *testing.T) {
@@ -29,8 +33,15 @@ func TestRenderCalendar(t *testing.T) {
 		{title: "Weekly Review", start: now.AddDate(0, 0, 6).Add(14 * time.Hour), end: now.AddDate(0, 0, 6).Add(15 * time.Hour)},
 	}
 
+	font := demy.MustLoadFontBytes("sans", goregular.TTF)
+	if err := font.AddStyle(gobold.TTF, demy.FontBold); err != nil {
+		t.Fatal(err)
+	}
+	cfg := demy.TRMNLOriginal
+	cfg.Fonts = map[string]*demy.FontFamily{"sans": font}
+
 	b := &bytes.Buffer{}
-	if err := renderCalendar(b, events, now); err != nil {
+	if err := renderCalendar(b, events, now, cfg); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile("calendar.png", b.Bytes(), 0644); err != nil {

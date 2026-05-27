@@ -8,7 +8,6 @@ import (
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/qr"
 	cv "github.com/tdewolff/canvas"
-	"github.com/tdewolff/canvas/renderers/rasterizer"
 )
 
 type layoutDir int
@@ -34,10 +33,11 @@ type measureCtx struct {
 
 // drawCtx carries context for the draw pass.
 type drawCtx struct {
-	ctx   *cv.Context
-	dpmm  float64
-	roles Roles
-	fonts map[string]*FontFamily
+	ctx           *cv.Context
+	dpmm          float64
+	roles         Roles
+	fonts         map[string]*FontFamily
+	ditherRegions []imageDitherRegion
 }
 
 // node is the interface all layout and widget nodes implement.
@@ -496,9 +496,8 @@ func (n *frameNode) draw(dctx *drawCtx) {
 	}
 
 	subImg := image.NewRGBA(image.Rect(0, 0, wPx, hPx))
-	subRas := rasterizer.FromImage(subImg, cv.DPMM(dpmm), cv.DefaultColorSpace)
+	subRas := newVectorRenderer(subImg, dpmm)
 	subCvs.RenderTo(subRas)
-	subRas.Close()
 
 	dctx.ctx.DrawImage(xMM, yMM, subImg, cv.DPMM(dpmm))
 }
@@ -686,6 +685,7 @@ type imageNode struct {
 	img    image.Image
 	scale  ImageScale
 	clip   bool
+	dither Dither
 	bounds nodeRect
 }
 
@@ -748,6 +748,15 @@ func (n *imageNode) draw(dctx *drawCtx) {
 		fit = cv.ImageContain
 	}
 	dctx.ctx.FitImage(n.img, rect, fit)
+	if n.dither != NoDithering {
+		px := image.Rect(
+			int(n.bounds.x),
+			int(n.bounds.y),
+			int(n.bounds.x+bw),
+			int(n.bounds.y+bh),
+		)
+		dctx.ditherRegions = append(dctx.ditherRegions, imageDitherRegion{bounds: px, algo: n.dither})
+	}
 }
 
 // --- barcodeNode ---
@@ -1211,7 +1220,7 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 				return nil, imageKeyError(v.Key)
 			}
 		}
-		return &imageNode{img: img, scale: v.Scale, clip: v.Clip}, nil
+		return &imageNode{img: img, scale: v.Scale, clip: v.Clip, dither: v.Dither}, nil
 	case *BarcodeNode:
 		return &barcodeNode{content: v.Content, btype: v.Type, ecLevel: v.ECLevel}, nil
 	case *GridNode:

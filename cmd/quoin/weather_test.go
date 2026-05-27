@@ -5,9 +5,20 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/samuel/demy"
+	"golang.org/x/image/font/gofont/gobold"
+	"golang.org/x/image/font/gofont/goregular"
 )
 
 func TestRenderWeather(t *testing.T) {
+	font := demy.MustLoadFontBytes("sans", goregular.TTF)
+	if err := font.AddStyle(gobold.TTF, demy.FontBold); err != nil {
+		t.Fatal(err)
+	}
+	cfg := demy.TRMNLOriginal
+	cfg.Fonts = map[string]*demy.FontFamily{"sans": font}
+
 	b := &bytes.Buffer{}
 	now := time.Unix(1622537600, 0)
 	if err := renderWeather(b, &weatherData{
@@ -31,7 +42,7 @@ func TestRenderWeather(t *testing.T) {
 			{date: now.Add(-time.Hour * 24), high: 22.3, low: 48.2},
 		},
 		fetchedAt: time.Unix(1622537600, 0),
-	}, "London"); err != nil {
+	}, "London", time.Local, cfg); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile("weather.png", b.Bytes(), 0644); err != nil {

@@ -270,6 +270,7 @@ func marshalNode(enc *xml.Encoder, n demy.Node) error {
 		appendStr(&start, "key", v.Key)
 		appendStr(&start, "scale", scaleStr(v.Scale))
 		appendBool(&start, "clip", v.Clip)
+		appendStr(&start, "dither", ditherStr(v.Dither))
 		if err := enc.EncodeToken(start); err != nil {
 			return err
 		}
@@ -514,9 +515,10 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement) (demy.Node, erro
 			return nil, fmt.Errorf("xmlscene: %w", err)
 		}
 		return &demy.ImageNode{
-			Key:   attrs["key"],
-			Scale: parseScale(attrs["scale"]),
-			Clip:  boolAttr(attrs, "clip"),
+			Key:    attrs["key"],
+			Scale:  parseScale(attrs["scale"]),
+			Clip:   boolAttr(attrs, "clip"),
+			Dither: parseDither(attrs["dither"]),
 		}, nil
 	case "barcode":
 		if err := dec.Skip(); err != nil {
@@ -991,7 +993,29 @@ func parseWeight(s string) demy.FontStyle {
 	return w
 }
 
-// --- image scale ---
+// --- image scale / dither helpers ---
+
+func ditherStr(d demy.Dither) string {
+	switch d {
+	case demy.FloydSteinberg:
+		return "floyd-steinberg"
+	case demy.Atkinson:
+		return "atkinson"
+	default:
+		return ""
+	}
+}
+
+func parseDither(s string) demy.Dither {
+	switch s {
+	case "floyd-steinberg":
+		return demy.FloydSteinberg
+	case "atkinson":
+		return demy.Atkinson
+	default:
+		return demy.NoDithering
+	}
+}
 
 func scaleStr(s demy.ImageScale) string {
 	switch s {

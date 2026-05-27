@@ -2,16 +2,65 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"fmt"
 	"image/png"
 	"io"
+	"log/slog"
+	"maps"
+	"time"
 
+	ha "github.com/mkelcik/go-ha-client/v2"
 	"github.com/samuel/demy"
 	"github.com/samuel/demy/scene/xmlscene"
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/goregular"
 )
+
+// WeatherPlugin implements Plugin for the Home Assistant weather screen.
+type WeatherPlugin struct {
+	hassURL    string
+	hassToken  string
+	hassEntity string
+	location   string
+	units      string // "imperial", "metric", or "" (use HA native)
+	loc        *time.Location
+}
+
+func newWeatherPlugin(ha HAConfig, loc *time.Location, cfg map[string]any) (*WeatherPlugin, error) {
+	entity, _ := cfg["entity"].(string)
+	if entity == "" {
+		entity = "weather.home"
+	}
+	location, _ := cfg["location"].(string)
+	units, _ := cfg["units"].(string)
+	return &WeatherPlugin{
+		hassURL:    ha.URL,
+		hassToken:  ha.Token,
+		hassEntity: entity,
+		location:   location,
+		units:      units,
+		loc:        loc,
+	}, nil
+}
+
+func (p *WeatherPlugin) Render(ctx context.Context, cfg demy.Config) ([]byte, error) {
+	data, err := fetchWeatherFromHA(ctx, p.hassURL, p.hassToken, p.hassEntity, p.units)
+	if err != nil {
+		return nil, err
+	}
+	font := demy.MustLoadFontBytes("sans", goregular.TTF)
+	if err := font.AddStyle(gobold.TTF, demy.FontBold); err != nil {
+		return nil, fmt.Errorf("loading bold font: %w", err)
+	}
+	cfg.Fonts = map[string]*demy.FontFamily{"sans": font}
+	var buf bytes.Buffer
+	if err := renderWeather(&buf, data, p.location, p.loc, cfg); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
 
 // xmlEsc escapes s for safe embedding in XML text content.
 func xmlEsc(s string) string {
@@ -122,12 +171,29 @@ type dailyTemplateData struct {
 	Low  string
 }
 
-func renderWeather(w io.Writer, data *weatherData, location string) error {
-	font := demy.MustLoadFontBytes("sans", goregular.TTF)
-	if err := font.AddStyle(gobold.TTF, demy.FontBold); err != nil {
-		return fmt.Errorf("loading bold font: %w", err)
-	}
+type dayForecast struct {
+	date time.Time
+	high float64
+	low  float64
+}
 
+type weatherData struct {
+	condition    string
+	tempC        float64
+	apparentTemp float64
+	humidity     int
+	windSpeed    float64
+	windDir      int
+	uvIndex      float64
+	precip       float64
+	tempUnit     string // "°F" or "°C"
+	windUnit     string // "mph" or "km/h"
+	precipUnit   string // "in" or "mm"
+	daily        []dayForecast
+	fetchedAt    time.Time
+}
+
+func renderWeather(w io.Writer, data *weatherData, location string, loc *time.Location, cfg demy.Config) error {
 	var hl string
 	if len(data.daily) > 0 {
 		tUnit := xmlEsc(data.tempUnit)
@@ -156,7 +222,7 @@ func renderWeather(w io.Writer, data *weatherData, location string) error {
 		Wind:      fmt.Sprintf("%.0f %s %s", data.windSpeed, xmlEsc(data.windUnit), windDirStr(data.windDir)),
 		UVIndex:   fmt.Sprintf("%.0f", data.uvIndex),
 		Precip:    fmt.Sprintf("%.2f %s", data.precip, xmlEsc(data.precipUnit)),
-		UpdatedAt: data.fetchedAt.Local().Format("15:04"),
+		UpdatedAt: data.fetchedAt.In(loc).Format("15:04"),
 		Daily:     daily,
 	}
 
@@ -165,22 +231,206 @@ func renderWeather(w io.Writer, data *weatherData, location string) error {
 		return fmt.Errorf("executing weather template: %w", err)
 	}
 
-	cfg := demy.TRMNLOriginal
-	cfg.Fonts = map[string]*demy.FontFamily{"sans": font}
-	cfg.Styles = styles
+	cfg.Styles = mergeStyles(cfg.Styles, styles)
 	c, err := demy.New(cfg)
 	if err != nil {
 		return fmt.Errorf("creating canvas: %w", err)
 	}
-
-	// b, err := xmlscene.Marshal(root)
-	// if err == nil {
-	// 	_ = os.WriteFile("scene.xml", b, 0644)
-	// }
 
 	outImg, err := c.Render(root, demy.TwoBit)
 	if err != nil {
 		return fmt.Errorf("rendering canvas: %w", err)
 	}
 	return png.Encode(w, outImg)
+}
+
+// mergeStyles merges template-defined styles into the base style map.
+// Template styles take precedence.
+func mergeStyles(base, tmpl map[string]demy.Style) map[string]demy.Style {
+	if len(tmpl) == 0 {
+		return base
+	}
+	merged := make(map[string]demy.Style, len(base)+len(tmpl))
+	maps.Copy(merged, base)
+	maps.Copy(merged, tmpl)
+	return merged
+}
+
+func fetchWeatherFromHA(ctx context.Context, hassURL, hassToken, entity, units string) (*weatherData, error) {
+	client, err := ha.NewClient(hassURL, ha.WithToken(hassToken), ha.WithTimeout(30*time.Second))
+	if err != nil {
+		return nil, fmt.Errorf("creating HA client: %w", err)
+	}
+
+	state, err := client.GetStateForEntity(ctx, entity)
+	if err != nil {
+		return nil, fmt.Errorf("getting HA entity state: %w", err)
+	}
+
+	attrs := state.Attributes
+
+	tempUnit := mapString(attrs, "temperature_unit")
+	if tempUnit == "" {
+		tempUnit = "°C"
+	}
+	windUnit := mapString(attrs, "wind_speed_unit")
+	if windUnit == "" {
+		windUnit = "km/h"
+	}
+	precipUnit := mapString(attrs, "precipitation_unit")
+	if precipUnit == "" {
+		precipUnit = "mm"
+	}
+
+	data := &weatherData{
+		condition:    hassConditionDescription(state.State),
+		tempC:        mapFloat(attrs, "temperature"),
+		apparentTemp: mapFloat(attrs, "apparent_temperature"),
+		humidity:     mapInt(attrs, "humidity"),
+		windSpeed:    mapFloat(attrs, "wind_speed"),
+		windDir:      mapInt(attrs, "wind_bearing"),
+		uvIndex:      mapFloat(attrs, "uv_index"),
+		precip:       mapFloat(attrs, "precipitation"),
+		tempUnit:     tempUnit,
+		windUnit:     windUnit,
+		precipUnit:   precipUnit,
+		fetchedAt:    time.Now(),
+	}
+
+	forecasts, err := client.GetWeatherForecasts(ctx, entity, "daily")
+	if err != nil {
+		slog.Warn("failed to get HA weather forecasts", "err", err)
+	} else {
+		for _, f := range forecasts.Forecast {
+			dtStr := mapString(f, "datetime")
+			if dtStr == "" {
+				continue
+			}
+			dt, err := time.Parse(time.RFC3339, dtStr)
+			if err != nil {
+				dt, err = time.Parse("2006-01-02", dtStr)
+				if err != nil {
+					continue
+				}
+			}
+			data.daily = append(data.daily, dayForecast{
+				date: dt,
+				high: mapFloat(f, "temperature"),
+				low:  mapFloat(f, "templow"),
+			})
+		}
+	}
+
+	applyUnitConversion(data, units)
+	return data, nil
+}
+
+func applyUnitConversion(data *weatherData, targetUnits string) {
+	if targetUnits == "" {
+		return
+	}
+	wantImperial := targetUnits == "imperial"
+	isImperial := data.tempUnit == "°F"
+	if wantImperial == isImperial {
+		return
+	}
+	if wantImperial {
+		data.tempC = data.tempC*9/5 + 32
+		data.apparentTemp = data.apparentTemp*9/5 + 32
+		for i := range data.daily {
+			data.daily[i].high = data.daily[i].high*9/5 + 32
+			data.daily[i].low = data.daily[i].low*9/5 + 32
+		}
+		data.tempUnit = "°F"
+	} else {
+		data.tempC = (data.tempC - 32) * 5 / 9
+		data.apparentTemp = (data.apparentTemp - 32) * 5 / 9
+		for i := range data.daily {
+			data.daily[i].high = (data.daily[i].high - 32) * 5 / 9
+			data.daily[i].low = (data.daily[i].low - 32) * 5 / 9
+		}
+		data.tempUnit = "°C"
+	}
+}
+
+func hassConditionDescription(s string) string {
+	switch s {
+	case "sunny":
+		return "Sunny"
+	case "clear-night":
+		return "Clear Night"
+	case "partlycloudy":
+		return "Partly Cloudy"
+	case "cloudy":
+		return "Cloudy"
+	case "fog":
+		return "Foggy"
+	case "rainy":
+		return "Rainy"
+	case "pouring":
+		return "Heavy Rain"
+	case "snowy":
+		return "Snowy"
+	case "snowy-rainy":
+		return "Sleet"
+	case "hail":
+		return "Hail"
+	case "lightning":
+		return "Lightning"
+	case "lightning-rainy":
+		return "Thunderstorm"
+	case "windy", "windy-variant":
+		return "Windy"
+	case "exceptional":
+		return "Exceptional"
+	default:
+		return s
+	}
+}
+
+func mapFloat(m map[string]any, key string) float64 {
+	v, ok := m[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	}
+	return 0
+}
+
+func mapInt(m map[string]any, key string) int {
+	v, ok := m[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	}
+	return 0
+}
+
+func mapString(m map[string]any, key string) string {
+	v, ok := m[key]
+	if !ok {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
+
+// windDirStr converts a wind direction in degrees to a compass abbreviation.
+func windDirStr(deg int) string {
+	dirs := []string{"N", "NE", "E", "SE", "S", "SW", "W", "NW"}
+	idx := ((deg + 22) % 360) / 45
+	if idx < 0 || idx >= len(dirs) {
+		return ""
+	}
+	return dirs[idx]
 }

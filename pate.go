@@ -271,6 +271,8 @@ const (
 	Atkinson
 )
 
+func (Dither) demyOption() {}
+
 // --- Interfaces ---
 
 // Node is a composable, serializable widget. All layout and widget constructors
@@ -436,10 +438,11 @@ func (*TextNode) demyOption() {}
 // ImageNode renders an image. Set Image directly or use Key to reference
 // a pre-loaded image in Config.Images (required for serialized contexts).
 type ImageNode struct {
-	Image image.Image
-	Key   string
-	Scale ImageScale
-	Clip  bool
+	Image  image.Image
+	Key    string
+	Scale  ImageScale
+	Clip   bool
+	Dither Dither // per-region dithering algorithm applied during quantization; NoDithering = no per-region dithering
 }
 
 func (*ImageNode) demyNode()   {}
@@ -814,7 +817,7 @@ func Text(s string, opts ...TextOption) *TextNode {
 	return n
 }
 
-// Image renders img. Options: ImageScale (ImageFit, ImageFill, ImageStretch), Clip.
+// Image renders img. Options: ImageScale (ImageFit, ImageFill, ImageStretch), Clip, Dither.
 func Image(img image.Image, opts ...Option) *ImageNode {
 	n := &ImageNode{Image: img}
 	for _, opt := range opts {
@@ -823,6 +826,8 @@ func Image(img image.Image, opts ...Option) *ImageNode {
 			n.Scale = v
 		case clipOpt:
 			n.Clip = true
+		case Dither:
+			n.Dither = v
 		}
 	}
 	return n
@@ -838,6 +843,8 @@ func ImageKey(key string, opts ...Option) *ImageNode {
 			n.Scale = v
 		case clipOpt:
 			n.Clip = true
+		case Dither:
+			n.Dither = v
 		}
 	}
 	return n

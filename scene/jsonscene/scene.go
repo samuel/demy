@@ -53,6 +53,7 @@ type Node struct {
 	Style        *Style         `json:"style,omitempty"`
 	ImageKey     string         `json:"image_key,omitempty"`
 	Scale        string         `json:"scale,omitempty"`
+	Dither       string         `json:"dither,omitempty"`
 	Content      string         `json:"content,omitempty"`
 	BarcodeType  string         `json:"barcode_type,omitempty"`
 	ECLevel      string         `json:"ec_level,omitempty"`
@@ -259,6 +260,7 @@ func nodeToScene(n demy.Node) (Node, error) {
 			ImageKey: v.Key,
 			Scale:    scaleStr(v.Scale),
 			Clip:     v.Clip,
+			Dither:   ditherStr(v.Dither),
 		}, nil
 	case *demy.BarcodeNode:
 		return Node{
@@ -418,9 +420,10 @@ func sceneToNode(sn Node) (demy.Node, error) {
 		return &demy.TextNode{Text: sn.Text, Class: demy.StyleClass(sn.Class), Style: style}, nil
 	case "image":
 		return &demy.ImageNode{
-			Key:   sn.ImageKey,
-			Scale: parseScale(sn.Scale),
-			Clip:  sn.Clip,
+			Key:    sn.ImageKey,
+			Scale:  parseScale(sn.Scale),
+			Clip:   sn.Clip,
+			Dither: parseDither(sn.Dither),
 		}, nil
 	case "barcode":
 		return &demy.BarcodeNode{
@@ -747,6 +750,28 @@ func parseWeight(s string) demy.FontStyle {
 }
 
 // --- image scale helpers ---
+
+func ditherStr(d demy.Dither) string {
+	switch d {
+	case demy.FloydSteinberg:
+		return "floyd-steinberg"
+	case demy.Atkinson:
+		return "atkinson"
+	default:
+		return "" // NoDithering is default; omit
+	}
+}
+
+func parseDither(s string) demy.Dither {
+	switch s {
+	case "floyd-steinberg":
+		return demy.FloydSteinberg
+	case "atkinson":
+		return demy.Atkinson
+	default:
+		return demy.NoDithering
+	}
+}
 
 func scaleStr(s demy.ImageScale) string {
 	switch s {

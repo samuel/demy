@@ -142,6 +142,21 @@ var TRMNLOriginal = Config{
 	},
 }
 
+// TRMNLX is the preset Config for the TRMNL X display (1872×1407 px, ~209×157 mm).
+var TRMNLX = Config{
+	PixelWidth:       1872,
+	PixelHeight:      1407,
+	PhysicalWidthMM:  209,
+	PhysicalHeightMM: 157,
+	Palette:          []color.Color{Black, DarkGray, LightGray, White},
+	Roles: Roles{
+		Foreground: Black,
+		Background: White,
+		Accent:     DarkGray,
+		Muted:      LightGray,
+	},
+}
+
 // TextAlign controls horizontal text alignment within a text box.
 type TextAlign int
 
@@ -259,6 +274,7 @@ const (
 	Grayscale           // 8-bit grayscale
 	OneBit              // 1-bit black/white
 	TwoBit              // 2-bit 4-shade (black/dark/light/white)
+	FourBit             // 4-bit 16-shade grayscale (TRMNL X)
 	BWRed               // black+white+red two-layer encoder
 )
 

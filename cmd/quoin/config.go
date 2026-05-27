@@ -16,6 +16,7 @@ import (
 // canvasPresets maps preset names to full demy.Config values.
 var canvasPresets = map[string]demy.Config{
 	"TRMNLOriginal": demy.TRMNLOriginal,
+	"TRMNLX":        demy.TRMNLX,
 }
 
 // Config is the top-level config file structure.

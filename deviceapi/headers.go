@@ -1,9 +1,12 @@
 package deviceapi
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httputil"
 	"strconv"
+	"strings"
 )
 
 // Canonical HTTP header names as Go's net/http stores them after
@@ -23,6 +26,15 @@ const (
 	HeaderUpdateSource       = "Update-Source"
 	HeaderUserAgent          = "User-Agent"
 	HeaderWidth              = "Width"
+
+	// TRMNL X only
+
+	HeaderBatteryCount       = "Battery-Count"
+	HeaderBatteryCharging    = "Battery-Charging"
+	HeaderBatteryCurrent     = "Battery-Current"
+	HeaderBatteryHealth      = "Battery-Health"
+	HeaderBatteryTemperature = "Battery-Temp"
+	HeaderBatteryCapacity    = "Battery-Capacity"
 )
 
 // DeviceHeaders holds the values parsed from device request headers.
@@ -43,6 +55,16 @@ type DeviceHeaders struct {
 	UpdateSource       string
 	UserAgent          string
 	Width              *int
+
+	// TRMNL X only
+
+	BatteryCount           *int
+	BatteryCharging        *bool
+	BatteryCurrent         *int
+	BatteryHealth          *int
+	BatteryTemperature     *float64
+	CurrentBatteryCapacity *int
+	MaxBatteryCapacity     *int
 }
 
 var errMissingID = &headerError{"missing required ID header"}
@@ -52,9 +74,22 @@ type headerError struct{ msg string }
 func (e *headerError) Error() string { return e.msg }
 
 func parseDeviceHeaders(r *http.Request) (DeviceHeaders, error) {
+	b, _ := httputil.DumpRequest(r, true)
+	fmt.Println(string(b))
+
 	id := r.Header.Get(HeaderID)
 	if id == "" {
 		return DeviceHeaders{}, errMissingID
+	}
+	var currentBatteryCapacity, maxBatteryCapacity *int
+	if cap := r.Header.Get(HeaderBatteryCapacity); cap != "" {
+		curCap, maxCap, _ := strings.Cut(cap, "/")
+		if v, err := strconv.Atoi(curCap); err == nil {
+			currentBatteryCapacity = &v
+		}
+		if v, err := strconv.Atoi(maxCap); err == nil {
+			maxBatteryCapacity = &v
+		}
 	}
 	return DeviceHeaders{
 		ID:                 id,
@@ -69,9 +104,17 @@ func parseDeviceHeaders(r *http.Request) (DeviceHeaders, error) {
 		RSSI:               parseOptInt(r, HeaderRSSI),
 		Sensors:            r.Header.Get(HeaderSensors),
 		TemperatureProfile: parseOptBool(r, HeaderTemperatureProfile),
-		UpdateSource:       r.Header.Get(HeaderUpdateSource),
+		UpdateSource:       r.Header.Get(HeaderUpdateSource), // e.g. "timer"
 		UserAgent:          r.Header.Get(HeaderUserAgent),
 		Width:              parseOptInt(r, HeaderWidth),
+
+		BatteryCount:           parseOptInt(r, HeaderBatteryCount),
+		BatteryCharging:        parseOptBool(r, HeaderBatteryCharging),
+		BatteryCurrent:         parseOptInt(r, HeaderBatteryCurrent),
+		BatteryHealth:          parseOptInt(r, HeaderBatteryHealth),
+		BatteryTemperature:     parseOptFloat(r, HeaderBatteryTemperature),
+		CurrentBatteryCapacity: currentBatteryCapacity,
+		MaxBatteryCapacity:     maxBatteryCapacity,
 	}, nil
 }
 

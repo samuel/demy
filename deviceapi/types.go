@@ -1,16 +1,50 @@
 package deviceapi
 
+type SpecialFunction string
+
+const (
+	SpecialFunctionNone            = SpecialFunction("none")
+	SpecialFunctionIdentify        = SpecialFunction("identify")
+	SpecialFunctionSleep           = SpecialFunction("sleep")
+	SpecialFunctionAddWifi         = SpecialFunction("add_wifi")
+	SpecialFunctionRestartPlaylist = SpecialFunction("restart_playlist")
+	SpecialFunctionRewind          = SpecialFunction("rewind")
+	SpecialFunctionSendToMe        = SpecialFunction("send_to_me")
+	SpecialFunctionGuestMode       = SpecialFunction("guest_mode")
+)
+
+type TemperatureProfile string
+
+const (
+	TemperatureProfileDefault TemperatureProfile = "default"
+	TemperatureProfileA       TemperatureProfile = "a"
+	TemperatureProfileB       TemperatureProfile = "b"
+	TemperatureProfileC       TemperatureProfile = "c"
+)
+
+type TouchbarMode string
+
+const (
+	TouchbarModeTap   TouchbarMode = "tap"
+	TouchbarModeSlide TouchbarMode = "slide"
+)
+
 // DisplayResponse is the JSON body sent back to the device on GET /api/display.
 type DisplayResponse struct {
-	Filename        string `json:"filename"`
-	FirmwareURL     string `json:"firmware_url"`
-	FirmwareVersion string `json:"firmware_version"`
-	ImageURL        string `json:"image_url"`
-	ImageURLTimeout int    `json:"image_url_timeout"`
-	RefreshRate     int    `json:"refresh_rate"`
-	ResetFirmware   bool   `json:"reset_firmware"`
-	SpecialFunction string `json:"special_function"`
-	UpdateFirmware  bool   `json:"update_firmware"`
+	Action               string             `json:"action,omitempty"`
+	Filename             string             `json:"filename"`
+	FirmwareURL          string             `json:"firmware_url"`
+	FirmwareVersion      string             `json:"firmware_version"`
+	ImageURL             string             `json:"image_url"`
+	ImageURLTimeout      int                `json:"image_url_timeout"`
+	MaximumCompatibility bool               `json:"maximum_compatibility"`
+	RefreshRate          int                `json:"refresh_rate"`
+	ResetFirmware        bool               `json:"reset_firmware"`
+	SpecialFunction      SpecialFunction    `json:"special_function"`
+	Status               int                `json:"status,omitempty"`
+	TemperatureProfile   TemperatureProfile `json:"temperature_profile,omitempty"`
+	TouchbarMode         TouchbarMode       `json:"touchbar_mode,omitempty"`
+	UpdateFirmware       bool               `json:"update_firmware"`
 }
 
 // SetupResponse is the JSON body sent back on GET /api/setup/.

@@ -342,6 +342,15 @@ func applyUnitConversion(data *weatherData, targetUnits string) {
 			data.daily[i].low = data.daily[i].low*9/5 + 32
 		}
 		data.tempUnit = "°F"
+
+		if data.precipUnit == "mm" {
+			data.precip = data.precip / 25.4
+			data.precipUnit = "in"
+		}
+		if data.windUnit == "km/h" {
+			data.windSpeed = data.windSpeed * 0.6213711922
+			data.windUnit = "mph"
+		}
 	} else {
 		data.tempC = (data.tempC - 32) * 5 / 9
 		data.apparentTemp = (data.apparentTemp - 32) * 5 / 9
@@ -350,6 +359,15 @@ func applyUnitConversion(data *weatherData, targetUnits string) {
 			data.daily[i].low = (data.daily[i].low - 32) * 5 / 9
 		}
 		data.tempUnit = "°C"
+
+		if data.precipUnit == "in" {
+			data.precip = data.precip * 25.4
+			data.precipUnit = "mm"
+		}
+		if data.windUnit == "mph" {
+			data.windSpeed = data.windSpeed * 1.609344
+			data.windUnit = "km/h"
+		}
 	}
 }
 

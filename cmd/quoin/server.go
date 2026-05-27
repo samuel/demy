@@ -150,17 +150,14 @@ func (srv *Server) onDisplay(ctx context.Context, device deviceapi.DeviceHeaders
 		return deviceapi.DisplayResponse{}, fmt.Errorf("building canvas config: %w", err)
 	}
 
-	slog.Debug("rendering image", "device_id", device.ID)
 	pngBytes, renderedAt, err := current.cache.PNG(ctx, demyCfg)
 	if err != nil {
 		return deviceapi.DisplayResponse{}, fmt.Errorf("rendering screen %q: %w", current.name, err)
 	}
-	slog.Debug("done rendering image", "device_id", device.ID)
 
 	filename := renderedFilename(current.name, renderedAt)
 	host := hostFromCtx(ctx)
 	imageURL := fmt.Sprintf("http://%s/image/%s/%s", host, device.ID, filename)
-	slog.Debug("stored image", "device_id", device.ID, "filename", filename, "image_url", imageURL)
 
 	srv.storeImage(device.ID, filename, pngBytes)
 
@@ -172,11 +169,16 @@ func (srv *Server) onDisplay(ctx context.Context, device deviceapi.DeviceHeaders
 		refreshRate = 300
 	}
 
-	return deviceapi.DisplayResponse{
+	res := deviceapi.DisplayResponse{
 		Filename:    filename,
 		ImageURL:    imageURL,
 		RefreshRate: refreshRate,
-	}, nil
+	}
+	// if device.Model == "x" && device.FWVersion == "1.8.2" {
+	// 	res.UpdateFirmware = true
+	// 	res.FirmwareURL = "https://trmnl-fw.s3.us-east-2.amazonaws.com/trmnl_x/FW1.8.3.bin"
+	// }
+	return res, nil
 }
 
 func (srv *Server) onLog(ctx context.Context, device deviceapi.DeviceHeaders, entries []deviceapi.LogEntry) error {

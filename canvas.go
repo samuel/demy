@@ -131,6 +131,11 @@ func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image,
 		pal = []color.Gray{{Y: 0}, {Y: 255}}
 	case TwoBit:
 		pal = []color.Gray{{Y: 0}, {Y: 85}, {Y: 170}, {Y: 255}}
+	case FourBit:
+		pal = make([]color.Gray, 16)
+		for i := range 16 {
+			pal[i] = color.Gray{Y: uint8(i * 17)}
+		}
 	case BWRed:
 		// TODO: two-pass black+red encoder
 		return gray, nil

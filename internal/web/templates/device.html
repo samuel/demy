@@ -49,27 +49,31 @@
           <div class="form-group">
             <label for="canvas_width">Width (px)</label>
             <input type="number" id="canvas_width" name="canvas_width" min="1"
+              {{if ne .Data.CanvasPreset "custom"}}disabled{{end}}
               value="{{if .Data.CanvasConfig}}{{.Data.CanvasConfig.Width}}{{end}}">
           </div>
           <div class="form-group">
             <label for="canvas_height">Height (px)</label>
             <input type="number" id="canvas_height" name="canvas_height" min="1"
+              {{if ne .Data.CanvasPreset "custom"}}disabled{{end}}
               value="{{if .Data.CanvasConfig}}{{.Data.CanvasConfig.Height}}{{end}}">
           </div>
           <div class="form-group">
             <label for="canvas_physical_width_mm">Physical Width (mm)</label>
             <input type="number" id="canvas_physical_width_mm" name="canvas_physical_width_mm" min="0" step="0.1"
+              {{if ne .Data.CanvasPreset "custom"}}disabled{{end}}
               value="{{if .Data.CanvasConfig}}{{.Data.CanvasConfig.PhysicalWidthMM}}{{end}}">
           </div>
           <div class="form-group">
             <label for="canvas_physical_height_mm">Physical Height (mm)</label>
             <input type="number" id="canvas_physical_height_mm" name="canvas_physical_height_mm" min="0" step="0.1"
+              {{if ne .Data.CanvasPreset "custom"}}disabled{{end}}
               value="{{if .Data.CanvasConfig}}{{.Data.CanvasConfig.PhysicalHeightMM}}{{end}}">
           </div>
         </div>
         <div class="form-group">
           <label for="canvas_color_mode">Color Mode</label>
-          <select id="canvas_color_mode" name="canvas_color_mode">
+          <select id="canvas_color_mode" name="canvas_color_mode" {{if ne .Data.CanvasPreset "custom"}}disabled{{end}}>
             {{$cm := ""}}{{if .Data.CanvasConfig}}{{$cm = .Data.CanvasConfig.ColorMode}}{{end}}
             <option value="1bit" {{if eq $cm "1bit"}}selected{{end}}>1-bit (black &amp; white)</option>
             <option value="2bit" {{if eq $cm "2bit"}}selected{{end}}>2-bit (4 shades)</option>
@@ -86,7 +90,10 @@
   </div>
   <script>
   function toggleCanvasCustom(v) {
-    document.getElementById('canvas-custom-fields').style.display = v === 'custom' ? 'block' : 'none';
+    var show = v === 'custom';
+    var el = document.getElementById('canvas-custom-fields');
+    el.style.display = show ? 'block' : 'none';
+    el.querySelectorAll('input, select').forEach(function(f) { f.disabled = !show; });
   }
   </script>
 
@@ -99,6 +106,14 @@
       </td></tr>
       <tr><th>Last Seen</th><td>{{if .Data.Device.LastSeenAt.IsZero}}Never{{else}}{{.Data.Device.LastSeenAt.Format "2006-01-02 15:04"}}{{end}}</td></tr>
       <tr><th>Created</th><td>{{.Data.Device.CreatedAt.Format "2006-01-02"}}</td></tr>
+      {{with .Data.Battery}}
+      <tr><th>Battery</th><td>{{if .PercentCharged}}{{derefInt .PercentCharged}}%{{else if .BatteryVoltage}}{{printf "%.2fV" (derefFloat .BatteryVoltage)}}{{end}}{{if and .BatteryVoltage .PercentCharged}} ({{printf "%.2fV" (derefFloat .BatteryVoltage)}}){{end}}</td></tr>
+      {{if .BatteryCharging}}<tr><th>Charging</th><td>{{if derefBool .BatteryCharging}}Yes ⚡{{else}}No{{end}}</td></tr>{{end}}
+      {{if .BatteryHealth}}<tr><th>Health</th><td>{{derefInt .BatteryHealth}}%</td></tr>{{end}}
+      {{if .BatteryTemperature}}<tr><th>Temperature</th><td>{{printf "%.1f°C" (derefFloat .BatteryTemperature)}}</td></tr>{{end}}
+      {{if .BatteryCurrent}}<tr><th>Current</th><td>{{derefInt .BatteryCurrent}} mA</td></tr>{{end}}
+      {{if and .CurrentBatteryCapacity .MaxBatteryCapacity}}<tr><th>Capacity</th><td>{{derefInt .CurrentBatteryCapacity}} / {{derefInt .MaxBatteryCapacity}} mAh</td></tr>{{end}}
+      {{end}}
     </table>
   </div>
 

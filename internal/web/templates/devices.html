@@ -13,6 +13,7 @@
       <th>MAC Address</th>
       <th>Refresh Rate</th>
       <th>Last Seen</th>
+      <th>Battery</th>
       <th></th>
     </tr>
   </thead>
@@ -23,6 +24,7 @@
       <td class="text-muted">{{.MACAddress}}</td>
       <td class="text-muted">{{.RefreshRate}}s</td>
       <td class="text-muted">{{if .LastSeenAt.IsZero}}Never{{else}}{{.LastSeenAt.Format "2006-01-02 15:04"}}{{end}}</td>
+      <td class="text-muted">{{if .Battery}}{{if .Battery.PercentCharged}}{{derefInt .Battery.PercentCharged}}%{{if .Battery.BatteryCharging}}{{if derefBool .Battery.BatteryCharging}} ⚡{{end}}{{end}}{{else if .Battery.BatteryVoltage}}{{printf "%.2fV" (derefFloat .Battery.BatteryVoltage)}}{{end}}{{else}}—{{end}}</td>
       <td>
         <a href="/devices/{{.ID}}" class="btn btn-secondary btn-sm">Manage</a>
       </td>

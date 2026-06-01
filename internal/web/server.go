@@ -152,7 +152,10 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name, title stri
 // templateFuncs returns the custom template function map.
 func templateFuncs() template.FuncMap {
 	return template.FuncMap{
-		"add": func(a, b int) int { return a + b },
-		"str": func(v any) string { return fmt.Sprintf("%s", v) },
+		"add":        func(a, b int) int { return a + b },
+		"str":        func(v any) string { return fmt.Sprintf("%s", v) },
+		"derefInt":   func(v *int) int { return *v },
+		"derefFloat": func(v *float64) float64 { return *v },
+		"derefBool":  func(v *bool) bool { return *v },
 	}
 }

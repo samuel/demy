@@ -8,9 +8,15 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/samuel/demy/deviceapi"
 	"github.com/samuel/demy/internal/model"
 	"github.com/samuel/demy/internal/plugin"
 )
+
+type deviceListItem struct {
+	*model.Device
+	Battery *deviceapi.DeviceHeaders
+}
 
 func (s *Server) handleDeviceList(w http.ResponseWriter, r *http.Request) {
 	user := userFromCtx(r.Context())
@@ -19,7 +25,11 @@ func (s *Server) handleDeviceList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, "failed to load devices")
 		return
 	}
-	s.render(w, r, "devices.html", "Devices", devices)
+	items := make([]deviceListItem, len(devices))
+	for i, d := range devices {
+		items[i] = deviceListItem{Device: d, Battery: parseBatteryInfo(d.LastHeaders)}
+	}
+	s.render(w, r, "devices.html", "Devices", items)
 }
 
 func (s *Server) handleDeviceNew(w http.ResponseWriter, r *http.Request) {
@@ -97,6 +107,7 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		CanvasPreset string
 		CanvasConfig *plugin.CanvasConfig
 		Timezones    []string
+		Battery      *deviceapi.DeviceHeaders
 	}
 	s.render(w, r, "device.html", device.Name, deviceDetailData{
 		Device:       device,
@@ -106,6 +117,7 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		CanvasPreset: canvasPreset,
 		CanvasConfig: cc,
 		Timezones:    timezones,
+		Battery:      parseBatteryInfo(device.LastHeaders),
 	})
 }
 
@@ -271,6 +283,22 @@ func parseCanvasConfigForm(r *http.Request) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown canvas preset %q", preset)
 	}
+}
+
+// parseBatteryInfo unmarshals LastHeaders JSON and returns battery-related fields, or nil if
+// no battery data is present (headers empty or no voltage/percent fields).
+func parseBatteryInfo(lastHeaders string) *deviceapi.DeviceHeaders {
+	if lastHeaders == "" {
+		return nil
+	}
+	var h deviceapi.DeviceHeaders
+	if err := json.Unmarshal([]byte(lastHeaders), &h); err != nil {
+		return nil
+	}
+	if h.PercentCharged == nil && h.BatteryVoltage == nil {
+		return nil
+	}
+	return &h
 }
 
 // parseStoredCanvasConfig parses a JSON canvas config string and returns the effective preset name

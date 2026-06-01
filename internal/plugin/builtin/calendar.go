@@ -24,7 +24,7 @@ import (
 type CalendarRenderer struct{}
 
 // Render fetches calendar events from Home Assistant and renders them to PNG bytes.
-func (r *CalendarRenderer) Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, _ plugin.ResourceCache) ([]byte, error) {
+func (r *CalendarRenderer) Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, _ plugin.ResourceCache, loc *time.Location) ([]byte, error) {
 	var pcfg calendarPluginConfig
 	if p.Config != "" {
 		if err := json.Unmarshal([]byte(p.Config), &pcfg); err != nil {
@@ -46,8 +46,11 @@ func (r *CalendarRenderer) Render(ctx context.Context, cfg demy.Config, p *model
 	}
 	cfg.Fonts = map[string]*demy.FontFamily{"sans": font}
 
+	if loc == nil {
+		loc = time.UTC
+	}
 	var buf bytes.Buffer
-	if err := renderCalendar(&buf, events, time.Now().UTC(), cfg); err != nil {
+	if err := renderCalendar(&buf, events, time.Now().In(loc), cfg); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

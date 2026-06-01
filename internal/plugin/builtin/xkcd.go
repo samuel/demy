@@ -30,7 +30,7 @@ type XKCDRenderer struct{}
 
 // Render fetches the latest XKCD comic and renders it to PNG bytes.
 // It uses the resource cache for both the comic metadata and the image.
-func (r *XKCDRenderer) Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, rc plugin.ResourceCache) ([]byte, error) {
+func (r *XKCDRenderer) Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, rc plugin.ResourceCache, _ *time.Location) ([]byte, error) {
 	comic, err := fetchXKCDComicCached(ctx, p.UserID, rc)
 	if err != nil {
 		return nil, err

@@ -115,7 +115,13 @@ func main() {
 		if err != nil {
 			return nil, fmt.Errorf("building demy config: %w", err)
 		}
-		pngBytes, _, err := engine.Render(ctx, p, demyCfg, rc)
+		loc := time.UTC
+		if d.Timezone != "" {
+			if l, err := time.LoadLocation(d.Timezone); err == nil {
+				loc = l
+			}
+		}
+		pngBytes, _, err := engine.Render(ctx, p, demyCfg, rc, loc)
 		return pngBytes, err
 	}
 
@@ -385,6 +391,13 @@ func makeDisplayHandler(
 			return deviceapi.DisplayResponse{}, fmt.Errorf("building canvas config: %w", err)
 		}
 
+		loc := time.UTC
+		if d.Timezone != "" {
+			if l, err := time.LoadLocation(d.Timezone); err == nil {
+				loc = l
+			}
+		}
+
 		pos, _, err := svc.AdvanceDisplay(ctx, d, len(items))
 		if err != nil {
 			return deviceapi.DisplayResponse{}, fmt.Errorf("advance display: %w", err)
@@ -399,7 +412,7 @@ func makeDisplayHandler(
 			return deviceapi.DisplayResponse{}, fmt.Errorf("loading plugin: %w", err)
 		}
 
-		pngBytes, renderedAt, err := engine.Render(ctx, p, demyCfg, rc)
+		pngBytes, renderedAt, err := engine.Render(ctx, p, demyCfg, rc, loc)
 		if err != nil {
 			return deviceapi.DisplayResponse{}, fmt.Errorf("rendering plugin: %w", err)
 		}

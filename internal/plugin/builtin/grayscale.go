@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image/color"
 	"image/png"
+	"time"
 
 	"github.com/samuel/demy"
 	"github.com/samuel/demy/internal/model"
@@ -17,7 +18,7 @@ import (
 type GrayscaleRenderer struct{}
 
 // Render renders the grayscale test pattern to PNG bytes.
-func (r *GrayscaleRenderer) Render(_ context.Context, cfg demy.Config, _ *model.UserPlugin, _ plugin.ResourceCache) ([]byte, error) {
+func (r *GrayscaleRenderer) Render(_ context.Context, cfg demy.Config, _ *model.UserPlugin, _ plugin.ResourceCache, _ *time.Location) ([]byte, error) {
 	font := demy.MustLoadFontBytes("sans", goregular.TTF)
 	cfg.Fonts = map[string]*demy.FontFamily{"sans": font}
 

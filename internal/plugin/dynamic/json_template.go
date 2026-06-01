@@ -40,8 +40,16 @@ type jsonTemplatePluginConfig struct {
 	EndpointHeaders map[string]string `json:"endpoint_headers"`
 }
 
+// jsonTemplateData is passed to XML scene templates. Access fetched data via .Data,
+// current local time via .Now, and the device IANA timezone name via .Timezone.
+type jsonTemplateData struct {
+	Data     any
+	Now      time.Time
+	Timezone string
+}
+
 // Render implements plugin.PluginRenderer.
-func (r *JSONTemplateRenderer) Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, rc plugin.ResourceCache) ([]byte, error) {
+func (r *JSONTemplateRenderer) Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, rc plugin.ResourceCache, loc *time.Location) ([]byte, error) {
 	var pcfg jsonTemplatePluginConfig
 	var configMap map[string]any
 	if p.Config != "" {
@@ -79,8 +87,17 @@ func (r *JSONTemplateRenderer) Render(ctx context.Context, cfg demy.Config, p *m
 		return nil, fmt.Errorf("json_template: parsing endpoint JSON: %w", err)
 	}
 
+	if loc == nil {
+		loc = time.UTC
+	}
+	tmplData := jsonTemplateData{
+		Data:     data,
+		Now:      time.Now().In(loc),
+		Timezone: loc.String(),
+	}
+
 	// Execute the XML template with the parsed data.
-	root, styles, err := xmlscene.ExecuteScene([]byte(p.Template), data, cfg)
+	root, styles, err := xmlscene.ExecuteScene([]byte(p.Template), tmplData, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("json_template: executing scene template: %w", err)
 	}

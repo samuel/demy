@@ -38,7 +38,7 @@ def render(data):
 `)
 
 	var env starlarkplugin.Environment
-	p, err := env.LoadBytes("test.star", script, cfg)
+	p, err := env.LoadBytes("test.star", script, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ def render(data):
 `)
 
 	var env starlarkplugin.Environment
-	p, err := env.LoadBytes("layout.star", script, cfg)
+	p, err := env.LoadBytes("layout.star", script, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ def render(data):
 `)
 
 	var env starlarkplugin.Environment
-	p, err := env.LoadBytes("test.star", script, cfg)
+	p, err := env.LoadBytes("test.star", script, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ def render(data):
 `)
 
 	var env starlarkplugin.Environment
-	p, err := env.LoadBytes("grid.star", script, cfg)
+	p, err := env.LoadBytes("grid.star", script, cfg, nil)
 	if err != nil {
 		t.Fatalf("LoadBytes: %v", err)
 	}
@@ -214,7 +214,7 @@ def render(data):
     return Grid(Columns(GridFr(1), GridFr(1)), Gap(6), Text("x"), Text("y"))
 `)
 	var env starlarkplugin.Environment
-	p, err := env.LoadBytes("gap.star", script, cfg)
+	p, err := env.LoadBytes("gap.star", script, cfg, nil)
 	if err != nil {
 		t.Fatalf("LoadBytes: %v", err)
 	}
@@ -238,7 +238,7 @@ styles = {"h1": VStack()}
 def render(data): return VStack()
 `)
 	var env starlarkplugin.Environment
-	_, err := env.LoadBytes("bad.star", script, cfg)
+	_, err := env.LoadBytes("bad.star", script, cfg, nil)
 	if err == nil {
 		t.Fatal("expected error for non-Style value in styles dict")
 	}
@@ -247,7 +247,7 @@ def render(data): return VStack()
 func TestRenderMissingRenderFunction(t *testing.T) {
 	cfg := demy.TRMNLOriginal
 	var env starlarkplugin.Environment
-	_, err := env.LoadBytes("bad.star", []byte(`x = 1`), cfg)
+	_, err := env.LoadBytes("bad.star", []byte(`x = 1`), cfg, nil)
 	if err == nil {
 		t.Fatal("expected error for missing render function")
 	}
@@ -256,7 +256,7 @@ func TestRenderMissingRenderFunction(t *testing.T) {
 func TestRenderBadReturnType(t *testing.T) {
 	cfg := demy.TRMNLOriginal
 	var env starlarkplugin.Environment
-	p, err := env.LoadBytes("bad.star", []byte(`def render(data): return 42`), cfg)
+	p, err := env.LoadBytes("bad.star", []byte(`def render(data): return 42`), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestAddBuiltin(t *testing.T) {
 def render(data):
     return VStack(Text(greet(data["name"])))
 `)
-	p, err := env.LoadBytes("test.star", script, cfg)
+	p, err := env.LoadBytes("test.star", script, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestAddModule(t *testing.T) {
 def render(data):
     return VStack(Text(data_svc.get_title()))
 `)
-	p, err := env.LoadBytes("test.star", script, cfg)
+	p, err := env.LoadBytes("test.star", script, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestContextPropagation(t *testing.T) {
 def render(data):
     return VStack(Text(ctx_val()))
 `)
-	p, err := env.LoadBytes("test.star", script, cfg)
+	p, err := env.LoadBytes("test.star", script, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +392,7 @@ def render(data):
     )
 `)
 	var env starlarkplugin.Environment
-	p, err := env.LoadBytes("gridrow.star", script, cfg)
+	p, err := env.LoadBytes("gridrow.star", script, cfg, nil)
 	if err != nil {
 		t.Fatalf("LoadBytes: %v", err)
 	}

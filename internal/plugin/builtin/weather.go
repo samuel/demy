@@ -26,7 +26,7 @@ import (
 type WeatherRenderer struct{}
 
 // Render fetches weather data from Home Assistant and renders it to PNG bytes.
-func (r *WeatherRenderer) Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, _ plugin.ResourceCache) ([]byte, error) {
+func (r *WeatherRenderer) Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, _ plugin.ResourceCache, loc *time.Location) ([]byte, error) {
 	var pcfg weatherPluginConfig
 	if p.Config != "" {
 		if err := json.Unmarshal([]byte(p.Config), &pcfg); err != nil {
@@ -48,7 +48,9 @@ func (r *WeatherRenderer) Render(ctx context.Context, cfg demy.Config, p *model.
 	}
 	cfg.Fonts = map[string]*demy.FontFamily{"sans": font}
 
-	loc := time.UTC
+	if loc == nil {
+		loc = time.UTC
+	}
 	var buf bytes.Buffer
 	if err := renderWeather(&buf, data, pcfg.Location, loc, cfg); err != nil {
 		return nil, err

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/samuel/demy/internal/model"
 	"github.com/samuel/demy/internal/plugin"
@@ -95,6 +96,7 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		PluginNames  map[string]string
 		CanvasPreset string
 		CanvasConfig *plugin.CanvasConfig
+		Timezones    []string
 	}
 	s.render(w, r, "device.html", device.Name, deviceDetailData{
 		Device:       device,
@@ -103,6 +105,7 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 		PluginNames:  pluginNames,
 		CanvasPreset: canvasPreset,
 		CanvasConfig: cc,
+		Timezones:    timezones,
 	})
 }
 
@@ -122,6 +125,10 @@ func (s *Server) handleDeviceUpdate(w http.ResponseWriter, r *http.Request) {
 		device.Name = v
 	}
 	if v := r.FormValue("timezone"); v != "" {
+		if _, err := time.LoadLocation(v); err != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid timezone")
+			return
+		}
 		device.Timezone = v
 	}
 	if v := r.FormValue("refresh_rate"); v != "" {

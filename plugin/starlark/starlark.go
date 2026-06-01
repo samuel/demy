@@ -42,6 +42,8 @@
 //	ECLevel:      ECLevelLow, ECLevelMedium, ECLevelQuartile, ECLevelHigh
 //	Colors:       Foreground, Accent, Muted (role strings), Black, DarkGray, LightGray,
 //	              White, Red, Yellow (hex strings)
+//	Time:         now() → time value with .year .month .day .hour .minute .second
+//	              .weekday (0=Sun) .weekday_name .timezone .unix and .format(layout) method
 //
 // Named styles from Config.Styles are injected as capitalized globals (e.g. "h1" → H1).
 package starlarkplugin
@@ -54,6 +56,7 @@ import (
 	"maps"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	sl "go.starlark.net/starlark"
@@ -111,13 +114,15 @@ func (e *Environment) AddModule(name string, fns map[string]BuiltinFunc) *Enviro
 }
 
 // Load compiles the Starlark script at path.
-func (e *Environment) Load(path string, cfg demy.Config) (*Plugin, error) {
-	return execFile(path, nil, cfg, e.extras)
+// loc sets the timezone used by the now() builtin; nil defaults to UTC.
+func (e *Environment) Load(path string, cfg demy.Config, loc *time.Location) (*Plugin, error) {
+	return execFile(path, nil, cfg, loc, e.extras)
 }
 
 // LoadBytes compiles src as a Starlark script named filename.
-func (e *Environment) LoadBytes(filename string, src []byte, cfg demy.Config) (*Plugin, error) {
-	return execFile(filename, src, cfg, e.extras)
+// loc sets the timezone used by the now() builtin; nil defaults to UTC.
+func (e *Environment) LoadBytes(filename string, src []byte, cfg demy.Config, loc *time.Location) (*Plugin, error) {
+	return execFile(filename, src, cfg, loc, e.extras)
 }
 
 // contextKey is the thread-local key used to propagate context.Context through Render.
@@ -161,8 +166,11 @@ type Plugin struct {
 	scriptStyles map[string]demy.Style
 }
 
-func execFile(filename string, src any, cfg demy.Config, extras sl.StringDict) (*Plugin, error) {
-	env := newEnv(cfg)
+func execFile(filename string, src any, cfg demy.Config, loc *time.Location, extras sl.StringDict) (*Plugin, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	env := newEnv(cfg, loc)
 	maps.Copy(env, extras)
 	thread := &sl.Thread{Name: filename}
 	globals, err := sl.ExecFileOptions(&syntax.FileOptions{}, thread, filename, src, env)
@@ -261,7 +269,7 @@ func (v *trackValue) Hash() (uint32, error) { return 0, errors.New("unhashable: 
 
 // --- Environment ---
 
-func newEnv(cfg demy.Config) sl.StringDict {
+func newEnv(cfg demy.Config, loc *time.Location) sl.StringDict {
 	d := sl.StringDict{
 		// Layout constructors
 		"VStack":  sl.NewBuiltin("VStack", builtinVStack),
@@ -338,6 +346,10 @@ func newEnv(cfg demy.Config) sl.StringDict {
 		"White":     colorHex(demy.White),
 		"Red":       colorHex(demy.Red),
 		"Yellow":    colorHex(demy.Yellow),
+		// Time
+		"now": sl.NewBuiltin("now", func(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
+			return builtinNow(loc)
+		}),
 	}
 	// Named styles from cfg.Styles are injected as capitalized globals.
 	// "h1" → H1, "body" → Body, "caption" → Caption, etc.
@@ -898,6 +910,63 @@ func capitalizeFirst(s string) string {
 	r := []rune(s)
 	r[0] = unicode.ToUpper(r[0])
 	return string(r)
+}
+
+// --- now() builtin ---
+
+// timeValue is a Starlark value wrapping time.Time, returned by now().
+type timeValue struct{ t time.Time }
+
+func (v *timeValue) String() string        { return v.t.Format(time.RFC3339) }
+func (v *timeValue) Type() string          { return "time" }
+func (v *timeValue) Freeze()               {}
+func (v *timeValue) Truth() sl.Bool        { return sl.True }
+func (v *timeValue) Hash() (uint32, error) { return 0, errors.New("unhashable: time") }
+
+func (v *timeValue) Attr(name string) (sl.Value, error) {
+	switch name {
+	case "unix":
+		return sl.MakeInt64(v.t.Unix()), nil
+	case "year":
+		return sl.MakeInt(v.t.Year()), nil
+	case "month":
+		return sl.MakeInt(int(v.t.Month())), nil
+	case "day":
+		return sl.MakeInt(v.t.Day()), nil
+	case "hour":
+		return sl.MakeInt(v.t.Hour()), nil
+	case "minute":
+		return sl.MakeInt(v.t.Minute()), nil
+	case "second":
+		return sl.MakeInt(v.t.Second()), nil
+	case "weekday":
+		return sl.MakeInt(int(v.t.Weekday())), nil
+	case "weekday_name":
+		return sl.String(v.t.Weekday().String()), nil
+	case "timezone":
+		return sl.String(v.t.Location().String()), nil
+	case "format":
+		tv := v
+		return sl.NewBuiltin("format", func(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+			if len(args) != 1 {
+				return nil, errors.New("format: expected 1 argument")
+			}
+			layout, ok := args[0].(sl.String)
+			if !ok {
+				return nil, fmt.Errorf("format: layout must be a string, got %s", args[0].Type())
+			}
+			return sl.String(tv.t.Format(string(layout))), nil
+		}), nil
+	}
+	return nil, nil
+}
+
+func (v *timeValue) AttrNames() []string {
+	return []string{"unix", "year", "month", "day", "hour", "minute", "second", "weekday", "weekday_name", "timezone", "format"}
+}
+
+func builtinNow(loc *time.Location) (sl.Value, error) {
+	return &timeValue{t: time.Now().In(loc)}, nil
 }
 
 // --- Data conversion: Go map → Starlark dict ---

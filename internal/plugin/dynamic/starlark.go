@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image/png"
 	"maps"
+	"time"
 
 	"github.com/samuel/demy"
 	"github.com/samuel/demy/internal/model"
@@ -22,7 +23,7 @@ import (
 type StarlarkRenderer struct{}
 
 // Render implements plugin.PluginRenderer.
-func (r *StarlarkRenderer) Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, _ plugin.ResourceCache) ([]byte, error) {
+func (r *StarlarkRenderer) Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, _ plugin.ResourceCache, loc *time.Location) ([]byte, error) {
 	if p.Script == "" {
 		return nil, fmt.Errorf("starlark: plugin has no script")
 	}
@@ -37,7 +38,7 @@ func (r *StarlarkRenderer) Render(ctx context.Context, cfg demy.Config, p *model
 
 	// Load and compile the Starlark script.
 	var env starlarkplugin.Environment
-	sp, err := env.LoadBytes(p.Name+".star", []byte(p.Script), cfg)
+	sp, err := env.LoadBytes(p.Name+".star", []byte(p.Script), cfg, loc)
 	if err != nil {
 		return nil, fmt.Errorf("starlark: loading script: %w", err)
 	}

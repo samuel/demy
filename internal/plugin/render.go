@@ -21,7 +21,7 @@ import (
 
 // PluginRenderer renders a plugin instance to PNG bytes.
 type PluginRenderer interface {
-	Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, rc ResourceCache) ([]byte, error)
+	Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, rc ResourceCache, loc *time.Location) ([]byte, error)
 }
 
 // ResourceCache caches remote HTTP resources fetched by plugins.
@@ -74,10 +74,13 @@ func (e *RenderEngine) RegisterType(pluginType string, r PluginRenderer) {
 const defaultRefresh = 15 * time.Minute
 
 // Render renders a user plugin to PNG bytes, using the render cache.
-// The cache key is a SHA-256 hash of (userPluginID, pixelWidth x pixelHeight, colorMode).
+// The cache key is a SHA-256 hash of (userPluginID, pixelWidth x pixelHeight, colorMode, timezone).
 // If the cached render is still fresh (within the plugin's refresh duration), return cached bytes.
 // On render error: serve stale bytes (if any) and log a warning.
-func (e *RenderEngine) Render(ctx context.Context, p *model.UserPlugin, devCfg demy.Config, rc ResourceCache) ([]byte, time.Time, error) {
+func (e *RenderEngine) Render(ctx context.Context, p *model.UserPlugin, devCfg demy.Config, rc ResourceCache, loc *time.Location) ([]byte, time.Time, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
 	ttl := defaultRefresh
 	if p.Refresh != "" {
 		if d, err := time.ParseDuration(p.Refresh); err == nil && d > 0 {
@@ -85,7 +88,7 @@ func (e *RenderEngine) Render(ctx context.Context, p *model.UserPlugin, devCfg d
 		}
 	}
 
-	fp := cacheFingerprint(p.ID, devCfg.PixelWidth, devCfg.PixelHeight, devCfg.ColorMode)
+	fp := cacheFingerprint(p.ID, devCfg.PixelWidth, devCfg.PixelHeight, devCfg.ColorMode, loc.String())
 
 	e.mu.RLock()
 	entry := e.cache[fp]
@@ -104,7 +107,7 @@ func (e *RenderEngine) Render(ctx context.Context, p *model.UserPlugin, devCfg d
 		return nil, time.Time{}, err
 	}
 
-	data, renderErr := renderer.Render(ctx, devCfg, p, rc)
+	data, renderErr := renderer.Render(ctx, devCfg, p, rc, loc)
 	if renderErr != nil {
 		if entry != nil {
 			slog.Warn("plugin render failed, serving stale", "plugin_id", p.ID, "err", renderErr)
@@ -150,8 +153,8 @@ func (e *RenderEngine) resolveRenderer(ctx context.Context, p *model.UserPlugin)
 }
 
 // cacheFingerprint produces a stable cache key string for the given parameters.
-func cacheFingerprint(userPluginID string, w, h int, mode demy.ColorMode) string {
-	raw := userPluginID + "|" + strconv.Itoa(w) + "x" + strconv.Itoa(h) + "|" + strconv.Itoa(int(mode))
+func cacheFingerprint(userPluginID string, w, h int, mode demy.ColorMode, tz string) string {
+	raw := userPluginID + "|" + strconv.Itoa(w) + "x" + strconv.Itoa(h) + "|" + strconv.Itoa(int(mode)) + "|" + tz
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }

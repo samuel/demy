@@ -1,0 +1,56 @@
+{{template "base" .}}
+{{define "content"}}
+<div class="page-header">
+  <h1>{{if .Data}}Edit Plugin{{else}}New Plugin{{end}}</h1>
+  <a href="/admin/library" class="btn btn-secondary">Back</a>
+</div>
+
+<div class="card" style="max-width:720px;">
+  <form method="POST" action="{{if .Data}}/admin/library/{{.Data.ID}}{{else}}/admin/library{{end}}">
+    <div class="form-group">
+      <label for="name">Name</label>
+      <input type="text" id="name" name="name" value="{{if .Data}}{{.Data.Name}}{{end}}" required>
+    </div>
+    <div class="form-group">
+      <label for="slug">Slug</label>
+      <input type="text" id="slug" name="slug" value="{{if .Data}}{{.Data.Slug}}{{end}}" required pattern="[a-z0-9\-]+">
+      <div class="form-hint">Lowercase letters, numbers, hyphens only.</div>
+    </div>
+    <div class="form-group">
+      <label for="description">Description</label>
+      <textarea id="description" name="description" rows="3">{{if .Data}}{{.Data.Description}}{{end}}</textarea>
+    </div>
+    <div class="form-group">
+      <label for="plugin_type">Plugin Type</label>
+      <select id="plugin_type" name="plugin_type">
+        <option value="builtin"{{if .Data}}{{if eq (str .Data.PluginType) "builtin"}} selected{{end}}{{end}}>Builtin</option>
+        <option value="json_template"{{if .Data}}{{if eq (str .Data.PluginType) "json_template"}} selected{{end}}{{end}}>JSON Template</option>
+        <option value="starlark"{{if .Data}}{{if eq (str .Data.PluginType) "starlark"}} selected{{end}}{{end}}>Starlark</option>
+        <option value="datasource_template"{{if .Data}}{{if eq (str .Data.PluginType) "datasource_template"}} selected{{end}}{{end}}>Datasource Template</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="template">Template (XML)</label>
+      <textarea id="template" name="template" rows="10" style="font-family:monospace;font-size:0.85rem;">{{if .Data}}{{.Data.Template}}{{end}}</textarea>
+    </div>
+    <div class="form-group">
+      <label for="script">Script (Starlark)</label>
+      <textarea id="script" name="script" rows="10" style="font-family:monospace;font-size:0.85rem;">{{if .Data}}{{.Data.Script}}{{end}}</textarea>
+    </div>
+    <div class="form-group">
+      <label for="thumbnail">Thumbnail URL</label>
+      <input type="url" id="thumbnail" name="thumbnail" value="{{if .Data}}{{.Data.Thumbnail}}{{end}}">
+    </div>
+    <div class="form-group">
+      <label>
+        <input type="checkbox" name="is_active" value="1"{{if .Data}}{{if .Data.IsActive}} checked{{end}}{{end}}>
+        Active (visible to users)
+      </label>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save</button>
+      <a href="/admin/library" class="btn btn-secondary">Cancel</a>
+    </div>
+  </form>
+</div>
+{{end}}

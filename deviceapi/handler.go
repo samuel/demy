@@ -3,6 +3,7 @@ package deviceapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 )
@@ -16,18 +17,20 @@ type Handler struct {
 	OnSetup   func(ctx context.Context, device DeviceHeaders) (SetupResponse, error)
 }
 
-// NewMux creates a new *http.ServeMux with the device API routes registered.
-func NewMux(h Handler) *http.ServeMux {
+// NewMux creates a new *http.ServeMux with the device API routes registered under prefix.
+// prefix must be empty or start with '/'; it must not have a trailing slash.
+func NewMux(prefix string, h Handler) *http.ServeMux {
 	mux := http.NewServeMux()
-	Register(mux, h)
+	Register(mux, prefix, h)
 	return mux
 }
 
-// Register adds the device API routes to an existing mux.
-func Register(mux *http.ServeMux, h Handler) {
-	mux.HandleFunc("GET /api/display", h.serveDisplay)
-	mux.HandleFunc("POST /api/log", h.serveLog)
-	mux.HandleFunc("GET /api/setup/", h.serveSetup)
+// Register adds the device API routes to an existing mux under prefix.
+// prefix must be empty or start with '/'; it must not have a trailing slash.
+func Register(mux *http.ServeMux, prefix string, h Handler) {
+	mux.HandleFunc("GET "+prefix+"/api/display", h.serveDisplay)
+	mux.HandleFunc("POST "+prefix+"/api/log", h.serveLog)
+	mux.HandleFunc("GET "+prefix+"/api/setup", h.serveSetup)
 }
 
 func (h Handler) serveDisplay(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +101,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	fmt.Printf("Served: %s\n", string(b))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(b)

@@ -1,8 +1,9 @@
-package main
+package builtin
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"image/png"
 	"io"
@@ -12,56 +13,50 @@ import (
 
 	ha "github.com/mkelcik/go-ha-client/v2"
 	"github.com/samuel/demy"
+	"github.com/samuel/demy/internal/model"
+	"github.com/samuel/demy/internal/plugin"
 	"github.com/samuel/demy/scene/xmlscene"
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/goregular"
 )
 
-// CalendarPlugin implements Plugin for the Home Assistant calendar screen.
-type CalendarPlugin struct {
-	hassURL   string
-	hassToken string
-	calendars []string
-	loc       *time.Location
-}
+// CalendarRenderer implements plugin.PluginRenderer for the Home Assistant calendar plugin.
+type CalendarRenderer struct{}
 
-func newCalendarPlugin(haCfg HAConfig, loc *time.Location, cfg map[string]any) (*CalendarPlugin, error) {
-	var cals []string
-	if v, ok := cfg["calendars"]; ok {
-		if slice, ok := v.([]any); ok {
-			for _, item := range slice {
-				if s, ok := item.(string); ok && s != "" {
-					cals = append(cals, s)
-				}
-			}
+// Render fetches calendar events from Home Assistant and renders them to PNG bytes.
+func (r *CalendarRenderer) Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, _ plugin.ResourceCache) ([]byte, error) {
+	var pcfg calendarPluginConfig
+	if p.Config != "" {
+		if err := json.Unmarshal([]byte(p.Config), &pcfg); err != nil {
+			return nil, fmt.Errorf("calendar: parsing plugin config: %w", err)
 		}
 	}
-	if len(cals) == 0 {
+	if len(pcfg.Calendars) == 0 {
 		return nil, fmt.Errorf("calendar plugin requires at least one entry in 'calendars'")
 	}
-	return &CalendarPlugin{
-		hassURL:   haCfg.URL,
-		hassToken: haCfg.Token,
-		calendars: cals,
-		loc:       loc,
-	}, nil
-}
 
-func (p *CalendarPlugin) Render(ctx context.Context, cfg demy.Config) ([]byte, error) {
-	events, err := fetchCalendarFromHA(ctx, p.hassURL, p.hassToken, p.calendars)
+	events, err := fetchCalendarFromHA(ctx, pcfg.HAURL, pcfg.HAToken, pcfg.Calendars)
 	if err != nil {
 		return nil, err
 	}
+
 	font := demy.MustLoadFontBytes("sans", goregular.TTF)
 	if err := font.AddStyle(gobold.TTF, demy.FontBold); err != nil {
 		return nil, fmt.Errorf("loading bold font: %w", err)
 	}
 	cfg.Fonts = map[string]*demy.FontFamily{"sans": font}
+
 	var buf bytes.Buffer
-	if err := renderCalendar(&buf, events, time.Now().In(p.loc), cfg); err != nil {
+	if err := renderCalendar(&buf, events, time.Now().UTC(), cfg); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+type calendarPluginConfig struct {
+	HAURL     string   `json:"ha_url"`
+	HAToken   string   `json:"ha_token"`
+	Calendars []string `json:"calendars"`
 }
 
 const calendarTemplate = `<scene>
@@ -142,8 +137,8 @@ func renderCalendar(w io.Writer, events []calendarEvent, now time.Time, cfg demy
 		return events[i].start.Before(events[j].start)
 	})
 
-	days := make([]calDayData, 7)
-	for i := range 7 {
+	days := make([]calDayData, 14)
+	for i := range 14 {
 		day := today.AddDate(0, 0, i)
 		var header string
 		switch i {
@@ -218,7 +213,7 @@ func renderCalendar(w io.Writer, events []calendarEvent, now time.Time, cfg demy
 		return fmt.Errorf("creating canvas: %w", err)
 	}
 
-	outImg, err := c.Render(root, effectiveColorMode(cfg))
+	outImg, err := c.Render(root, plugin.EffectiveColorMode(cfg))
 	if err != nil {
 		return fmt.Errorf("rendering canvas: %w", err)
 	}
@@ -232,7 +227,7 @@ func fetchCalendarFromHA(ctx context.Context, hassURL, hassToken string, calenda
 	}
 
 	now := time.Now()
-	end := now.AddDate(0, 0, 7)
+	end := now.AddDate(0, 0, 14)
 
 	var events []calendarEvent
 	for _, calID := range calendars {

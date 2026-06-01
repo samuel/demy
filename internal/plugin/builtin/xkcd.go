@@ -1,8 +1,9 @@
-package main
+package builtin
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"image"
@@ -15,31 +16,29 @@ import (
 	"time"
 
 	"github.com/samuel/demy"
+	"github.com/samuel/demy/internal/model"
+	"github.com/samuel/demy/internal/plugin"
 	"github.com/samuel/demy/scene/xmlscene"
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/goregular"
 )
 
-// XKCDPlugin implements Plugin for the xkcd comic display.
-type XKCDPlugin struct{}
+const xkcdCacheTTL = time.Hour
 
-func newXKCDPlugin(_ HAConfig, _ *time.Location, _ map[string]any) (*XKCDPlugin, error) {
-	return &XKCDPlugin{}, nil
-}
+// XKCDRenderer implements plugin.PluginRenderer for the XKCD comic plugin.
+type XKCDRenderer struct{}
 
-func (p *XKCDPlugin) Render(ctx context.Context, cfg demy.Config) ([]byte, error) {
-	comic, err := fetchXKCDComic(ctx)
+// Render fetches the latest XKCD comic and renders it to PNG bytes.
+// It uses the resource cache for both the comic metadata and the image.
+func (r *XKCDRenderer) Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, rc plugin.ResourceCache) ([]byte, error) {
+	comic, err := fetchXKCDComicCached(ctx, p.UserID, rc)
 	if err != nil {
 		return nil, err
 	}
 
-	retinaURL := strings.Replace(comic.imageURL, ".png", "_2x.png", 1)
-	img, err := fetchImage(ctx, retinaURL)
+	img, err := fetchImageCached(ctx, p.UserID, comic.imageURL, rc)
 	if err != nil {
-		img, err = fetchImage(ctx, comic.imageURL)
-		if err != nil {
-			return nil, fmt.Errorf("fetching xkcd image: %w", err)
-		}
+		return nil, fmt.Errorf("fetching xkcd image: %w", err)
 	}
 
 	font := demy.MustLoadFontBytes("sans", goregular.TTF)
@@ -63,6 +62,14 @@ type xkcdComic struct {
 	imageURL string
 }
 
+// xkcdMeta is the JSON-serializable form of xkcdComic for the resource cache.
+type xkcdMeta struct {
+	Title    string `json:"title"`
+	AltText  string `json:"alt_text"`
+	ComicNum string `json:"comic_num"`
+	ImageURL string `json:"image_url"`
+}
+
 type atomFeed struct {
 	Entries []atomEntry `xml:"entry"`
 }
@@ -81,6 +88,44 @@ var (
 	reSrc   = regexp.MustCompile(`src="([^"]*)"`)
 	reTitle = regexp.MustCompile(`title="([^"]*)"`)
 )
+
+func fetchXKCDComicCached(ctx context.Context, userID string, rc plugin.ResourceCache) (*xkcdComic, error) {
+	const metaURL = "xkcd-meta"
+
+	if rc != nil {
+		data, _, ok, err := rc.Get(ctx, userID, metaURL)
+		if err == nil && ok && len(data) > 0 {
+			var m xkcdMeta
+			if json.Unmarshal(data, &m) == nil {
+				return &xkcdComic{
+					title:    m.Title,
+					altText:  m.AltText,
+					comicNum: m.ComicNum,
+					imageURL: m.ImageURL,
+				}, nil
+			}
+		}
+	}
+
+	comic, err := fetchXKCDComic(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if rc != nil {
+		m := xkcdMeta{
+			Title:    comic.title,
+			AltText:  comic.altText,
+			ComicNum: comic.comicNum,
+			ImageURL: comic.imageURL,
+		}
+		if data, err := json.Marshal(m); err == nil {
+			_ = rc.Set(ctx, userID, metaURL, data, "application/json", xkcdCacheTTL)
+		}
+	}
+
+	return comic, nil
+}
 
 func fetchXKCDComic(ctx context.Context) (*xkcdComic, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://xkcd.com/atom.xml", nil)
@@ -131,24 +176,63 @@ func fetchXKCDComic(ctx context.Context) (*xkcdComic, error) {
 	}, nil
 }
 
-func fetchImage(ctx context.Context, url string) (image.Image, error) {
+func fetchImageCached(ctx context.Context, userID, url string, rc plugin.ResourceCache) (image.Image, error) {
+	// Try retina URL first.
+	retinaURL := strings.Replace(url, ".png", "_2x.png", 1)
+
+	if rc != nil {
+		if data, _, ok, err := rc.Get(ctx, userID, retinaURL); err == nil && ok {
+			if img, _, err := image.Decode(bytes.NewReader(data)); err == nil {
+				return img, nil
+			}
+		}
+		if data, _, ok, err := rc.Get(ctx, userID, url); err == nil && ok {
+			if img, _, err := image.Decode(bytes.NewReader(data)); err == nil {
+				return img, nil
+			}
+		}
+	}
+
+	img, rawData, err := fetchImageWithBytes(ctx, retinaURL)
+	if err != nil {
+		img, rawData, err = fetchImageWithBytes(ctx, url)
+		if err != nil {
+			return nil, err
+		}
+		if rc != nil {
+			_ = rc.Set(ctx, userID, url, rawData, "image/png", xkcdCacheTTL)
+		}
+		return img, nil
+	}
+
+	if rc != nil {
+		_ = rc.Set(ctx, userID, retinaURL, rawData, "image/png", xkcdCacheTTL)
+	}
+	return img, nil
+}
+
+func fetchImageWithBytes(ctx context.Context, url string) (image.Image, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("building image request: %w", err)
+		return nil, nil, fmt.Errorf("building image request: %w", err)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("image request returned status %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("image request returned status %d", resp.StatusCode)
 	}
-	img, _, err := image.Decode(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("decoding image: %w", err)
+		return nil, nil, fmt.Errorf("reading image body: %w", err)
 	}
-	return img, nil
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, nil, fmt.Errorf("decoding image: %w", err)
+	}
+	return img, data, nil
 }
 
 const xkcdTemplate = `<scene>
@@ -198,7 +282,7 @@ func renderXKCD(w io.Writer, comic *xkcdComic, cfg demy.Config) error {
 		return fmt.Errorf("creating canvas: %w", err)
 	}
 
-	outImg, err := c.Render(root, effectiveColorMode(cfg))
+	outImg, err := c.Render(root, plugin.EffectiveColorMode(cfg))
 	if err != nil {
 		return fmt.Errorf("rendering canvas: %w", err)
 	}

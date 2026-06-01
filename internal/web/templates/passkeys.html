@@ -1,0 +1,35 @@
+{{template "base" .}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Passkeys</h1>
+  <a href="/settings" class="btn btn-secondary">Back to Settings</a>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Created</th>
+      <th>Last Used</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Data}}
+    <tr>
+      <td>{{if .Name}}{{.Name}}{{else}}<span class="text-muted">Unnamed</span>{{end}}</td>
+      <td class="text-muted">{{.CreatedAt.Format "2006-01-02"}}</td>
+      <td class="text-muted">{{if .LastUsedAt.IsZero}}Never{{else}}{{.LastUsedAt.Format "2006-01-02"}}{{end}}</td>
+      <td>
+        <form method="POST" action="/settings/passkeys/{{.ID}}/delete"
+              onsubmit="return confirm('Delete this passkey?')">
+          <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {{else}}
+    <tr><td colspan="4" class="text-muted">No passkeys registered.</td></tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}

@@ -1,0 +1,46 @@
+{{define "base"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{.Title}} — Quoin</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-brand">Quoin</div>
+    <ul class="sidebar-nav">
+      <li><a href="/">Dashboard</a></li>
+      <li><a href="/devices">Devices</a></li>
+      <li><a href="/plugins">My Plugins</a></li>
+      <li><a href="/library">Library</a></li>
+      <li><a href="/settings">Settings</a></li>
+      {{if .User}}{{if .User.IsAdmin}}
+      <li><a href="/admin/library">Admin: Library</a></li>
+      <li><a href="/admin/users">Admin: Users</a></li>
+      {{end}}{{end}}
+    </ul>
+    <div class="sidebar-footer">
+      {{if .User}}
+      <div>{{.User.DisplayName}}</div>
+      <form method="POST" action="/auth/logout" style="margin-top:0.5rem;">
+        <button class="btn btn-secondary btn-sm" type="submit">Sign out</button>
+      </form>
+      {{end}}
+    </div>
+  </aside>
+  <main class="main">
+    {{if .Flash}}<div class="alert alert-success">{{.Flash}}</div>{{end}}
+    {{if .Errors}}
+    <div class="alert alert-error">
+      {{range .Errors}}<div>{{.}}</div>{{end}}
+    </div>
+    {{end}}
+    {{block "content" .}}{{end}}
+  </main>
+</div>
+</body>
+</html>
+{{end}}

@@ -1,8 +1,10 @@
-package main
+// Package builtin provides PluginRenderer implementations for the built-in Quoin plugins.
+package builtin
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"image/png"
@@ -13,53 +15,53 @@ import (
 
 	ha "github.com/mkelcik/go-ha-client/v2"
 	"github.com/samuel/demy"
+	"github.com/samuel/demy/internal/model"
+	"github.com/samuel/demy/internal/plugin"
 	"github.com/samuel/demy/scene/xmlscene"
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/goregular"
 )
 
-// WeatherPlugin implements Plugin for the Home Assistant weather screen.
-type WeatherPlugin struct {
-	hassURL    string
-	hassToken  string
-	hassEntity string
-	location   string
-	units      string // "imperial", "metric", or "" (use HA native)
-	loc        *time.Location
-}
+// WeatherRenderer implements plugin.PluginRenderer for the Home Assistant weather plugin.
+type WeatherRenderer struct{}
 
-func newWeatherPlugin(ha HAConfig, loc *time.Location, cfg map[string]any) (*WeatherPlugin, error) {
-	entity, _ := cfg["entity"].(string)
-	if entity == "" {
-		entity = "weather.home"
+// Render fetches weather data from Home Assistant and renders it to PNG bytes.
+func (r *WeatherRenderer) Render(ctx context.Context, cfg demy.Config, p *model.UserPlugin, _ plugin.ResourceCache) ([]byte, error) {
+	var pcfg weatherPluginConfig
+	if p.Config != "" {
+		if err := json.Unmarshal([]byte(p.Config), &pcfg); err != nil {
+			return nil, fmt.Errorf("weather: parsing plugin config: %w", err)
+		}
 	}
-	location, _ := cfg["location"].(string)
-	units, _ := cfg["units"].(string)
-	return &WeatherPlugin{
-		hassURL:    ha.URL,
-		hassToken:  ha.Token,
-		hassEntity: entity,
-		location:   location,
-		units:      units,
-		loc:        loc,
-	}, nil
-}
+	if pcfg.Entity == "" {
+		pcfg.Entity = "weather.home"
+	}
 
-func (p *WeatherPlugin) Render(ctx context.Context, cfg demy.Config) ([]byte, error) {
-	data, err := fetchWeatherFromHA(ctx, p.hassURL, p.hassToken, p.hassEntity, p.units)
+	data, err := fetchWeatherFromHA(ctx, pcfg.HAURL, pcfg.HAToken, pcfg.Entity, pcfg.Units)
 	if err != nil {
 		return nil, err
 	}
+
 	font := demy.MustLoadFontBytes("sans", goregular.TTF)
 	if err := font.AddStyle(gobold.TTF, demy.FontBold); err != nil {
-		return nil, fmt.Errorf("loading bold font: %w", err)
+		return nil, fmt.Errorf("weather: loading bold font: %w", err)
 	}
 	cfg.Fonts = map[string]*demy.FontFamily{"sans": font}
+
+	loc := time.UTC
 	var buf bytes.Buffer
-	if err := renderWeather(&buf, data, p.location, p.loc, cfg); err != nil {
+	if err := renderWeather(&buf, data, pcfg.Location, loc, cfg); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+type weatherPluginConfig struct {
+	HAURL    string `json:"ha_url"`
+	HAToken  string `json:"ha_token"`
+	Entity   string `json:"entity"`
+	Location string `json:"location"`
+	Units    string `json:"units"`
 }
 
 // xmlEsc escapes s for safe embedding in XML text content.
@@ -237,7 +239,7 @@ func renderWeather(w io.Writer, data *weatherData, location string, loc *time.Lo
 		return fmt.Errorf("creating canvas: %w", err)
 	}
 
-	outImg, err := c.Render(root, effectiveColorMode(cfg))
+	outImg, err := c.Render(root, plugin.EffectiveColorMode(cfg))
 	if err != nil {
 		return fmt.Errorf("rendering canvas: %w", err)
 	}

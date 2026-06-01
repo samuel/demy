@@ -1,0 +1,36 @@
+{{template "base" .}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Admin: Plugin Library</h1>
+  <a href="/admin/library/new" class="btn btn-primary">New Plugin</a>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Slug</th>
+      <th>Type</th>
+      <th>Active</th>
+      <th>Sort</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Data}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td class="text-muted">{{.Slug}}</td>
+      <td class="text-muted">{{.PluginType}}</td>
+      <td>{{if .IsActive}}Yes{{else}}No{{end}}</td>
+      <td class="text-muted">{{.SortOrder}}</td>
+      <td>
+        <a href="/admin/library/{{.ID}}/edit" class="btn btn-secondary btn-sm">Edit</a>
+      </td>
+    </tr>
+    {{else}}
+    <tr><td colspan="6" class="text-muted">No library plugins.</td></tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}

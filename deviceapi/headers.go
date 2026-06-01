@@ -104,7 +104,7 @@ func parseDeviceHeaders(r *http.Request) (DeviceHeaders, error) {
 		RSSI:               parseOptInt(r, HeaderRSSI),
 		Sensors:            r.Header.Get(HeaderSensors),
 		TemperatureProfile: parseOptBool(r, HeaderTemperatureProfile),
-		UpdateSource:       r.Header.Get(HeaderUpdateSource), // e.g. "timer", "button"
+		UpdateSource:       r.Header.Get(HeaderUpdateSource), // e.g. "timer", "button", "powercycle"
 		UserAgent:          r.Header.Get(HeaderUserAgent),
 		Width:              parseOptInt(r, HeaderWidth),
 

@@ -1,4 +1,4 @@
-package main
+package builtin
 
 import (
 	"bytes"
@@ -6,20 +6,18 @@ import (
 	"fmt"
 	"image/color"
 	"image/png"
-	"time"
 
 	"github.com/samuel/demy"
+	"github.com/samuel/demy/internal/model"
+	"github.com/samuel/demy/internal/plugin"
 	"golang.org/x/image/font/gofont/goregular"
 )
 
-// GrayscalePlugin renders a 16-square test pattern covering the 4-bit gray palette.
-type GrayscalePlugin struct{}
+// GrayscaleRenderer renders a 16-square test pattern covering the 4-bit gray palette.
+type GrayscaleRenderer struct{}
 
-func newGrayscalePlugin(_ HAConfig, _ *time.Location, _ map[string]any) (*GrayscalePlugin, error) {
-	return &GrayscalePlugin{}, nil
-}
-
-func (p *GrayscalePlugin) Render(_ context.Context, cfg demy.Config) ([]byte, error) {
+// Render renders the grayscale test pattern to PNG bytes.
+func (r *GrayscaleRenderer) Render(_ context.Context, cfg demy.Config, _ *model.UserPlugin, _ plugin.ResourceCache) ([]byte, error) {
 	font := demy.MustLoadFontBytes("sans", goregular.TTF)
 	cfg.Fonts = map[string]*demy.FontFamily{"sans": font}
 
@@ -28,7 +26,7 @@ func (p *GrayscalePlugin) Render(_ context.Context, cfg demy.Config) ([]byte, er
 		return nil, fmt.Errorf("creating canvas: %w", err)
 	}
 
-	outImg, err := c.Render(buildGrayscaleScene(), effectiveColorMode(cfg), demy.Atkinson)
+	outImg, err := c.Render(buildGrayscaleScene(), plugin.EffectiveColorMode(cfg), demy.Atkinson)
 	if err != nil {
 		return nil, fmt.Errorf("rendering grayscale: %w", err)
 	}

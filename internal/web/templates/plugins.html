@@ -1,0 +1,30 @@
+{{template "base" .}}
+{{define "content"}}
+<div class="page-header">
+  <h1>My Plugins</h1>
+  <div class="flex gap-1">
+    <a href="/library" class="btn btn-secondary">Browse Library</a>
+    <a href="/plugins/new" class="btn btn-primary">Add Plugin</a>
+  </div>
+</div>
+
+{{if .Data}}
+<div class="card-grid">
+  {{range .Data}}
+  <div class="card">
+    <h2>{{.Name}}</h2>
+    <p class="text-muted">{{.PluginType}}</p>
+    <div class="flex gap-1">
+      <a href="/plugins/{{.ID}}" class="btn btn-secondary btn-sm">Configure</a>
+      <a href="/plugins/{{.ID}}/preview" class="btn btn-secondary btn-sm">Preview</a>
+    </div>
+  </div>
+  {{end}}
+</div>
+{{else}}
+<div class="card" style="text-align:center;padding:2rem;">
+  <p>No plugins installed yet.</p>
+  <a href="/library" class="btn btn-primary mt-2">Browse Library</a>
+</div>
+{{end}}
+{{end}}

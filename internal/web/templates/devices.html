@@ -1,0 +1,39 @@
+{{template "base" .}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Devices</h1>
+  <a href="/devices/new" class="btn btn-primary">Add Device</a>
+</div>
+
+{{if .Data}}
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>MAC Address</th>
+      <th>Refresh Rate</th>
+      <th>Last Seen</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Data}}
+    <tr>
+      <td><a href="/devices/{{.ID}}">{{.Name}}</a></td>
+      <td class="text-muted">{{.MACAddress}}</td>
+      <td class="text-muted">{{.RefreshRate}}s</td>
+      <td class="text-muted">{{if .LastSeenAt.IsZero}}Never{{else}}{{.LastSeenAt.Format "2006-01-02 15:04"}}{{end}}</td>
+      <td>
+        <a href="/devices/{{.ID}}" class="btn btn-secondary btn-sm">Manage</a>
+      </td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="card" style="text-align:center;padding:2rem;">
+  <p>No devices yet.</p>
+  <a href="/devices/new" class="btn btn-primary mt-2">Add Your First Device</a>
+</div>
+{{end}}
+{{end}}

@@ -1,0 +1,25 @@
+{{template "base" .}}
+{{define "content"}}
+<div class="page-header">
+  <h1>{{.Data.Name}}</h1>
+  <form method="POST" action="/library/{{.Data.Slug}}/clone">
+    <button type="submit" class="btn btn-primary">Install Plugin</button>
+  </form>
+</div>
+
+<div class="card" style="max-width:640px;">
+  {{if .Data.Thumbnail}}
+  <img src="{{.Data.Thumbnail}}" alt="" style="width:100%;max-height:200px;object-fit:cover;border-radius:4px;margin-bottom:1rem;">
+  {{end}}
+  <p>{{.Data.Description}}</p>
+  <table class="mt-2" style="border:none;">
+    <tr><th>Type</th><td>{{.Data.PluginType}}</td></tr>
+    <tr><th>Slug</th><td>{{.Data.Slug}}</td></tr>
+    <tr><th>Updated</th><td>{{.Data.UpdatedAt.Format "2006-01-02"}}</td></tr>
+  </table>
+</div>
+
+<div class="mt-2">
+  <a href="/library" class="btn btn-secondary">Back to Library</a>
+</div>
+{{end}}

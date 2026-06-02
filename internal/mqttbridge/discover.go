@@ -1,6 +1,7 @@
 package mqttbridge
 
 import (
+	"github.com/samuel/demy/deviceapi"
 	"github.com/samuel/demy/internal/model"
 )
 
@@ -49,15 +50,17 @@ type hassSelectConfig struct {
 	Device              hassDevice `json:"device"`
 }
 
-// publishDiscovery publishes HASS MQTT discovery configs for all entities of a device.
-// pluginNames is the ordered list of plugin names in the device's playlist; pass nil to
-// skip publishing the select entity (e.g. on first-seen before playlist is set up).
-func (b *Bridge) publishDiscovery(d *model.Device, pluginNames []string) {
+// publishDiscovery publishes HASS MQTT discovery configs for the entities of a
+// device that are backed by actual header data. h may be nil (e.g. first-seen
+// before any poll has occurred), in which case only the connectivity sensor and
+// the plugin select entity are published. pluginNames is the ordered list of
+// plugin names in the device's playlist; pass nil to skip the select entity.
+func (b *Bridge) publishDiscovery(d *model.Device, h *deviceapi.DeviceHeaders, pluginNames []string) {
 	mac := normMAC(d.MACAddress)
 	avail := b.deviceTopic(mac, "availability")
 	dev := b.hassDevice(d)
 
-	// Connectivity binary sensor — uses the device availability topic as its state.
+	// Connectivity binary sensor — always publish; uses the availability topic as its state.
 	b.publishJSON(b.discoveryTopic("binary_sensor", mac, "connectivity"), hassBinarySensorConfig{
 		Name:        "Online",
 		UniqueID:    "quoin_" + mac + "_connectivity",
@@ -67,6 +70,13 @@ func (b *Bridge) publishDiscovery(d *model.Device, pluginNames []string) {
 		DeviceClass: "connectivity",
 		Device:      dev,
 	}, true)
+
+	if h == nil {
+		if pluginNames != nil {
+			b.publishPluginSelect(mac, avail, dev, pluginNames)
+		}
+		return
+	}
 
 	precision := func(n int) *int { return &n }
 
@@ -85,71 +95,85 @@ func (b *Bridge) publishDiscovery(d *model.Device, pluginNames []string) {
 		}, true)
 	}
 
-	sensor("battery_percent", "Battery", "battery/percent", "battery", "%", nil)
-	sensor("battery_voltage", "Battery Voltage", "battery/voltage", "voltage", "V", precision(3))
-	sensor("battery_current", "Battery Current", "battery/current", "current", "mA", nil)
-	sensor("battery_temperature", "Battery Temperature", "battery/temperature", "temperature", "°C", precision(1))
-	sensor("battery_count", "Battery Count", "battery/count", "", "", nil)
-	sensor("battery_capacity_current", "Battery Capacity", "battery/capacity_current", "", "mAh", nil)
-	sensor("battery_capacity_max", "Battery Capacity Max", "battery/capacity_max", "", "mAh", nil)
-	sensor("rssi", "WiFi Signal", "rssi", "signal_strength", "dBm", nil)
-	sensor("firmware", "Firmware", "firmware", "", "", nil)
-	sensor("wake_reason", "Last Wake Reason", "wake_reason", "", "", nil)
-	sensor("temp_profile", "Temperature Profile", "temp_profile", "", "", nil)
-	sensor("wake_time", "Wake Time", "wake_time", "duration", "ms", nil)
-
-	// Charging binary sensor.
-	b.publishJSON(b.discoveryTopic("binary_sensor", mac, "charging"), hassBinarySensorConfig{
-		Name:              "Charging",
-		UniqueID:          "quoin_" + mac + "_charging",
-		StateTopic:        b.deviceTopic(mac, "battery/charging"),
-		PayloadOn:         "true",
-		PayloadOff:        "false",
-		DeviceClass:       "battery_charging",
-		AvailabilityTopic: avail,
-		PayloadAvailable:  "online",
-		Device:            dev,
-	}, true)
-
-	// USB connected binary sensor.
-	b.publishJSON(b.discoveryTopic("binary_sensor", mac, "usb_connected"), hassBinarySensorConfig{
-		Name:              "USB Connected",
-		UniqueID:          "quoin_" + mac + "_usb_connected",
-		StateTopic:        b.deviceTopic(mac, "usb_connected"),
-		PayloadOn:         "true",
-		PayloadOff:        "false",
-		DeviceClass:       "plug",
-		AvailabilityTopic: avail,
-		PayloadAvailable:  "online",
-		Device:            dev,
-	}, true)
-
-	// Image cached binary sensor.
-	b.publishJSON(b.discoveryTopic("binary_sensor", mac, "image_cached"), hassBinarySensorConfig{
-		Name:              "Image Cached",
-		UniqueID:          "quoin_" + mac + "_image_cached",
-		StateTopic:        b.deviceTopic(mac, "image_cached"),
-		PayloadOn:         "true",
-		PayloadOff:        "false",
-		AvailabilityTopic: avail,
-		PayloadAvailable:  "online",
-		Device:            dev,
-	}, true)
-
-	// Active plugin select entity.
-	if pluginNames != nil {
-		b.publishJSON(b.discoveryTopic("select", mac, "plugin"), hassSelectConfig{
-			Name:                "Active Plugin",
-			UniqueID:            "quoin_" + mac + "_plugin",
-			StateTopic:          b.deviceTopic(mac, "plugin/state"),
-			CommandTopic:        b.deviceTopic(mac, "plugin/set"),
-			AvailabilityTopic:   avail,
-			PayloadAvailable:    "online",
-			PayloadNotAvailable: "offline",
-			Options:             pluginNames,
-			Device:              dev,
+	binarySensor := func(slug, name, stateTopic, deviceClass string) {
+		b.publishJSON(b.discoveryTopic("binary_sensor", mac, slug), hassBinarySensorConfig{
+			Name:              name,
+			UniqueID:          "quoin_" + mac + "_" + slug,
+			StateTopic:        b.deviceTopic(mac, stateTopic),
+			PayloadOn:         "true",
+			PayloadOff:        "false",
+			DeviceClass:       deviceClass,
+			AvailabilityTopic: avail,
+			PayloadAvailable:  "online",
+			Device:            dev,
 		}, true)
 	}
+
+	if h.PercentCharged != nil || h.BatteryVoltage != nil {
+		sensor("battery_percent", "Battery", "battery/percent", "battery", "%", nil)
+	}
+	if h.BatteryVoltage != nil {
+		sensor("battery_voltage", "Battery Voltage", "battery/voltage", "voltage", "V", precision(3))
+	}
+	if h.RSSI != nil {
+		sensor("rssi", "WiFi Signal", "rssi", "signal_strength", "dBm", nil)
+	}
+	if h.FWVersion != "" {
+		sensor("firmware", "Firmware", "firmware", "", "", nil)
+	}
+	if h.UpdateSource != "" {
+		sensor("wake_reason", "Last Wake Reason", "wake_reason", "", "", nil)
+	}
+	if h.TemperatureProfile != "" {
+		sensor("temp_profile", "Temperature Profile", "temp_profile", "", "", nil)
+	}
+	if h.WakeTime != nil {
+		sensor("wake_time", "Wake Time", "wake_time", "duration", "ms", nil)
+	}
+	if h.ImageCached != nil {
+		binarySensor("image_cached", "Image Cached", "image_cached", "")
+	}
+
+	// TRMNL X only sensors.
+	if h.BatteryCurrent != nil {
+		sensor("battery_current", "Battery Current", "battery/current", "current", "mA", nil)
+	}
+	if h.BatteryTemperature != nil {
+		sensor("battery_temperature", "Battery Temperature", "battery/temperature", "temperature", "°C", precision(1))
+	}
+	if h.BatteryCount != nil {
+		sensor("battery_count", "Battery Count", "battery/count", "", "", nil)
+	}
+	if h.CurrentBatteryCapacity != nil {
+		sensor("battery_capacity_current", "Battery Capacity", "battery/capacity_current", "", "mAh", nil)
+	}
+	if h.MaxBatteryCapacity != nil {
+		sensor("battery_capacity_max", "Battery Capacity Max", "battery/capacity_max", "", "mAh", nil)
+	}
+	if h.BatteryCharging != nil {
+		binarySensor("charging", "Charging", "battery/charging", "battery_charging")
+	}
+	if h.UsbConnected != nil {
+		binarySensor("usb_connected", "USB Connected", "usb_connected", "plug")
+	}
+
+	if pluginNames != nil {
+		b.publishPluginSelect(mac, avail, dev, pluginNames)
+	}
+}
+
+func (b *Bridge) publishPluginSelect(mac, avail string, dev hassDevice, pluginNames []string) {
+	b.publishJSON(b.discoveryTopic("select", mac, "plugin"), hassSelectConfig{
+		Name:                "Active Plugin",
+		UniqueID:            "quoin_" + mac + "_plugin",
+		StateTopic:          b.deviceTopic(mac, "plugin/state"),
+		CommandTopic:        b.deviceTopic(mac, "plugin/set"),
+		AvailabilityTopic:   avail,
+		PayloadAvailable:    "online",
+		PayloadNotAvailable: "offline",
+		Options:             pluginNames,
+		Device:              dev,
+	}, true)
 }
 
 func (b *Bridge) hassDevice(d *model.Device) hassDevice {

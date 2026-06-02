@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -311,8 +310,14 @@ func newImageStore() *imageStore {
 
 func (s *imageStore) put(deviceID, filename string, data []byte) {
 	key := deviceID + "/" + filename
+	newExpiry := time.Now().Add(30 * time.Minute)
 	s.mu.Lock()
-	s.images[key] = imageEntry{data: data, expiresAt: time.Now().Add(30 * time.Minute)}
+	if e, ok := s.images[key]; ok {
+		e.expiresAt = newExpiry
+		s.images[key] = e
+	} else {
+		s.images[key] = imageEntry{data: data, expiresAt: newExpiry}
+	}
 	s.mu.Unlock()
 }
 
@@ -339,22 +344,18 @@ func (s *imageStore) evict() {
 }
 
 // signImageURL builds and signs an image URL using the device's API key.
+// The URL has no expiry parameter; server-side imageStore eviction bounds URL lifetime.
 func signImageURL(baseURL, deviceID, filename, apiKey string) string {
-	exp := strconv.FormatInt(time.Now().Add(35*time.Minute).Unix(), 10)
-	msg := deviceID + "\n" + filename + "\n" + exp
+	msg := deviceID + "\n" + filename
 	mac := hmac.New(sha256.New, []byte(apiKey))
 	mac.Write([]byte(msg))
 	sig := hex.EncodeToString(mac.Sum(nil))
-	return fmt.Sprintf("%s/image/%s/%s?sig=%s&exp=%s", baseURL, deviceID, filename, sig, exp)
+	return fmt.Sprintf("%s/image/%s/%s?sig=%s", baseURL, deviceID, filename, sig)
 }
 
-// verifyImageURL checks sig and exp query params against the device's API key.
-func verifyImageURL(deviceID, filename, apiKey, sig, exp string) bool {
-	expI, err := strconv.ParseInt(exp, 10, 64)
-	if err != nil || time.Now().Unix() > expI {
-		return false
-	}
-	msg := deviceID + "\n" + filename + "\n" + exp
+// verifyImageURL checks the sig query param against the device's API key.
+func verifyImageURL(deviceID, filename, apiKey, sig string) bool {
+	msg := deviceID + "\n" + filename
 	mac := hmac.New(sha256.New, []byte(apiKey))
 	mac.Write([]byte(msg))
 	expected := hex.EncodeToString(mac.Sum(nil))
@@ -450,7 +451,7 @@ func makeDisplayHandler(
 			return deviceapi.DisplayResponse{}, fmt.Errorf("loading plugin: %w", err)
 		}
 
-		pngBytes, renderedAt, err := engine.Render(ctx, p, demyCfg, rc, loc)
+		pngBytes, _, err := engine.Render(ctx, p, demyCfg, rc, loc)
 		if err != nil {
 			return deviceapi.DisplayResponse{}, fmt.Errorf("rendering plugin: %w", err)
 		}
@@ -466,7 +467,7 @@ func makeDisplayHandler(
 				slug = lp.Slug
 			}
 		}
-		filename := plugin.RenderedFilename(slug, renderedAt)
+		filename := plugin.RenderedFilename(slug, pngBytes)
 
 		imgStore.put(d.ID, filename, pngBytes)
 
@@ -532,16 +533,9 @@ func makeImageHandler(store model.Store, imgStore *imageStore) http.HandlerFunc 
 		deviceID := r.PathValue("deviceID")
 		filename := r.PathValue("filename")
 		sig := r.URL.Query().Get("sig")
-		exp := r.URL.Query().Get("exp")
 
-		if sig == "" || exp == "" {
-			http.Error(w, "missing sig or exp", http.StatusBadRequest)
-			return
-		}
-
-		expI, err := strconv.ParseInt(exp, 10, 64)
-		if err != nil || time.Now().Unix() > expI {
-			http.Error(w, "URL expired", http.StatusForbidden)
+		if sig == "" {
+			http.Error(w, "missing sig", http.StatusBadRequest)
 			return
 		}
 
@@ -551,7 +545,7 @@ func makeImageHandler(store model.Store, imgStore *imageStore) http.HandlerFunc 
 			return
 		}
 
-		if !verifyImageURL(deviceID, filename, d.APIKey, sig, exp) {
+		if !verifyImageURL(deviceID, filename, d.APIKey, sig) {
 			http.Error(w, "invalid signature", http.StatusForbidden)
 			return
 		}

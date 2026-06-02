@@ -15,14 +15,15 @@ const (
 	HeaderFWVersion          = "Fw-Version"
 	HeaderHeight             = "Height"
 	HeaderID                 = "Id"
+	HeaderImageCached        = "Image-Cached"
 	HeaderModel              = "Model"
-	HeaderPercentCharged     = "Percent-Charged"
 	HeaderRSSI               = "Rssi"
 	HeaderRefreshRate        = "Refresh-Rate"
 	HeaderSensors            = "Sensors"
 	HeaderTemperatureProfile = "Temperature-Profile"
 	HeaderUpdateSource       = "Update-Source"
 	HeaderUserAgent          = "User-Agent"
+	HeaderWakeTime           = "Wake-Time"
 	HeaderWidth              = "Width"
 
 	// TRMNL X only
@@ -33,8 +34,7 @@ const (
 	HeaderBatteryHealth      = "Battery-Health"
 	HeaderBatteryTemperature = "Battery-Temp"
 	HeaderBatteryCapacity    = "Battery-Capacity"
-	HeaderWakeTime           = "Wake-Time"
-	HeaderImageCached        = "Image-Cached"
+	HeaderPercentCharged     = "Percent-Charged"
 	HeaderUsbConnected       = "Usb-Connected"
 )
 
@@ -99,14 +99,15 @@ func parseDeviceHeaders(r *http.Request) (DeviceHeaders, error) {
 		FWVersion:          r.Header.Get(HeaderFWVersion),
 		Height:             parseOptInt(r, HeaderHeight),
 		Host:               r.Host,
+		ImageCached:        parseOptBool(r, HeaderImageCached),
 		Model:              r.Header.Get(HeaderModel),
-		PercentCharged:     parseOptInt(r, HeaderPercentCharged),
 		RefreshRate:        parseOptInt(r, HeaderRefreshRate),
 		RSSI:               parseOptInt(r, HeaderRSSI),
 		Sensors:            r.Header.Get(HeaderSensors),
 		TemperatureProfile: TemperatureProfile(r.Header.Get(HeaderTemperatureProfile)),
 		UpdateSource:       r.Header.Get(HeaderUpdateSource), // e.g. "timer", "button", "powercycle", "timer"
 		UserAgent:          r.Header.Get(HeaderUserAgent),
+		WakeTime:           parseOptInt(r, HeaderWakeTime),
 		Width:              parseOptInt(r, HeaderWidth),
 
 		BatteryCount:           parseOptInt(r, HeaderBatteryCount),
@@ -116,8 +117,7 @@ func parseDeviceHeaders(r *http.Request) (DeviceHeaders, error) {
 		BatteryTemperature:     parseOptFloat(r, HeaderBatteryTemperature),
 		CurrentBatteryCapacity: currentBatteryCapacity,
 		MaxBatteryCapacity:     maxBatteryCapacity,
-		WakeTime:               parseOptInt(r, HeaderWakeTime),
-		ImageCached:            parseOptBool(r, HeaderImageCached),
+		PercentCharged:         parseOptInt(r, HeaderPercentCharged),
 		UsbConnected:           parseOptBool(r, HeaderUsbConnected),
 	}, nil
 }

@@ -159,9 +159,11 @@ func cacheFingerprint(userPluginID string, w, h int, mode demy.ColorMode, tz str
 	return hex.EncodeToString(sum[:])
 }
 
-// RenderedFilename builds a stable filename for a plugin render timestamp.
-func RenderedFilename(slug string, t time.Time) string {
-	return fmt.Sprintf("%s-%s.png", slug, t.UTC().Format("20060102T150405Z"))
+// RenderedFilename builds a content-addressed filename from the PNG bytes.
+// Identical renders produce identical filenames, enabling device-side URL caching.
+func RenderedFilename(slug string, data []byte) string {
+	h := sha256.Sum256(data)
+	return slug + "-" + hex.EncodeToString(h[:12]) + ".png"
 }
 
 // --- Canvas config ---

@@ -138,6 +138,10 @@ func (b *Bridge) Close() {
 func (b *Bridge) PublishDeviceState(ctx context.Context, d *model.Device, h deviceapi.DeviceHeaders, currentPluginName string) {
 	mac := normMAC(d.MACAddress)
 
+	// Ensure discovery configs reflect the headers this device actually provides.
+	// Pass nil pluginNames so the select entity is not updated from the per-poll path.
+	b.publishDiscovery(d, &h, nil)
+
 	b.publish(b.deviceTopic(mac, "availability"), "online", true)
 
 	if h.PercentCharged != nil {
@@ -225,7 +229,7 @@ func (b *Bridge) NotifyPlaylistChanged(ctx context.Context, deviceID string) {
 		return
 	}
 	names := b.pluginNames(ctx, items)
-	b.publishDiscovery(d, names)
+	b.publishDiscovery(d, parseLastHeaders(d), names)
 	mac := normMAC(d.MACAddress)
 	if j, err := json.Marshal(names); err == nil {
 		b.publish(b.deviceTopic(mac, "plugin/options"), string(j), true)
@@ -250,7 +254,7 @@ func (b *Bridge) publishAllDiscovery() {
 		if err != nil {
 			slog.Warn("mqttbridge: publishAllDiscovery: list playlist", "err", err, "device_id", d.ID)
 		}
-		b.publishDiscovery(d, b.pluginNames(ctx, items))
+		b.publishDiscovery(d, parseLastHeaders(d), b.pluginNames(ctx, items))
 		b.publishDeviceStateFromStore(ctx, d)
 	}
 }
@@ -306,6 +310,19 @@ func (b *Bridge) pluginNames(ctx context.Context, items []*model.PlaylistItem) [
 	return names
 }
 
+// parseLastHeaders unmarshals d.LastHeaders JSON and returns a pointer to the
+// result, or nil if the field is empty or cannot be parsed.
+func parseLastHeaders(d *model.Device) *deviceapi.DeviceHeaders {
+	if d.LastHeaders == "" {
+		return nil
+	}
+	var h deviceapi.DeviceHeaders
+	if err := json.Unmarshal([]byte(d.LastHeaders), &h); err != nil {
+		return nil
+	}
+	return &h
+}
+
 // publishDeviceStateFromStore loads the device's last headers and publishes state.
 func (b *Bridge) publishDeviceStateFromStore(ctx context.Context, d *model.Device) {
 	mac := normMAC(d.MACAddress)
@@ -321,13 +338,11 @@ func (b *Bridge) publishDeviceStateFromStore(ctx context.Context, d *model.Devic
 	}
 	b.publish(b.deviceTopic(mac, "availability"), avail, true)
 
-	if d.LastHeaders == "" {
+	hp := parseLastHeaders(d)
+	if hp == nil {
 		return
 	}
-	var h deviceapi.DeviceHeaders
-	if err := json.Unmarshal([]byte(d.LastHeaders), &h); err != nil {
-		return
-	}
+	h := *hp
 
 	// Look up current plugin name.
 	items, err := b.store.ListPlaylistItems(ctx, d.ID)

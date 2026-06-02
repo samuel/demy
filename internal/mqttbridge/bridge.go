@@ -192,6 +192,23 @@ func (b *Bridge) PublishDeviceState(ctx context.Context, d *model.Device, h devi
 	if currentPluginName != "" {
 		b.publish(b.deviceTopic(mac, "plugin/state"), currentPluginName, true)
 	}
+	if h.WakeTime != nil {
+		b.publish(b.deviceTopic(mac, "wake_time"), fmt.Sprintf("%d", *h.WakeTime), true)
+	}
+	if h.ImageCached != nil {
+		val := "false"
+		if *h.ImageCached {
+			val = "true"
+		}
+		b.publish(b.deviceTopic(mac, "image_cached"), val, true)
+	}
+	if h.UsbConnected != nil {
+		val := "false"
+		if *h.UsbConnected {
+			val = "true"
+		}
+		b.publish(b.deviceTopic(mac, "usb_connected"), val, true)
+	}
 }
 
 // NotifyPlaylistChanged is called when a device's playlist is modified.

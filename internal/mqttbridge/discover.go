@@ -96,6 +96,7 @@ func (b *Bridge) publishDiscovery(d *model.Device, pluginNames []string) {
 	sensor("firmware", "Firmware", "firmware", "", "", nil)
 	sensor("wake_reason", "Last Wake Reason", "wake_reason", "", "", nil)
 	sensor("temp_profile", "Temperature Profile", "temp_profile", "", "", nil)
+	sensor("wake_time", "Wake Time", "wake_time", "duration", "ms", nil)
 
 	// Charging binary sensor.
 	b.publishJSON(b.discoveryTopic("binary_sensor", mac, "charging"), hassBinarySensorConfig{
@@ -105,6 +106,31 @@ func (b *Bridge) publishDiscovery(d *model.Device, pluginNames []string) {
 		PayloadOn:         "true",
 		PayloadOff:        "false",
 		DeviceClass:       "battery_charging",
+		AvailabilityTopic: avail,
+		PayloadAvailable:  "online",
+		Device:            dev,
+	}, true)
+
+	// USB connected binary sensor.
+	b.publishJSON(b.discoveryTopic("binary_sensor", mac, "usb_connected"), hassBinarySensorConfig{
+		Name:              "USB Connected",
+		UniqueID:          "quoin_" + mac + "_usb_connected",
+		StateTopic:        b.deviceTopic(mac, "usb_connected"),
+		PayloadOn:         "true",
+		PayloadOff:        "false",
+		DeviceClass:       "plug",
+		AvailabilityTopic: avail,
+		PayloadAvailable:  "online",
+		Device:            dev,
+	}, true)
+
+	// Image cached binary sensor.
+	b.publishJSON(b.discoveryTopic("binary_sensor", mac, "image_cached"), hassBinarySensorConfig{
+		Name:              "Image Cached",
+		UniqueID:          "quoin_" + mac + "_image_cached",
+		StateTopic:        b.deviceTopic(mac, "image_cached"),
+		PayloadOn:         "true",
+		PayloadOff:        "false",
 		AvailabilityTopic: avail,
 		PayloadAvailable:  "online",
 		Device:            dev,

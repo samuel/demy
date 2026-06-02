@@ -33,6 +33,9 @@ const (
 	HeaderBatteryHealth      = "Battery-Health"
 	HeaderBatteryTemperature = "Battery-Temp"
 	HeaderBatteryCapacity    = "Battery-Capacity"
+	HeaderWakeTime           = "Wake-Time"
+	HeaderImageCached        = "Image-Cached"
+	HeaderUsbConnected       = "Usb-Connected"
 )
 
 // DeviceHeaders holds the values parsed from device request headers.
@@ -44,25 +47,28 @@ type DeviceHeaders struct {
 	FWVersion          string
 	Height             *int
 	Host               string // from r.Host, not r.Header (standard HTTP Host)
+	ImageCached        *bool  // whether the device used a cached image this cycle
 	Model              string
-	PercentCharged     *int // prefer over BatteryVoltage when non-nil
 	RefreshRate        *int
 	RSSI               *int
 	Sensors            string
 	TemperatureProfile TemperatureProfile
 	UpdateSource       string
 	UserAgent          string
+	WakeTime           *int // total wake time of the last cycle in ms
 	Width              *int
 
 	// TRMNL X only
 
-	BatteryCount           *int
 	BatteryCharging        *bool
+	BatteryCount           *int
 	BatteryCurrent         *int
 	BatteryHealth          *int
 	BatteryTemperature     *float64
 	CurrentBatteryCapacity *int
 	MaxBatteryCapacity     *int
+	PercentCharged         *int // prefer over BatteryVoltage when non-nil
+	UsbConnected           *bool
 }
 
 var errMissingID = &headerError{"missing required ID header"}
@@ -99,7 +105,7 @@ func parseDeviceHeaders(r *http.Request) (DeviceHeaders, error) {
 		RSSI:               parseOptInt(r, HeaderRSSI),
 		Sensors:            r.Header.Get(HeaderSensors),
 		TemperatureProfile: TemperatureProfile(r.Header.Get(HeaderTemperatureProfile)),
-		UpdateSource:       r.Header.Get(HeaderUpdateSource), // e.g. "timer", "button", "powercycle"
+		UpdateSource:       r.Header.Get(HeaderUpdateSource), // e.g. "timer", "button", "powercycle", "timer"
 		UserAgent:          r.Header.Get(HeaderUserAgent),
 		Width:              parseOptInt(r, HeaderWidth),
 
@@ -110,6 +116,9 @@ func parseDeviceHeaders(r *http.Request) (DeviceHeaders, error) {
 		BatteryTemperature:     parseOptFloat(r, HeaderBatteryTemperature),
 		CurrentBatteryCapacity: currentBatteryCapacity,
 		MaxBatteryCapacity:     maxBatteryCapacity,
+		WakeTime:               parseOptInt(r, HeaderWakeTime),
+		ImageCached:            parseOptBool(r, HeaderImageCached),
+		UsbConnected:           parseOptBool(r, HeaderUsbConnected),
 	}, nil
 }
 

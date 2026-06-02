@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"image"
 	"image/png"
 	"io"
 	"log/slog"
@@ -102,7 +103,16 @@ const weatherTemplate = `<scene>
           <spacer weight="1"></spacer>
         </vstack>
       </hstack>
+      {{- if .ConditionIcon}}
+      <hstack gap="6" align="center">
+        <frame width="28" height="28">
+          <image key="{{.ConditionIcon}}" scale="fit" />
+        </frame>
+        <text font="sans" size="13" align="center">{{.Condition}}</text>
+      </hstack>
+      {{- else}}
       <text font="sans" size="13" align="center">{{.Condition}}</text>
+      {{- end}}
       <text class="sub">{{.FeelsLike}}</text>
       {{- if .HL}}
       <text class="sub">{{.HL}}</text>
@@ -146,6 +156,11 @@ const weatherTemplate = `<scene>
     {{- if $i}}<spacer weight="1"></spacer>{{end}}
     <vstack gap="3" align="center">
       <text class="forecast-day">{{$day.Day}}</text>
+      {{- if $day.Icon}}
+      <frame width="22" height="22">
+        <image key="{{$day.Icon}}" scale="fit" />
+      </frame>
+      {{- end}}
       <text class="forecast-high">{{$day.High}}</text>
       <text class="forecast-low">{{$day.Low}}</text>
     </vstack>
@@ -155,49 +170,58 @@ const weatherTemplate = `<scene>
 </scene>`
 
 type weatherTemplateData struct {
-	Location  string
-	Temp      string
-	TempUnit  string
-	Condition string
-	FeelsLike string
-	HL        string
-	Humidity  string
-	Wind      string
-	UVIndex   string
-	Precip    string
-	UpdatedAt string
-	Daily     []dailyTemplateData
+	Location      string
+	Temp          string
+	TempUnit      string
+	Condition     string
+	ConditionIcon string
+	FeelsLike     string
+	HL            string
+	Humidity      string
+	Wind          string
+	UVIndex       string
+	Precip        string
+	UpdatedAt     string
+	Daily         []dailyTemplateData
 }
 
 type dailyTemplateData struct {
 	Day  string
 	High string
 	Low  string
+	Icon string
 }
 
 type dayForecast struct {
-	date time.Time
-	high float64
-	low  float64
+	date      time.Time
+	high      float64
+	low       float64
+	condition string // raw HA condition slug, e.g. "partlycloudy"
 }
 
 type weatherData struct {
-	condition    string
-	tempC        float64
-	apparentTemp float64
-	humidity     int
-	windSpeed    float64
-	windDir      int
-	uvIndex      float64
-	precip       float64
-	tempUnit     string // "°F" or "°C"
-	windUnit     string // "mph" or "km/h"
-	precipUnit   string // "in" or "mm"
-	daily        []dayForecast
-	fetchedAt    time.Time
+	conditionSlug string // raw HA state, e.g. "partlycloudy"
+	condition     string // human-readable, e.g. "Partly Cloudy"
+	tempC         float64
+	apparentTemp  float64
+	humidity      int
+	windSpeed     float64
+	windDir       int
+	uvIndex       float64
+	precip        float64
+	tempUnit      string // "°F" or "°C"
+	windUnit      string // "mph" or "km/h"
+	precipUnit    string // "in" or "mm"
+	daily         []dayForecast
+	fetchedAt     time.Time
 }
 
 func renderWeather(w io.Writer, data *weatherData, location string, loc *time.Location, cfg demy.Config) error {
+	if cfg.Images == nil {
+		cfg.Images = make(map[string]image.Image)
+	}
+	loadWeatherIcons(cfg.Images)
+
 	var hl string
 	if len(data.daily) > 0 {
 		tUnit := xmlEsc(data.tempUnit)
@@ -212,22 +236,24 @@ func renderWeather(w io.Writer, data *weatherData, location string, loc *time.Lo
 			Day:  day.date.Format("Mon"),
 			High: fmt.Sprintf("%.0f°", day.high),
 			Low:  fmt.Sprintf("%.0f°", day.low),
+			Icon: conditionIconKey(day.condition),
 		}
 	}
 
 	tmplData := weatherTemplateData{
-		Location:  xmlEsc(location),
-		Temp:      fmt.Sprintf("%.0f", data.tempC),
-		TempUnit:  xmlEsc(data.tempUnit),
-		Condition: xmlEsc(data.condition),
-		FeelsLike: fmt.Sprintf("Feels like %.0f%s", data.apparentTemp, xmlEsc(data.tempUnit)),
-		HL:        hl,
-		Humidity:  fmt.Sprintf("%d%%", data.humidity),
-		Wind:      fmt.Sprintf("%.0f %s %s", data.windSpeed, xmlEsc(data.windUnit), windDirStr(data.windDir)),
-		UVIndex:   fmt.Sprintf("%.0f", data.uvIndex),
-		Precip:    fmt.Sprintf("%.2f %s", data.precip, xmlEsc(data.precipUnit)),
-		UpdatedAt: data.fetchedAt.In(loc).Format("15:04"),
-		Daily:     daily,
+		Location:      xmlEsc(location),
+		Temp:          fmt.Sprintf("%.0f", data.tempC),
+		TempUnit:      xmlEsc(data.tempUnit),
+		Condition:     xmlEsc(data.condition),
+		ConditionIcon: conditionIconKey(data.conditionSlug),
+		FeelsLike:     fmt.Sprintf("Feels like %.0f%s", data.apparentTemp, xmlEsc(data.tempUnit)),
+		HL:            hl,
+		Humidity:      fmt.Sprintf("%d%%", data.humidity),
+		Wind:          fmt.Sprintf("%.0f %s %s", data.windSpeed, xmlEsc(data.windUnit), windDirStr(data.windDir)),
+		UVIndex:       fmt.Sprintf("%.0f", data.uvIndex),
+		Precip:        fmt.Sprintf("%.2f %s", data.precip, xmlEsc(data.precipUnit)),
+		UpdatedAt:     data.fetchedAt.In(loc).Format("15:04"),
+		Daily:         daily,
 	}
 
 	root, styles, err := xmlscene.ExecuteScene([]byte(weatherTemplate), tmplData, cfg)
@@ -287,18 +313,19 @@ func fetchWeatherFromHA(ctx context.Context, hassURL, hassToken, entity, units s
 	}
 
 	data := &weatherData{
-		condition:    hassConditionDescription(state.State),
-		tempC:        mapFloat(attrs, "temperature"),
-		apparentTemp: mapFloat(attrs, "apparent_temperature"),
-		humidity:     mapInt(attrs, "humidity"),
-		windSpeed:    mapFloat(attrs, "wind_speed"),
-		windDir:      mapInt(attrs, "wind_bearing"),
-		uvIndex:      mapFloat(attrs, "uv_index"),
-		precip:       mapFloat(attrs, "precipitation"),
-		tempUnit:     tempUnit,
-		windUnit:     windUnit,
-		precipUnit:   precipUnit,
-		fetchedAt:    time.Now(),
+		conditionSlug: state.State,
+		condition:     hassConditionDescription(state.State),
+		tempC:         mapFloat(attrs, "temperature"),
+		apparentTemp:  mapFloat(attrs, "apparent_temperature"),
+		humidity:      mapInt(attrs, "humidity"),
+		windSpeed:     mapFloat(attrs, "wind_speed"),
+		windDir:       mapInt(attrs, "wind_bearing"),
+		uvIndex:       mapFloat(attrs, "uv_index"),
+		precip:        mapFloat(attrs, "precipitation"),
+		tempUnit:      tempUnit,
+		windUnit:      windUnit,
+		precipUnit:    precipUnit,
+		fetchedAt:     time.Now(),
 	}
 
 	forecasts, err := client.GetWeatherForecasts(ctx, entity, "daily")
@@ -318,9 +345,10 @@ func fetchWeatherFromHA(ctx context.Context, hassURL, hassToken, entity, units s
 				}
 			}
 			data.daily = append(data.daily, dayForecast{
-				date: dt,
-				high: mapFloat(f, "temperature"),
-				low:  mapFloat(f, "templow"),
+				date:      dt,
+				high:      mapFloat(f, "temperature"),
+				low:       mapFloat(f, "templow"),
+				condition: mapString(f, "condition"),
 			})
 		}
 	}
@@ -372,6 +400,35 @@ func applyUnitConversion(data *weatherData, targetUnits string) {
 			data.windSpeed = data.windSpeed * 1.609344
 			data.windUnit = "km/h"
 		}
+	}
+}
+
+func conditionIconKey(slug string) string {
+	switch slug {
+	case "sunny":
+		return "weather-sunny"
+	case "clear-night":
+		return "weather-clear-night"
+	case "partlycloudy":
+		return "weather-partlycloudy"
+	case "cloudy":
+		return "weather-cloudy"
+	case "fog":
+		return "weather-fog"
+	case "rainy", "pouring":
+		return "weather-rainy"
+	case "snowy", "snowy-rainy":
+		return "weather-snowy"
+	case "hail":
+		return "weather-hail"
+	case "lightning", "lightning-rainy":
+		return "weather-lightning"
+	case "windy", "windy-variant":
+		return "weather-windy"
+	case "exceptional":
+		return "weather-exceptional"
+	default:
+		return ""
 	}
 }
 

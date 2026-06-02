@@ -78,6 +78,28 @@ webauthn:
   # Human-readable name shown in passkey prompts (e.g. "Touch ID for Quoin").
   rp_display_name: "Quoin"
 
+# Home Assistant MQTT integration (optional)
+# When broker_url is set, Quoin publishes device state and HASS discovery payloads
+# to the MQTT broker so devices appear automatically in Home Assistant.
+# Each device exposes battery, WiFi signal, firmware, wake reason, temperature profile,
+# and an Active Plugin select entity that lets automations change what's displayed.
+mqtt:
+  # MQTT broker URL. Leave empty to disable the bridge entirely.
+  # Examples: "tcp://localhost:1883", "ssl://broker.example.com:8883"
+  broker_url: ""
+
+  # Broker credentials (optional).
+  username: ""
+  password: ""
+
+  # Root topic prefix for all published topics (default "quoin").
+  # Device state is published under {base_topic}/devices/{mac}/...
+  base_topic: "quoin"
+
+  # Home Assistant MQTT discovery prefix (default "homeassistant").
+  # Must match the discovery_prefix in your HA MQTT integration settings.
+  ha_prefix: "homeassistant"
+
 # Environment variable overrides
 # --------------------------------
 # Any config value can be set via an environment variable instead of this file:
@@ -97,3 +119,8 @@ webauthn:
 #   QUOIN_ACME_DNS_HOOK_REMOVE       ← tls.acme.dns_hook_remove
 #   QUOIN_WEBAUTHN_RP_ID             ← webauthn.rp_id
 #   QUOIN_WEBAUTHN_RP_DISPLAY_NAME   ← webauthn.rp_display_name
+#   QUOIN_MQTT_BROKER_URL            ← mqtt.broker_url
+#   QUOIN_MQTT_USERNAME              ← mqtt.username
+#   QUOIN_MQTT_PASSWORD              ← mqtt.password
+#   QUOIN_MQTT_BASE_TOPIC            ← mqtt.base_topic
+#   QUOIN_MQTT_HA_PREFIX             ← mqtt.ha_prefix

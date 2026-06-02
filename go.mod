@@ -43,6 +43,7 @@ require (
 	github.com/benoitkugler/textprocessing v0.0.6 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/eclipse/paho.mqtt.golang v1.5.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
 	github.com/go-fonts/latin-modern v0.3.3 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect

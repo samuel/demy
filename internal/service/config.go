@@ -17,6 +17,17 @@ type Config struct {
 	Database             DatabaseConfig `yaml:"database"`
 	TLS                  TLSConfig      `yaml:"tls"`
 	WebAuthn             WebAuthnConfig `yaml:"webauthn"`
+	MQTT                 MQTTConfig     `yaml:"mqtt"`
+}
+
+// MQTTConfig holds connection settings for the optional Home Assistant MQTT bridge.
+// When BrokerURL is empty the bridge is disabled.
+type MQTTConfig struct {
+	BrokerURL string `yaml:"broker_url"` // e.g. "tcp://localhost:1883"
+	Username  string `yaml:"username"`
+	Password  string `yaml:"password"`
+	BaseTopic string `yaml:"base_topic"` // default "quoin"
+	HAPrefix  string `yaml:"ha_prefix"`  // default "homeassistant"
 }
 
 // DatabaseConfig holds the SQLite database path.
@@ -86,6 +97,11 @@ type WebAuthnConfig struct {
 //	QUOIN_ACME_CACHE_DIR
 //	QUOIN_WEBAUTHN_RP_ID
 //	QUOIN_WEBAUTHN_RP_DISPLAY_NAME
+//	QUOIN_MQTT_BROKER_URL
+//	QUOIN_MQTT_USERNAME
+//	QUOIN_MQTT_PASSWORD
+//	QUOIN_MQTT_BASE_TOPIC
+//	QUOIN_MQTT_HA_PREFIX
 func LoadConfig(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -154,6 +170,21 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("QUOIN_WEBAUTHN_RP_DISPLAY_NAME"); v != "" {
 		cfg.WebAuthn.RPDisplayName = v
+	}
+	if v := os.Getenv("QUOIN_MQTT_BROKER_URL"); v != "" {
+		cfg.MQTT.BrokerURL = v
+	}
+	if v := os.Getenv("QUOIN_MQTT_USERNAME"); v != "" {
+		cfg.MQTT.Username = v
+	}
+	if v := os.Getenv("QUOIN_MQTT_PASSWORD"); v != "" {
+		cfg.MQTT.Password = v
+	}
+	if v := os.Getenv("QUOIN_MQTT_BASE_TOPIC"); v != "" {
+		cfg.MQTT.BaseTopic = v
+	}
+	if v := os.Getenv("QUOIN_MQTT_HA_PREFIX"); v != "" {
+		cfg.MQTT.HAPrefix = v
 	}
 }
 

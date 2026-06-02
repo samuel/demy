@@ -22,10 +22,13 @@ import (
 
 	"golang.org/x/crypto/acme/autocert"
 
+	"github.com/google/uuid"
 	"github.com/samuel/demy/deviceapi"
 	"github.com/samuel/demy/internal/model"
+	"github.com/samuel/demy/internal/mqttbridge"
 	"github.com/samuel/demy/internal/plugin"
 	"github.com/samuel/demy/internal/plugin/builtin"
+
 	"github.com/samuel/demy/internal/plugin/dynamic"
 	"github.com/samuel/demy/internal/service"
 	"github.com/samuel/demy/internal/sqlstore"
@@ -35,6 +38,7 @@ import (
 func main() {
 	cfgPath := flag.String("config", "quoin.yaml", "path to YAML config file")
 	makeAdmin := flag.String("make-admin", "", "email address to grant admin access")
+	verbose := flag.Bool("v", false, "enable debug logging")
 	flag.Parse()
 
 	cfg, err := service.LoadConfig(*cfgPath)
@@ -49,10 +53,21 @@ func main() {
 	if err := level.UnmarshalText([]byte(cfg.LogLevel)); err != nil {
 		level = slog.LevelInfo
 	}
+	if *verbose {
+		level = slog.LevelDebug
+	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sig
+		slog.Info("shutting down")
+		cancel()
+	}()
 
 	store, err := sqlstore.Open(ctx, cfg.Database.Path)
 	if err != nil {
@@ -130,12 +145,35 @@ func main() {
 		log.Fatalf("web server init: %v", err)
 	}
 
+	// Optional MQTT bridge for Home Assistant integration.
+	var bridge *mqttbridge.Bridge
+	if cfg.MQTT.BrokerURL != "" {
+		b, err := mqttbridge.New(
+			cfg.MQTT.BrokerURL,
+			cfg.MQTT.Username,
+			cfg.MQTT.Password,
+			cfg.MQTT.BaseTopic,
+			cfg.MQTT.HAPrefix,
+			store,
+			svc,
+		)
+		if err != nil {
+			log.Fatalf("mqtt bridge init: %v", err)
+		}
+		if err := b.Start(ctx); err != nil {
+			log.Fatalf("mqtt bridge start: %v", err)
+		}
+		bridge = b
+		webSrv.Notifier = bridge
+		defer bridge.Close()
+	}
+
 	mux := http.NewServeMux()
 
 	// Device API handlers.
 	devHandler := deviceapi.Handler{
 		OnSetup:   makeSetupHandler(svc),
-		OnDisplay: makeDisplayHandler(ctx, svc, store, engine, rc, imgStore, cfg.BaseURL),
+		OnDisplay: makeDisplayHandler(ctx, svc, store, engine, rc, imgStore, cfg.BaseURL, bridge),
 		OnLog:     makeLogHandler(store),
 	}
 	deviceapi.Register(mux, cfg.TRMNLDeviceAPIPrefix, devHandler)
@@ -169,9 +207,6 @@ func main() {
 	})
 
 	// Start server according to TLS mode.
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
-
 	switch cfg.TLS.Mode {
 	case "auto":
 		if len(cfg.TLS.ACME.Domains) == 0 {
@@ -237,9 +272,7 @@ func main() {
 		}()
 	}
 
-	<-sig
-	slog.Info("shutting down")
-	cancel()
+	<-ctx.Done()
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutCancel()
 	_ = httpSrv.Shutdown(shutCtx)
@@ -363,6 +396,7 @@ func makeDisplayHandler(
 	rc plugin.ResourceCache,
 	imgStore *imageStore,
 	baseURL string,
+	bridge *mqttbridge.Bridge,
 ) func(context.Context, deviceapi.DeviceHeaders) (deviceapi.DisplayResponse, error) {
 	return func(ctx context.Context, device deviceapi.DeviceHeaders) (deviceapi.DisplayResponse, error) {
 		d, err := svc.AuthenticateDevice(ctx, device.ID, device.AccessToken)
@@ -421,6 +455,10 @@ func makeDisplayHandler(
 			return deviceapi.DisplayResponse{}, fmt.Errorf("rendering plugin: %w", err)
 		}
 
+		if bridge != nil {
+			bridge.PublishDeviceState(ctx, d, device, p.Name)
+		}
+
 		// Build the filename slug from the library plugin slug if available.
 		slug := "plugin"
 		if p.LibraryPluginID != "" {
@@ -458,12 +496,20 @@ func makeDisplayHandler(
 	}
 }
 
+func logEntryID(deviceID string, entryID int) string {
+	if entryID != 0 {
+		return fmt.Sprintf("%s:%d", deviceID, entryID)
+	}
+	return uuid.New().String()
+}
+
 func makeLogHandler(store model.Store) func(context.Context, deviceapi.DeviceHeaders, []deviceapi.LogEntry) error {
 	return func(ctx context.Context, device deviceapi.DeviceHeaders, entries []deviceapi.LogEntry) error {
 		for _, e := range entries {
 			entry := &model.DeviceLogEntry{
+				ID:              logEntryID(device.ID, e.ID),
 				DeviceID:        device.ID,
-				LoggedAt:        time.Now(),
+				LoggedAt:        time.Unix(e.CreatedAt, 0),
 				Message:         e.Message,
 				WiFiStatus:      e.WiFiStatus,
 				WakeReason:      e.WakeReason,

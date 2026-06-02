@@ -621,6 +621,35 @@ func (s *SQLiteStore) UpdateDeviceLastSeen(ctx context.Context, deviceID string,
 	return nil
 }
 
+func (s *SQLiteStore) ListAllDevices(ctx context.Context) ([]*model.Device, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, user_id, mac_address, api_key, api_key_issued_at, name, refresh_rate, canvas_config, timezone, created_at, last_seen_at, playlist_position, last_headers
+		 FROM devices ORDER BY created_at`)
+	if err != nil {
+		return nil, fmt.Errorf("sqlstore: ListAllDevices: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var devices []*model.Device
+	for rows.Next() {
+		d, err := scanDevice(rows)
+		if err != nil {
+			return nil, fmt.Errorf("sqlstore: ListAllDevices scan: %w", err)
+		}
+		devices = append(devices, d)
+	}
+	return devices, rows.Err()
+}
+
+func (s *SQLiteStore) SetPlaylistPosition(ctx context.Context, deviceID string, position int) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE devices SET playlist_position = ? WHERE id = ?`, position, deviceID)
+	if err != nil {
+		return fmt.Errorf("sqlstore: SetPlaylistPosition: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) AdvancePlaylistPosition(ctx context.Context, deviceID string, length int) (int, error) {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE devices SET playlist_position = (playlist_position + 1) % ? WHERE id = ?`,

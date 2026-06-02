@@ -230,6 +230,14 @@ func (s *Service) ReorderPlaylist(ctx context.Context, userID, deviceID string, 
 	return nil
 }
 
+// SetPlaylistPosition sets the playlist position for a device directly.
+func (s *Service) SetPlaylistPosition(ctx context.Context, deviceID string, position int) error {
+	if err := s.store.SetPlaylistPosition(ctx, deviceID, position); err != nil {
+		return fmt.Errorf("set playlist position: %w", err)
+	}
+	return nil
+}
+
 // AdvanceDisplay handles the double-advance guard and returns (playlistPosition, advanced, error).
 // Debounce: only advance if time.Since(device.LastSeenAt) > 30s.
 func (s *Service) AdvanceDisplay(ctx context.Context, device *model.Device, playlistLen int) (int, bool, error) {

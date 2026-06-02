@@ -199,6 +199,9 @@ func (s *Server) handlePlaylistAdd(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if s.Notifier != nil {
+		s.Notifier.NotifyPlaylistChanged(r.Context(), deviceID)
+	}
 	redirect(w, r, "/devices/"+deviceID)
 }
 
@@ -209,6 +212,9 @@ func (s *Server) handlePlaylistRemove(w http.ResponseWriter, r *http.Request) {
 	if err := s.svc.RemovePlaylistItem(r.Context(), user.ID, deviceID, itemID); err != nil {
 		writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if s.Notifier != nil {
+		s.Notifier.NotifyPlaylistChanged(r.Context(), deviceID)
 	}
 	redirect(w, r, "/devices/"+deviceID)
 }
@@ -224,6 +230,9 @@ func (s *Server) handlePlaylistReorder(w http.ResponseWriter, r *http.Request) {
 	if err := s.svc.ReorderPlaylist(r.Context(), user.ID, deviceID, orderedIDs); err != nil {
 		writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if s.Notifier != nil {
+		s.Notifier.NotifyPlaylistChanged(r.Context(), deviceID)
 	}
 	redirect(w, r, "/devices/"+deviceID)
 }

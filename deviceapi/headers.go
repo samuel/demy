@@ -1,10 +1,8 @@
 package deviceapi
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/httputil"
 	"strconv"
 	"strings"
 )
@@ -51,7 +49,7 @@ type DeviceHeaders struct {
 	RefreshRate        *int
 	RSSI               *int
 	Sensors            string
-	TemperatureProfile *bool
+	TemperatureProfile TemperatureProfile
 	UpdateSource       string
 	UserAgent          string
 	Width              *int
@@ -74,9 +72,6 @@ type headerError struct{ msg string }
 func (e *headerError) Error() string { return e.msg }
 
 func parseDeviceHeaders(r *http.Request) (DeviceHeaders, error) {
-	b, _ := httputil.DumpRequest(r, true)
-	fmt.Println(string(b))
-
 	id := r.Header.Get(HeaderID)
 	if id == "" {
 		return DeviceHeaders{}, errMissingID
@@ -103,7 +98,7 @@ func parseDeviceHeaders(r *http.Request) (DeviceHeaders, error) {
 		RefreshRate:        parseOptInt(r, HeaderRefreshRate),
 		RSSI:               parseOptInt(r, HeaderRSSI),
 		Sensors:            r.Header.Get(HeaderSensors),
-		TemperatureProfile: parseOptBool(r, HeaderTemperatureProfile),
+		TemperatureProfile: TemperatureProfile(r.Header.Get(HeaderTemperatureProfile)),
 		UpdateSource:       r.Header.Get(HeaderUpdateSource), // e.g. "timer", "button", "powercycle"
 		UserAgent:          r.Header.Get(HeaderUserAgent),
 		Width:              parseOptInt(r, HeaderWidth),

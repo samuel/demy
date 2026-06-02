@@ -15,6 +15,11 @@ import (
 //go:embed templates/* static/*
 var embeddedFS embed.FS
 
+// PlaylistNotifier is called when a device's playlist changes.
+type PlaylistNotifier interface {
+	NotifyPlaylistChanged(ctx context.Context, deviceID string)
+}
+
 // Server is the web UI HTTP server.
 type Server struct {
 	svc      *service.Service
@@ -22,6 +27,7 @@ type Server struct {
 	baseURL  string
 	tmplFS   fs.FS
 	static   fs.FS
+	Notifier PlaylistNotifier // optional; nil when MQTT is not configured
 }
 
 // New creates a new Server and validates that the embedded template FS is accessible.

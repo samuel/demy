@@ -167,12 +167,14 @@ type Store interface {
 	GetDeviceByMAC(ctx context.Context, mac string) (*Device, error)
 	GetDeviceByAPIKey(ctx context.Context, apiKey string) (*Device, error)
 	ListDevicesByUser(ctx context.Context, userID string) ([]*Device, error)
+	ListAllDevices(ctx context.Context) ([]*Device, error)
 	UpdateDevice(ctx context.Context, d *Device) error
 	DeleteDevice(ctx context.Context, id string) error
 	IssueDeviceAPIKey(ctx context.Context, deviceID, apiKey string, issuedAt time.Time) error
 	RevokeDeviceAPIKey(ctx context.Context, deviceID string) error
 	UpdateDeviceLastSeen(ctx context.Context, deviceID string, seenAt time.Time, headersJSON string) error
 	AdvancePlaylistPosition(ctx context.Context, deviceID string, length int) (int, error)
+	SetPlaylistPosition(ctx context.Context, deviceID string, position int) error
 
 	// Playlist items
 	ListPlaylistItems(ctx context.Context, deviceID string) ([]*PlaylistItem, error)

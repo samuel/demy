@@ -79,9 +79,9 @@ const weatherTemplate = `<scene>
   <style name="sub" font="sans" size="11" color="#555555" align="center" />
   <style name="detail-label" font="sans" size="11" color="#555555" />
   <style name="detail-value" font="sans" size="11" weight="bold" align="right" />
-  <style name="forecast-day" font="sans" size="10" weight="bold" align="center" />
-  <style name="forecast-high" font="sans" size="12" weight="bold" align="center" />
-  <style name="forecast-low" font="sans" size="10" color="#555555" align="center" />
+  <style name="forecast-day" font="sans" size="12" weight="bold" align="center" />
+  <style name="forecast-high" font="sans" size="14" weight="bold" align="center" />
+  <style name="forecast-low" font="sans" size="12" color="#555555" align="center" />
 </styles>
 <vstack padding="16">
   <hstack>
@@ -157,7 +157,7 @@ const weatherTemplate = `<scene>
     <vstack gap="3" align="center">
       <text class="forecast-day">{{$day.Day}}</text>
       {{- if $day.Icon}}
-      <frame width="22" height="22">
+      <frame width="32" height="32">
         <image key="{{$day.Icon}}" scale="fit" />
       </frame>
       {{- end}}

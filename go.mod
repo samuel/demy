@@ -4,10 +4,13 @@ go 1.26.3
 
 require (
 	github.com/boombuler/barcode v1.1.0
+	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/go-acme/lego/v4 v4.35.2
 	github.com/go-webauthn/webauthn v0.17.4
 	github.com/google/uuid v1.6.0
 	github.com/mkelcik/go-ha-client/v2 v2.1.1
+	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
+	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/tdewolff/canvas v0.0.0-20260508100355-63a7228e682d
 	go.starlark.net v0.0.0-20260522144826-ec58d4b459e2
 	golang.org/x/crypto v0.52.0
@@ -43,7 +46,6 @@ require (
 	github.com/benoitkugler/textprocessing v0.0.6 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/eclipse/paho.mqtt.golang v1.5.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
 	github.com/go-fonts/latin-modern v0.3.3 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
@@ -60,7 +62,6 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef // indirect
 	github.com/srwiley/scanx v0.0.0-20190309010443-e94503791388 // indirect
 	github.com/tdewolff/font v0.0.0-20260424075104-b5eeb1e23189 // indirect
 	github.com/tdewolff/minify/v2 v2.24.13 // indirect

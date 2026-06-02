@@ -114,26 +114,28 @@ func main() {
 	imgStore := newImageStore()
 
 	renderFn := func(ctx context.Context, p *model.UserPlugin, deviceID string) ([]byte, error) {
-		d, err := store.GetDeviceByID(ctx, deviceID)
-		if err != nil {
-			return nil, fmt.Errorf("loading device: %w", err)
-		}
 		var cc *plugin.CanvasConfig
-		if d.CanvasConfig != "" {
-			cc = new(plugin.CanvasConfig)
-			if err := json.Unmarshal([]byte(d.CanvasConfig), cc); err != nil {
-				return nil, fmt.Errorf("parsing canvas config: %w", err)
+		loc := time.UTC
+		if deviceID != "" {
+			d, err := store.GetDeviceByID(ctx, deviceID)
+			if err != nil {
+				return nil, fmt.Errorf("loading device: %w", err)
+			}
+			if d.CanvasConfig != "" {
+				cc = new(plugin.CanvasConfig)
+				if err := json.Unmarshal([]byte(d.CanvasConfig), cc); err != nil {
+					return nil, fmt.Errorf("parsing canvas config: %w", err)
+				}
+			}
+			if d.Timezone != "" {
+				if l, err := time.LoadLocation(d.Timezone); err == nil {
+					loc = l
+				}
 			}
 		}
 		demyCfg, err := plugin.BuildDemyConfig(cc, deviceapi.DeviceHeaders{})
 		if err != nil {
 			return nil, fmt.Errorf("building demy config: %w", err)
-		}
-		loc := time.UTC
-		if d.Timezone != "" {
-			if l, err := time.LoadLocation(d.Timezone); err == nil {
-				loc = l
-			}
 		}
 		pngBytes, _, err := engine.Render(ctx, p, demyCfg, rc, loc)
 		return pngBytes, err

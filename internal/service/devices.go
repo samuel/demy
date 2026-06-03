@@ -239,10 +239,11 @@ func (s *Service) SetPlaylistPosition(ctx context.Context, deviceID string, posi
 }
 
 // AdvanceDisplay handles the double-advance guard and returns (playlistPosition, advanced, error).
-// Debounce: only advance if time.Since(device.LastSeenAt) > 30s.
-func (s *Service) AdvanceDisplay(ctx context.Context, device *model.Device, playlistLen int) (int, bool, error) {
+// Debounce: only advance if time.Since(device.LastSeenAt) > 30s, unless bypassDebounce is true
+// (e.g. when the device woke via button press).
+func (s *Service) AdvanceDisplay(ctx context.Context, device *model.Device, playlistLen int, bypassDebounce bool) (int, bool, error) {
 	now := time.Now().UTC()
-	advanced := time.Since(device.LastSeenAt) > 30*time.Second
+	advanced := bypassDebounce || time.Since(device.LastSeenAt) > 30*time.Second
 
 	var pos int
 	if advanced && playlistLen > 0 {

@@ -38,6 +38,14 @@ const (
 	HeaderUsbConnected       = "Usb-Connected"
 )
 
+type UpdateSource string
+
+const (
+	UpdateSourcePowerCycle = "powercycle"
+	UpdateSourceTimer      = "timer"
+	UpdateSourceButton     = "button"
+)
+
 // DeviceHeaders holds the values parsed from device request headers.
 // Numeric fields are pointers so callers can distinguish absent from zero.
 type DeviceHeaders struct {
@@ -53,7 +61,7 @@ type DeviceHeaders struct {
 	RSSI               *int
 	Sensors            string
 	TemperatureProfile TemperatureProfile
-	UpdateSource       string
+	UpdateSource       UpdateSource
 	UserAgent          string
 	WakeTime           *int // total wake time of the last cycle in ms
 	Width              *int
@@ -105,7 +113,7 @@ func parseDeviceHeaders(r *http.Request) (DeviceHeaders, error) {
 		RSSI:               parseOptInt(r, HeaderRSSI),
 		Sensors:            r.Header.Get(HeaderSensors),
 		TemperatureProfile: TemperatureProfile(r.Header.Get(HeaderTemperatureProfile)),
-		UpdateSource:       r.Header.Get(HeaderUpdateSource), // e.g. "timer", "button", "powercycle", "timer"
+		UpdateSource:       UpdateSource(r.Header.Get(HeaderUpdateSource)),
 		UserAgent:          r.Header.Get(HeaderUserAgent),
 		WakeTime:           parseOptInt(r, HeaderWakeTime),
 		Width:              parseOptInt(r, HeaderWidth),

@@ -188,7 +188,7 @@ func (b *Bridge) PublishDeviceState(ctx context.Context, d *model.Device, h devi
 		b.publish(b.deviceTopic(mac, "firmware"), h.FWVersion, true)
 	}
 	if h.UpdateSource != "" {
-		b.publish(b.deviceTopic(mac, "wake_reason"), h.UpdateSource, true)
+		b.publish(b.deviceTopic(mac, "wake_reason"), string(h.UpdateSource), true)
 	}
 	if h.TemperatureProfile != "" {
 		b.publish(b.deviceTopic(mac, "temp_profile"), string(h.TemperatureProfile), true)

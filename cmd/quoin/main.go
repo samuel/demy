@@ -439,7 +439,7 @@ func makeDisplayHandler(
 			d.LastHeaders = string(headersJSON)
 		}
 
-		pos, _, err := svc.AdvanceDisplay(ctx, d, len(items))
+		pos, _, err := svc.AdvanceDisplay(ctx, d, len(items), device.UpdateSource == deviceapi.UpdateSourceButton)
 		if err != nil {
 			return deviceapi.DisplayResponse{}, fmt.Errorf("advance display: %w", err)
 		}

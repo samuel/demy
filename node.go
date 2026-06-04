@@ -4,6 +4,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"strings"
 
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/qr"
@@ -39,6 +40,8 @@ type drawCtx struct {
 	roles         Roles
 	fonts         map[string]*FontFamily
 	ditherRegions []imageDitherRegion
+	textBlits     []textBlit
+	clip          image.Rectangle // physical-pixel clip for bitmap text; empty means unclipped
 }
 
 // node is the interface all layout and widget nodes implement.
@@ -486,15 +489,33 @@ func (n *frameNode) draw(dctx *drawCtx) {
 	subCtx := cv.NewContext(subCvs)
 	subCtx.SetCoordSystem(cv.CartesianIV)
 	subCtx.Translate(-xMM, -yMM)
+
+	// Bitmap glyphs are stamped onto the root image after quantization, so they
+	// must be clipped to the frame's physical-pixel bounds rather than relying on
+	// the sub-canvas crop that confines vector content.
+	frameClip := image.Rect(
+		int(math.Round(n.bounds.x*dctx.scale)),
+		int(math.Round(n.bounds.y*dctx.scale)),
+		int(math.Round((n.bounds.x+n.w)*dctx.scale)),
+		int(math.Round((n.bounds.y+n.h)*dctx.scale)),
+	)
+	if !dctx.clip.Empty() {
+		frameClip = frameClip.Intersect(dctx.clip)
+	}
 	subDctx := &drawCtx{
 		ctx:   subCtx,
 		dpmm:  dpmm,
+		scale: dctx.scale,
 		roles: dctx.roles,
 		fonts: dctx.fonts,
+		clip:  frameClip,
 	}
 	for _, child := range n.children {
 		child.draw(subDctx)
 	}
+	// Bubble collected glyph blits up to the root draw context (the frame's own
+	// sub-canvas is composited as a vector image and never contains bitmap text).
+	dctx.textBlits = append(dctx.textBlits, subDctx.textBlits...)
 
 	subImg := image.NewRGBA(image.Rect(0, 0, wPx, hPx))
 	subRas := newVectorRenderer(subImg, dpmm)
@@ -607,7 +628,13 @@ type textNode struct {
 
 func (n *textNode) measure(mctx *measureCtx) nodeSize {
 	ff := mctx.fonts[n.style.Font]
-	if ff == nil || n.style.Size == 0 {
+	if ff == nil {
+		return nodeSize{}
+	}
+	if ff.isBitmap() {
+		return n.measureBitmap(mctx, ff)
+	}
+	if n.style.Size == 0 {
 		return nodeSize{}
 	}
 	clr := n.style.Color
@@ -634,7 +661,14 @@ func (n *textNode) layout(bounds nodeRect) { n.bounds = bounds }
 
 func (n *textNode) draw(dctx *drawCtx) {
 	ff := dctx.fonts[n.style.Font]
-	if ff == nil || n.style.Size == 0 {
+	if ff == nil {
+		return
+	}
+	if ff.isBitmap() {
+		n.drawBitmap(dctx, ff)
+		return
+	}
+	if n.style.Size == 0 {
 		return
 	}
 	clr := n.style.Color
@@ -678,6 +712,167 @@ func textOptions(s Style) *cv.TextOptions {
 		return &cv.TextOptions{LineStretch: s.LineHeight - 1.0}
 	}
 	return nil
+}
+
+// --- bitmap text ---
+
+// measureBitmap measures a text node rendered with a bitmap font. Sizes are
+// returned in logical pixels (native font pixels map 1:1 to logical pixels; the
+// on-screen size is scaled by the integer display Scale at draw time).
+func (n *textNode) measureBitmap(mctx *measureCtx, ff *FontFamily) nodeSize {
+	bf := ff.bitmapVariant(n.style.Weight)
+	if bf == nil {
+		return nodeSize{}
+	}
+	lines := layoutBitmapText(bf, n.text, mctx.availW, n.style)
+	maxW := 0
+	for _, runes := range lines {
+		if w := bmpLineWidth(bf, runes); w > maxW {
+			maxW = w
+		}
+	}
+	return nodeSize{w: float64(maxW), h: float64(len(lines)) * bitmapLineHeight(bf, n.style)}
+}
+
+// drawBitmap collects glyph blits for a bitmap-font text node. Blits are applied
+// after quantization, so the text stays crisp (no antialiasing, pure palette color).
+func (n *textNode) drawBitmap(dctx *drawCtx, ff *FontFamily) {
+	bf := ff.bitmapVariant(n.style.Weight)
+	if bf == nil {
+		return
+	}
+	clr := n.style.Color
+	if clr == nil {
+		clr = dctx.roles.Foreground
+	}
+	if clr == nil {
+		clr = Black
+	}
+	col := snapBitmapColor(clr)
+
+	lines := layoutBitmapText(bf, n.text, n.bounds.w, n.style)
+
+	iscale := max(int(math.Round(dctx.scale)), 1)
+	baseXp := n.bounds.x * dctx.scale
+	baseYp := n.bounds.y * dctx.scale
+	boundsWp := n.bounds.w * dctx.scale
+	lineStepP := bitmapLineHeight(bf, n.style) * float64(iscale)
+
+	for li, runes := range lines {
+		lineWp := float64(bmpLineWidth(bf, runes) * iscale)
+		var startXp float64
+		switch n.style.Align {
+		case TextAlignCenter:
+			startXp = baseXp + (boundsWp-lineWp)/2
+		case TextAlignRight:
+			startXp = baseXp + (boundsWp - lineWp)
+		default:
+			startXp = baseXp
+		}
+		penX := int(math.Round(startXp))
+		lineTop := int(math.Round(baseYp + float64(li)*lineStepP))
+		for _, r := range runes {
+			if g, ok := bf.glyph(r); ok && len(g.bits) > 0 {
+				dctx.textBlits = append(dctx.textBlits, textBlit{
+					glyph: g,
+					destX: penX + g.xOffset*iscale,
+					destY: lineTop + (bf.ascent-g.height-g.yOffset)*iscale,
+					scale: iscale,
+					color: col,
+					clip:  dctx.clip,
+				})
+			}
+			penX += bmpRuneAdvance(bf, r) * iscale
+		}
+	}
+}
+
+// bitmapLineHeight returns the line height in logical pixels, applying the
+// style's line-height multiplier (default 1.0).
+func bitmapLineHeight(bf *bitmapFont, s Style) float64 {
+	stretch := s.LineHeight
+	if stretch == 0 {
+		stretch = 1.0
+	}
+	return float64(bf.lineHeight) * stretch
+}
+
+// layoutBitmapText splits text into rendered lines, greedily word-wrapping to
+// maxW logical pixels (when maxW is a finite positive width) and honoring hard
+// '\n' breaks, MaxLines, and ellipsis overflow.
+func layoutBitmapText(bf *bitmapFont, text string, maxW float64, style Style) [][]rune {
+	wrap := maxW > 0 && maxW < 1e8
+	var lines [][]rune
+	for para := range strings.SplitSeq(text, "\n") {
+		if !wrap {
+			lines = append(lines, []rune(para))
+			continue
+		}
+		var cur []rune
+		curW := 0
+		space := bf.spaceAdvance
+		for word := range strings.SplitSeq(para, " ") {
+			wr := []rune(word)
+			ww := bmpLineWidth(bf, wr)
+			if len(cur) > 0 && float64(curW+space+ww) > maxW {
+				lines = append(lines, cur)
+				cur = nil
+				curW = 0
+			}
+			if len(cur) > 0 {
+				cur = append(cur, ' ')
+				curW += space
+			}
+			cur = append(cur, wr...)
+			curW += ww
+		}
+		lines = append(lines, cur)
+	}
+	if style.MaxLines > 0 && len(lines) > style.MaxLines {
+		lines = lines[:style.MaxLines]
+		if style.Overflow == TextOverflowEllipsis && len(lines) > 0 {
+			i := len(lines) - 1
+			lines[i] = appendEllipsis(bf, lines[i])
+		}
+	}
+	return lines
+}
+
+// appendEllipsis appends an ellipsis marker to a line, using '…' when the font
+// has that glyph and "..." otherwise.
+func appendEllipsis(bf *bitmapFont, line []rune) []rune {
+	if _, ok := bf.glyphs['…']; ok {
+		return append(line, '…')
+	}
+	return append(line, '.', '.', '.')
+}
+
+// bmpRuneAdvance returns the x-advance for a rune, falling back to the font's
+// space advance for glyphs that are entirely absent.
+func bmpRuneAdvance(bf *bitmapFont, r rune) int {
+	if g, ok := bf.glyph(r); ok {
+		return g.advance
+	}
+	return bf.spaceAdvance
+}
+
+// bmpLineWidth returns the total advance width of a line of runes, in font pixels.
+func bmpLineWidth(bf *bitmapFont, runes []rune) int {
+	w := 0
+	for _, r := range runes {
+		w += bmpRuneAdvance(bf, r)
+	}
+	return w
+}
+
+// snapBitmapColor reduces a color to a pure palette extreme (black or white) by
+// luminance, since pixel fonts assume full contrast.
+func snapBitmapColor(c color.Color) color.Gray {
+	gy := color.GrayModel.Convert(c).(color.Gray)
+	if gy.Y < 128 {
+		return color.Gray{Y: 0}
+	}
+	return color.Gray{Y: 255}
 }
 
 // --- imageNode ---

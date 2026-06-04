@@ -30,6 +30,9 @@
 //
 //	Constructors: VStack, HStack, ZStack, Box, Frame, Spacer, Divider(size=, color=), Grid, GridRow, Text, ImageKey, Barcode
 //	Style:        Style(font=, size=, weight=, color=, align=, line_height=, max_lines=, overflow=)
+//	              font= may name a bitmap (BDF) family loaded into Config.Fonts by the
+//	              host, in which case size= is ignored (bitmap fonts render at their
+//	              native pixel size times the display Scale).
 //	Options:      Gap, Padding, Background, Border, CornerRadius, Children, Clip,
 //	              Columns, Rows, RowGap, ColGap
 //	Grid tracks:  GridFixed(px), GridAuto(), GridFr(weight)

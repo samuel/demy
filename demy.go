@@ -4,9 +4,11 @@
 package demy
 
 import (
+	"errors"
 	"image"
 	"image/color"
 	"math"
+	"os"
 
 	cv "github.com/tdewolff/canvas"
 )
@@ -47,9 +49,35 @@ const (
 	FontItalic FontStyle = 1 << 8 // OR with a weight constant
 )
 
-// FontFamily wraps a canvas font family. Callers never use canvas.FontFamily directly.
+// FontFamily holds the font variants for one family. A family is either a
+// vector family (TTF/OTF outlines via tdewolff/canvas) or a bitmap family
+// (BDF pixel fonts); the two are never mixed. Callers reference a family by
+// its key in Config.Fonts and never use the underlying types directly.
 type FontFamily struct {
+	name string
+	// family is set for vector families; nil for bitmap families.
 	family *cv.FontFamily
+	// bitmap holds one parsed pixel font per weight/style variant; nil for
+	// vector families. A non-nil map marks this as a bitmap family.
+	bitmap map[FontStyle]*bitmapFont
+}
+
+// isBitmap reports whether this is a bitmap (pixel) font family.
+func (ff *FontFamily) isBitmap() bool { return ff.bitmap != nil }
+
+// bitmapVariant returns the bitmap font for the requested style, falling back
+// to the Regular variant (then any variant) when the exact style is missing.
+func (ff *FontFamily) bitmapVariant(style FontStyle) *bitmapFont {
+	if bf, ok := ff.bitmap[style]; ok {
+		return bf
+	}
+	if bf, ok := ff.bitmap[FontRegular]; ok {
+		return bf
+	}
+	for _, bf := range ff.bitmap {
+		return bf
+	}
+	return nil
 }
 
 // LoadFontFile loads a TTF or OTF font file as the Regular style of a new family.
@@ -59,7 +87,7 @@ func LoadFontFile(name, path string) (*FontFamily, error) {
 	if err := ff.LoadFontFile(path, cv.FontRegular); err != nil {
 		return nil, err
 	}
-	return &FontFamily{family: ff}, nil
+	return &FontFamily{name: name, family: ff}, nil
 }
 
 // MustLoadFontFile loads a font file and panics on error.
@@ -80,7 +108,7 @@ func LoadFontBytes(name string, data []byte) (*FontFamily, error) {
 	if err := ff.LoadFont(data, 0, cv.FontRegular); err != nil {
 		return nil, err
 	}
-	return &FontFamily{family: ff}, nil
+	return &FontFamily{name: name, family: ff}, nil
 }
 
 // MustLoadFontBytes loads a font from bytes and panics on error.
@@ -96,7 +124,66 @@ func MustLoadFontBytes(name string, data []byte) *FontFamily {
 // FontBold|FontItalic) into an existing FontFamily from raw font bytes.
 // Use index 0 for single-font files.
 func (ff *FontFamily) AddStyle(data []byte, style FontStyle) error {
+	if ff.isBitmap() {
+		return errors.New("demy: cannot add a vector style to a bitmap font family")
+	}
 	return ff.family.LoadFont(data, 0, cv.FontStyle(style))
+}
+
+// LoadBitmapFontBDF parses a BDF (Adobe Bitmap Distribution Format) pixel font
+// as the Regular style of a new bitmap family. Bitmap fonts render with no
+// antialiasing, staying crisp on low-grayscale e-ink displays. name identifies
+// the family within demy (used as the key in Config.Fonts).
+//
+// Bitmap fonts render at their native pixel size multiplied by the integer
+// display Scale; Style.Size is ignored for bitmap families.
+func LoadBitmapFontBDF(name string, data []byte) (*FontFamily, error) {
+	bf, err := parseBDF(data)
+	if err != nil {
+		return nil, err
+	}
+	return &FontFamily{name: name, bitmap: map[FontStyle]*bitmapFont{FontRegular: bf}}, nil
+}
+
+// MustLoadBitmapFontBDF loads a BDF bitmap font and panics on error.
+func MustLoadBitmapFontBDF(name string, data []byte) *FontFamily {
+	f, err := LoadBitmapFontBDF(name, data)
+	if err != nil {
+		panic(err)
+	}
+	return f
+}
+
+// LoadBitmapFontBDFFile loads a BDF bitmap font from a file path.
+func LoadBitmapFontBDFFile(name, path string) (*FontFamily, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return LoadBitmapFontBDF(name, data)
+}
+
+// MustLoadBitmapFontBDFFile loads a BDF bitmap font from a file and panics on error.
+func MustLoadBitmapFontBDFFile(name, path string) *FontFamily {
+	f, err := LoadBitmapFontBDFFile(name, path)
+	if err != nil {
+		panic(err)
+	}
+	return f
+}
+
+// AddStyleBDF loads an additional weight/style variant (e.g. FontBold) into an
+// existing bitmap family from BDF bytes. It errors if called on a vector family.
+func (ff *FontFamily) AddStyleBDF(data []byte, style FontStyle) error {
+	if !ff.isBitmap() {
+		return errors.New("demy: cannot add a bitmap style to a vector font family")
+	}
+	bf, err := parseBDF(data)
+	if err != nil {
+		return err
+	}
+	ff.bitmap[style] = bf
+	return nil
 }
 
 // Config defines a display's pixel dimensions, physical dimensions, color palette,

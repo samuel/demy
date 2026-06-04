@@ -4,6 +4,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"image/draw"
 
 	cv "github.com/tdewolff/canvas"
 )
@@ -13,6 +14,57 @@ import (
 type imageDitherRegion struct {
 	bounds image.Rectangle
 	algo   Dither
+}
+
+// textBlit records one bitmap glyph to composite onto the final image, in
+// physical pixel coordinates. Bitmap text must bypass the antialiasing
+// rasterizer and dithering to stay crisp, so blits are collected during the
+// draw pass (like imageDitherRegion) and stamped on last.
+type textBlit struct {
+	glyph        bitmapGlyph
+	destX, destY int             // physical-pixel top-left of the glyph mask
+	scale        int             // integer nearest-neighbor upscale (>= 1)
+	color        color.Gray      // palette extreme (0 or 255)
+	clip         image.Rectangle // physical-pixel clip; empty means unclipped
+}
+
+// blitGlyph stamps a bitmap glyph onto dst, expanding each set mask pixel into a
+// scale×scale block. No antialiasing or blending: set pixels are written in the
+// glyph's solid color, the rest show through.
+func blitGlyph(dst draw.Image, b textBlit) {
+	g := b.glyph
+	if g.width == 0 || g.height == 0 || len(g.bits) == 0 || b.scale < 1 {
+		return
+	}
+	clip := dst.Bounds()
+	if !b.clip.Empty() {
+		clip = clip.Intersect(b.clip)
+	}
+	for row := range g.height {
+		for col := range g.width {
+			if !g.pixelSet(col, row) {
+				continue
+			}
+			px0 := b.destX + col*b.scale
+			py0 := b.destY + row*b.scale
+			for dy := range b.scale {
+				y := py0 + dy
+				for dx := range b.scale {
+					x := px0 + dx
+					if image.Pt(x, y).In(clip) {
+						dst.Set(x, y, b.color)
+					}
+				}
+			}
+		}
+	}
+}
+
+// applyBlits stamps all collected bitmap glyphs onto dst.
+func applyBlits(dst draw.Image, blits []textBlit) {
+	for _, b := range blits {
+		blitGlyph(dst, b)
+	}
 }
 
 // Canvas is the demy rendering context. Build a Node tree using the constructor
@@ -67,15 +119,16 @@ func MustNew(cfg Config) *Canvas {
 }
 
 // draw builds the internal node tree from root, runs the three-pass layout, and
-// returns a rendered cv.Canvas and any per-region dither requests collected during drawing.
-func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, error) {
+// returns a rendered cv.Canvas plus any per-region dither requests and bitmap
+// glyph blits collected during drawing.
+func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, []textBlit, error) {
 	cvs := cv.New(c.cfg.PhysicalWidthMM, c.cfg.PhysicalHeightMM)
 	ctx := cv.NewContext(cvs)
 	ctx.SetCoordSystem(cv.CartesianIV)
 
 	internal, err := buildNode(root, &c.cfg, dirVertical)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	wLogical := float64(c.cfg.PixelWidth) / c.scale
@@ -108,7 +161,7 @@ func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, error) {
 		fonts: c.cfg.Fonts,
 	}
 	internal.draw(dctx)
-	return cvs, dctx.ditherRegions, nil
+	return cvs, dctx.ditherRegions, dctx.textBlits, nil
 }
 
 // rasterize converts a rendered cv.Canvas into a pixel image.
@@ -127,12 +180,13 @@ func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image,
 	if mode == Unset {
 		mode = c.cfg.ColorMode
 	}
-	cvs, regions, err := c.draw(root)
+	cvs, regions, blits, err := c.draw(root)
 	if err != nil {
 		return nil, err
 	}
 	rgba := c.rasterize(cvs)
 	if mode == RGBA || mode == Unset {
+		applyBlits(rgba, blits)
 		return rgba, nil
 	}
 
@@ -157,10 +211,13 @@ func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image,
 		}
 	case BWRed:
 		// TODO: two-pass black+red encoder
+		applyBlits(gray, blits)
 		return gray, nil
 	case Grayscale:
+		applyBlits(gray, blits)
 		return gray, nil
 	default:
+		applyBlits(gray, blits)
 		return gray, nil
 	}
 
@@ -173,6 +230,9 @@ func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image,
 		ditheredSub := applyDither(sub, pal, r.algo)
 		copyGrayRegion(out, ditheredSub, r.bounds.Min)
 	}
+
+	// Stamp crisp bitmap text last so it is never antialiased or re-dithered.
+	applyBlits(out, blits)
 
 	return out, nil
 }

@@ -21,6 +21,12 @@ import (
 //go:embed static
 var staticFiles embed.FS
 
+//go:embed fonts/spleen-8x16.bdf
+var spleenBDF []byte
+
+//go:embed fonts/tom-thumb.bdf
+var tomThumbBDF []byte
+
 var baseCfg demy.Config
 
 type lesson struct {
@@ -34,7 +40,11 @@ type lesson struct {
 func main() {
 	font := demy.MustLoadFontBytes("sans", goregular.TTF)
 	baseCfg = demy.TRMNLOriginal
-	baseCfg.Fonts = map[string]*demy.FontFamily{"sans": font}
+	baseCfg.Fonts = map[string]*demy.FontFamily{
+		"sans":     font,
+		"spleen":   demy.MustLoadBitmapFontBDF("spleen", spleenBDF),
+		"tomthumb": demy.MustLoadBitmapFontBDF("tomthumb", tomThumbBDF),
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", indexHandler)

@@ -488,4 +488,35 @@ func metricRow(label, value string) demy.Node {
 </vstack>
 </scene>`,
 	},
+	{
+		ID:    12,
+		Title: "Bitmap Fonts",
+		Desc:  "Bitmap (pixel) fonts render with no antialiasing, so they stay crisp on 1-bit and 2-bit displays where outline fonts turn muddy. Load a BDF font with LoadBitmapFontBDF and reference it by name like any other font. Switch the preview to 1-bit to see the difference: the vector (\"sans\") rows soften while the bitmap rows stay sharp. Bitmap fonts ignore size — they render at their native pixel size times the display Scale. \"spleen\" is an 8x16 monospace font; \"tomthumb\" is a tiny 4x6 proportional font.",
+		GoEquiv: `// Load a BDF bitmap font and register it by name.
+spleen := demy.MustLoadBitmapFontBDF("spleen", spleenBDF)
+cfg.Fonts["spleen"] = spleen
+
+// Reference it like any other font. Size is ignored for bitmap
+// fonts; they render at native pixel size * display Scale.
+demy.VStack(demy.Padding(16), demy.Gap(8),
+    demy.Text("Crisp pixels", demy.Style{Font: "spleen"}),
+    demy.Text("Antialiased",  demy.Style{Font: "sans", Size: 16}),
+)`,
+		SceneXML: `<vstack padding="20" gap="14">
+	<text font="sans" size="22" weight="bold">Bitmap vs. vector text</text>
+	<text font="sans" size="13">Toggle the preview to 1-bit to compare crispness.</text>
+	<divider/>
+	<vstack gap="6">
+		<text font="sans" size="11" color="#888888">spleen (bitmap 8x16)</text>
+		<text font="spleen">Sphinx of black quartz, judge my vow.</text>
+		<text font="sans" size="11" color="#888888">sans (vector, 16pt)</text>
+		<text font="sans" size="16">Sphinx of black quartz, judge my vow.</text>
+	</vstack>
+	<divider/>
+	<vstack gap="6">
+		<text font="sans" size="11" color="#888888">tomthumb (bitmap 4x6, proportional)</text>
+		<text font="tomthumb">The quick brown fox jumps over the lazy dog. 0123456789</text>
+	</vstack>
+</vstack>`,
+	},
 }

@@ -10,26 +10,34 @@ import (
 	"github.com/samuel/demy/internal/model"
 )
 
-// SeedDefaultLibraryPlugins populates the library with the built-in plugins
-// when it is empty (first startup). It is idempotent: a non-empty library is
-// left unchanged.
+// SeedDefaultLibraryPlugins ensures every built-in plugin exists in the library,
+// creating any that are missing. It is idempotent and matches on slug, so it
+// adds newly-introduced built-ins to an already-populated library while leaving
+// existing entries untouched.
 func (s *Service) SeedDefaultLibraryPlugins(ctx context.Context) error {
 	existing, err := s.store.ListLibraryPlugins(ctx, false)
 	if err != nil {
 		return fmt.Errorf("seed library: %w", err)
 	}
-	if len(existing) > 0 {
-		return nil
+	haveSlug := make(map[string]bool, len(existing))
+	for _, p := range existing {
+		haveSlug[p.Slug] = true
 	}
 
 	now := time.Now()
-	plugins := defaultLibraryPlugins(now)
-	for _, p := range plugins {
+	var added int
+	for _, p := range defaultLibraryPlugins(now) {
+		if haveSlug[p.Slug] {
+			continue
+		}
 		if err := s.store.CreateLibraryPlugin(ctx, p); err != nil {
 			return fmt.Errorf("seed library plugin %q: %w", p.Slug, err)
 		}
+		added++
 	}
-	slog.Info("seeded default library plugins", "count", len(plugins))
+	if added > 0 {
+		slog.Info("seeded default library plugins", "count", added)
+	}
 	return nil
 }
 
@@ -90,6 +98,24 @@ func defaultLibraryPlugins(now time.Time) []*model.LibraryPlugin {
 			UpdatedAt: now,
 		},
 		{
+			ID:          uuid.New().String(),
+			Slug:        "comic",
+			Name:        "Daily Comic",
+			Description: "Latest daily comic strip from a comiccaster.xyz feed.",
+			PluginType:  model.PluginTypeBuiltin,
+			ConfigSchema: `{
+  "type": "object",
+  "properties": {
+    "slug": {"type": "string", "title": "Comic feed slug", "description": "comiccaster.xyz feed slug, e.g. farside-daily"}
+  },
+  "required": ["slug"]
+}`,
+			IsActive:  true,
+			SortOrder: 4,
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		{
 			ID:           uuid.New().String(),
 			Slug:         "grayscale",
 			Name:         "Grayscale Test",
@@ -97,7 +123,7 @@ func defaultLibraryPlugins(now time.Time) []*model.LibraryPlugin {
 			PluginType:   model.PluginTypeBuiltin,
 			ConfigSchema: `{}`,
 			IsActive:     true,
-			SortOrder:    4,
+			SortOrder:    5,
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		},

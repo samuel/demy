@@ -103,6 +103,7 @@ func main() {
 	engine := plugin.NewRenderEngine(store)
 	engine.RegisterBuiltin("weather", &builtin.WeatherRenderer{})
 	engine.RegisterBuiltin("xkcd", &builtin.XKCDRenderer{})
+	engine.RegisterBuiltin("comic", &builtin.ComicRenderer{})
 	engine.RegisterBuiltin("calendar", &builtin.CalendarRenderer{})
 	engine.RegisterBuiltin("grayscale", &builtin.GrayscaleRenderer{})
 	engine.RegisterType(string(model.PluginTypeJSONTemplate), &dynamic.JSONTemplateRenderer{})

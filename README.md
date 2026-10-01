@@ -405,6 +405,23 @@ Serves an interactive tutorial at http://127.0.0.1:8081. Lessons are XML scenes 
 rendered live in the browser. Use `-addr` to change the listen
 address.
 
+## Development
+
+CI (`.github/workflows/ci.yml`) runs on pushes to `main` and on pull requests:
+
+```sh
+go build ./...
+go vet ./...
+go test -race ./...
+golangci-lint run ./...
+go test -run '^$' -fuzz '^FuzzParseBDF$' -fuzztime 30s .
+go test -run '^$' -fuzz '^FuzzUnmarshalRender$' -fuzztime 30s ./scene/jsonscene
+go test -run '^$' -fuzz '^FuzzUnmarshalRender$' -fuzztime 30s ./scene/xmlscene
+```
+
+Failing fuzz inputs are uploaded as a workflow artifact; add them to the package's
+`testdata/fuzz/` to reproduce.
+
 ## License
 
 This code is MIT licensed. See LICENSE.

@@ -1610,6 +1610,9 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		if err := checkImage(img); err != nil {
 			return nil, err
 		}
+		if err := v.Dither.check(); err != nil {
+			return nil, err
+		}
 		return &imageNode{img: img, scale: v.Scale, dither: v.Dither}, nil
 	case *BarcodeNode:
 		bc, err := encodeBarcode(v)

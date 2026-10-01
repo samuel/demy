@@ -121,7 +121,7 @@ demy.Grid(
 
 Layout is in logical pixels; font sizes are in points. `Config.Scale` maps logical to physical
 pixels (like iOS points). When 0, it is computed as `max(1, round(DPMM/5))`. The presets set it
-explicitly: `TRMNLOriginal` uses 1, `TRMNLX` uses 2.
+explicitly: `TRMNLOriginal` uses 1, `TRMNLX` uses 2. The effective scale must be in [0.5, 64].
 
 ```go
 cfg.DPMM()         // logical dots per mm
@@ -250,7 +250,7 @@ correction levels: `ECLevelLow` (~7%), `ECLevelMedium` (~15%, default), `ECLevel
 ## Rendering
 
 ```go
-img, err := c.Render(root, mode)                // mode: RGBA, Grayscale, OneBit, TwoBit, FourBit
+img, err := c.Render(root, mode)                // mode: RGBA, Grayscale, OneBit, TwoBit, FourBit (BWRed is not implemented)
 img, err := c.Render(root, demy.Unset)          // use Config.ColorMode
 img, err := c.Render(root, demy.TwoBit, demy.Atkinson) // dither the whole scene
 ```
@@ -260,7 +260,9 @@ snapped to the palette's gray levels. Encode it with `image/png` or any other en
 Translucent pixels (e.g. a translucent `Roles.Background`) are composited over white when
 converting to grayscale. `Render` is safe to call from multiple goroutines, and fonts can be
 shared between canvases. `New` rejects pixel dimensions outside 1–16384, non-positive physical
-dimensions, and a negative `Scale`.
+dimensions, an effective scale outside [0.5, 64], and an unsupported `Config.ColorMode`.
+`Render` returns an error for `BWRed` (not yet implemented) and for unknown color modes or
+dithering algorithms.
 
 A typical dashboard renders in about 10 ms on TRMNL Original and 40 ms on TRMNL X
 (`go test -bench RenderDashboard`, Apple M-series).

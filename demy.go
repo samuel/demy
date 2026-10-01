@@ -229,7 +229,8 @@ type Config struct {
 	PhysicalWidthMM  float64
 	PhysicalHeightMM float64
 	// Scale maps logical pixels to physical pixels. 0 auto-computes it from
-	// the pixel density (1 for ~125 PPI displays, 2 for ~250 PPI).
+	// the pixel density (1 for ~125 PPI displays, 2 for ~250 PPI). The
+	// effective scale must be in [0.5, 64].
 	Scale float64
 	// Palette lists the display's colors. Render quantizes using the
 	// palette implied by ColorMode, not this field.
@@ -398,7 +399,7 @@ const (
 	OneBit                     // black/white
 	TwoBit                     // 4 gray levels
 	FourBit                    // 16 gray levels
-	BWRed                      // black/white/red; not yet implemented, renders as Grayscale
+	BWRed                      // black/white/red; not yet implemented, so New and Render return an error
 )
 
 // Dither selects the dithering algorithm used when quantizing to OneBit,

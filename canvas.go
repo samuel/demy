@@ -1,6 +1,7 @@
 package demy
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -75,9 +76,19 @@ type Canvas struct {
 // maxPixelDimension bounds Config.PixelWidth and PixelHeight.
 const maxPixelDimension = 1 << 14
 
+// minScale and maxScale bound the display scale. At minScale the largest
+// canvas is maxPixelDimension/minScale = maxDimension logical pixels, so a
+// logical size never reaches the unbounded threshold. maxScale bounds the
+// per-pixel work of scaled bitmap glyphs.
+const (
+	minScale = 0.5
+	maxScale = 64
+)
+
 // New creates a Canvas for cfg. It returns an error unless the pixel dimensions
-// are in [1, 16384], the physical dimensions are finite and positive, and Scale
-// is finite and non-negative (0 selects it automatically).
+// are in [1, 16384], the physical dimensions are finite and positive, the
+// effective scale is in [0.5, 64] (Scale 0 selects it automatically), and
+// ColorMode is Unset or a supported mode.
 func New(cfg Config) (*Canvas, error) {
 	if cfg.PixelWidth <= 0 || cfg.PixelHeight <= 0 || cfg.PixelWidth > maxPixelDimension || cfg.PixelHeight > maxPixelDimension {
 		return nil, fmt.Errorf("demy: Config pixel dimensions %dx%d out of range [1, %d]", cfg.PixelWidth, cfg.PixelHeight, maxPixelDimension)
@@ -85,10 +96,19 @@ func New(cfg Config) (*Canvas, error) {
 	if !positiveFinite(cfg.PhysicalWidthMM) || !positiveFinite(cfg.PhysicalHeightMM) {
 		return nil, fmt.Errorf("demy: Config physical dimensions %vx%v mm must be positive", cfg.PhysicalWidthMM, cfg.PhysicalHeightMM)
 	}
-	if cfg.Scale < 0 || math.IsNaN(cfg.Scale) || math.IsInf(cfg.Scale, 0) {
-		return nil, fmt.Errorf("demy: Config.Scale %v must be finite and non-negative", cfg.Scale)
+	if cfg.Scale != 0 && !(cfg.Scale >= minScale && cfg.Scale <= maxScale) {
+		return nil, fmt.Errorf("demy: Config.Scale %v out of range [%v, %v] (0 selects it automatically)", cfg.Scale, minScale, maxScale)
 	}
 	scale := cfg.EffectiveScale()
+	if scale > maxScale {
+		return nil, fmt.Errorf("demy: automatic scale %v from %v pixels per mm exceeds %v; check the physical dimensions or set Config.Scale",
+			scale, cfg.PhysicalDPMM(), maxScale)
+	}
+	if cfg.ColorMode != Unset {
+		if err := cfg.ColorMode.check(); err != nil {
+			return nil, err
+		}
+	}
 	return &Canvas{
 		cfg:          cfg,
 		physicalDPMM: cfg.PhysicalDPMM(),
@@ -190,13 +210,26 @@ func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image,
 	if mode == Unset {
 		mode = c.cfg.ColorMode
 	}
+	if mode == Unset {
+		mode = RGBA
+	}
+	if err := mode.check(); err != nil {
+		return nil, err
+	}
+	algorithm := NoDithering
+	if len(algo) > 0 {
+		algorithm = algo[0]
+	}
+	if err := algorithm.check(); err != nil {
+		return nil, err
+	}
 	pal := palette(mode)
 	cvs, blits, err := c.draw(root, pal)
 	if err != nil {
 		return nil, err
 	}
 	rgba := c.rasterize(cvs)
-	if mode == RGBA || mode == Unset {
+	if mode == RGBA {
 		applyBlits(rgba, blits)
 		return rgba, nil
 	}
@@ -207,10 +240,6 @@ func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image,
 		return gray, nil
 	}
 
-	algorithm := NoDithering
-	if len(algo) > 0 {
-		algorithm = algo[0]
-	}
 	out := applyDither(gray, pal, algorithm)
 	applyBlits(out, blits)
 	return out, nil
@@ -231,8 +260,29 @@ func palette(mode ColorMode) []color.Gray {
 		}
 		return pal
 	default:
-		// TODO: black+red two-layer encoder for BWRed
 		return nil
+	}
+}
+
+// check reports an error for an unknown mode or one that isn't implemented.
+func (m ColorMode) check() error {
+	switch m {
+	case RGBA, Grayscale, OneBit, TwoBit, FourBit:
+		return nil
+	case BWRed:
+		return errors.New("demy: color mode BWRed is not implemented")
+	default:
+		return fmt.Errorf("demy: unknown color mode %d", int(m))
+	}
+}
+
+// check reports an error for an unknown dithering algorithm.
+func (d Dither) check() error {
+	switch d {
+	case NoDithering, FloydSteinberg, Atkinson:
+		return nil
+	default:
+		return fmt.Errorf("demy: unknown dithering algorithm %d", int(d))
 	}
 }
 

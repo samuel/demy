@@ -1,6 +1,7 @@
 package demy_test
 
 import (
+	"image"
 	"math"
 	"strings"
 	"sync"
@@ -111,6 +112,14 @@ func TestNewValidatesConfig(t *testing.T) {
 		"inf mm":          func(c *demy.Config) { c.PhysicalWidthMM = math.Inf(1) },
 		"negative scale":  func(c *demy.Config) { c.Scale = -1 },
 		"nan scale":       func(c *demy.Config) { c.Scale = math.NaN() },
+		"inf scale":       func(c *demy.Config) { c.Scale = math.Inf(1) },
+		"tiny scale":      func(c *demy.Config) { c.Scale = 1e-12 },
+		"below min scale": func(c *demy.Config) { c.Scale = 0.49 },
+		"above max scale": func(c *demy.Config) { c.Scale = 64.5 },
+		"huge scale":      func(c *demy.Config) { c.Scale = 1e300 },
+		"huge auto scale": func(c *demy.Config) { c.PhysicalWidthMM = 0.001 },
+		"bwred mode":      func(c *demy.Config) { c.ColorMode = demy.BWRed },
+		"unknown mode":    func(c *demy.Config) { c.ColorMode = demy.ColorMode(99) },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -120,5 +129,77 @@ func TestNewValidatesConfig(t *testing.T) {
 				t.Error("expected error")
 			}
 		})
+	}
+	valid := map[string]func(*demy.Config){
+		"min scale":     func(c *demy.Config) { c.Scale = 0.5 },
+		"max scale":     func(c *demy.Config) { c.Scale = 64 },
+		"two bit mode":  func(c *demy.Config) { c.ColorMode = demy.TwoBit },
+		"fractional":    func(c *demy.Config) { c.Scale = 1.5 },
+		"fine auto dpi": func(c *demy.Config) { c.PhysicalWidthMM = 0.5 }, // 20 px/mm → scale 4
+	}
+	for name, mutate := range valid {
+		t.Run(name, func(t *testing.T) {
+			cfg := ok
+			mutate(&cfg)
+			if _, err := demy.New(cfg); err != nil {
+				t.Errorf("New: %v", err)
+			}
+		})
+	}
+}
+
+func TestMinScaleKeepsLogicalSizeBounded(t *testing.T) {
+	// The widest canvas at the smallest scale stays within the node dimension
+	// limit, far below the threshold where a size is treated as unbounded.
+	cfg := demy.Config{PixelWidth: 1 << 14, PixelHeight: 1 << 14, PhysicalWidthMM: 1000, PhysicalHeightMM: 1000, Scale: 0.5}
+	c := demy.MustNew(cfg)
+	if w, h := c.LogicalWidth(), c.LogicalHeight(); w != 1<<15 || h != 1<<15 {
+		t.Errorf("logical size = %vx%v, want %vx%v", w, h, 1<<15, 1<<15)
+	}
+}
+
+func TestRenderValidatesModes(t *testing.T) {
+	c := demy.MustNew(textConfig(10, 10))
+	root := demy.Frame(4, 4)
+	bad := map[string]func() error{
+		"bwred":          func() error { _, err := c.Render(root, demy.BWRed); return err },
+		"unknown mode":   func() error { _, err := c.Render(root, demy.ColorMode(99)); return err },
+		"negative mode":  func() error { _, err := c.Render(root, demy.ColorMode(-1)); return err },
+		"unknown dither": func() error { _, err := c.Render(root, demy.OneBit, demy.Dither(9)); return err },
+		"image dither": func() error {
+			_, err := c.Render(demy.Image(image.NewGray(image.Rect(0, 0, 2, 2)), demy.Dither(9)), demy.OneBit)
+			return err
+		},
+	}
+	for name, render := range bad {
+		t.Run(name, func(t *testing.T) {
+			if err := render(); err == nil {
+				t.Error("expected error")
+			}
+		})
+	}
+	for _, mode := range []demy.ColorMode{demy.RGBA, demy.Grayscale, demy.OneBit, demy.TwoBit, demy.FourBit} {
+		if _, err := c.Render(root, mode, demy.Atkinson); err != nil {
+			t.Errorf("mode %d: %v", mode, err)
+		}
+	}
+}
+
+func TestRenderUnsetMode(t *testing.T) {
+	cfg := textConfig(10, 10)
+	img, err := demy.MustNew(cfg).Render(demy.Frame(4, 4), demy.Unset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := img.(*image.RGBA); !ok {
+		t.Errorf("Unset with Unset Config.ColorMode: got %T, want *image.RGBA", img)
+	}
+	cfg.ColorMode = demy.TwoBit
+	img, err = demy.MustNew(cfg).Render(demy.Frame(4, 4), demy.Unset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := img.(*image.Gray); !ok {
+		t.Errorf("Unset with TwoBit Config.ColorMode: got %T, want *image.Gray", img)
 	}
 }

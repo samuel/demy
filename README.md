@@ -438,6 +438,12 @@ Serves an interactive tutorial at http://127.0.0.1:8081. Lessons are XML scenes 
 rendered live in the browser. Use `-addr` to change the listen
 address.
 
+## Stability
+
+demy follows semantic versioning. Until v1.0.0, a minor release (v0.x.0) may make breaking
+changes; patch releases (v0.x.y) only fix bugs. [CHANGELOG.md](CHANGELOG.md) lists breaking
+changes for each release.
+
 ## Security and trusted input
 
 Scenes, templates, Starlark scripts, and BDF fonts must come from trusted sources. demy

@@ -251,7 +251,7 @@ demy.ZStack(demy.Center,
 		<frame width="620" height="80">
 			<box background="#222222"/>
 		</frame>
-		<text font="sans" size="16" color="#ffffff">align: "center" — text anchored to center of the dark frame</text>
+		<text font="sans" size="13" color="#ffffff">align: "center" — text anchored to center of the dark frame</text>
 	</zstack>
 </vstack>`,
 	},

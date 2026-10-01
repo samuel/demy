@@ -168,7 +168,7 @@ func TestBoxBorderInsetsContent(t *testing.T) {
 	}
 }
 
-func TestDitherRegionPartlyOffCanvas(t *testing.T) {
+func TestDitherImagePartlyOffCanvas(t *testing.T) {
 	gray := solid(10, 30, color.Gray{Y: 128})
 	n := demy.ZStack(demy.Bottom, demy.VStack(demy.Image(gray, demy.FloydSteinberg)))
 	img := render(t, n, 10, 10, demy.OneBit, demy.Config{})
@@ -184,6 +184,45 @@ func TestDitherRegionPartlyOffCanvas(t *testing.T) {
 	}
 	if black == 0 || white == 0 {
 		t.Errorf("visible image not dithered: %d black, %d white", black, white)
+	}
+}
+
+// TestContentOverDitheredImage checks that content drawn over a dithered
+// image is quantized on its own rather than dithered with the image.
+func TestContentOverDitheredImage(t *testing.T) {
+	photo := solid(40, 40, color.Gray{Y: 200})
+	mid := color.Gray{Y: 128} // quantizes to white in OneBit without dithering
+	for name, overlay := range map[string]demy.Node{
+		"box":   demy.Box(demy.Background(mid), demy.Frame(40, 40)),
+		"image": demy.Image(solid(40, 40, mid), demy.ImageStretch),
+	} {
+		for _, wrap := range []func(demy.Node) demy.Node{
+			func(n demy.Node) demy.Node { return n },
+			func(n demy.Node) demy.Node { return demy.Frame(40, 40, demy.Children(n)) },
+		} {
+			root := wrap(demy.ZStack(demy.Image(photo, demy.ImageStretch, demy.FloydSteinberg), demy.Children(overlay)))
+			img := render(t, root, 40, 40, demy.OneBit, demy.Config{})
+			for y := range 40 {
+				for x := range 40 {
+					if c := rgbaAt(img, x, y); c != testWhite {
+						t.Fatalf("%s: pixel (%d,%d) = %v, want white", name, x, y, c)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestTextOverDitheredImage checks that vector text over a dithered white
+// image matches the same text over a plain white background.
+func TestTextOverDitheredImage(t *testing.T) {
+	cfg := demy.Config{Fonts: map[string]*demy.FontFamily{"sans": demy.MustLoadFontBytes("sans", goregular.TTF)}}
+	text := demy.Text("Dither", demy.Style{Font: "sans", Size: 16})
+	white := solid(80, 30, testWhite)
+	plain := render(t, demy.ZStack(demy.Box(demy.Background(testWhite), demy.Frame(80, 30)), text), 80, 30, demy.TwoBit, cfg)
+	over := render(t, demy.ZStack(demy.Image(white, demy.ImageStretch, demy.FloydSteinberg), text), 80, 30, demy.TwoBit, cfg)
+	if !imagesEqual(plain, over) {
+		t.Error("text over a dithered image differs from text over a plain background")
 	}
 }
 

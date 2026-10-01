@@ -53,15 +53,15 @@ func (mctx *measureCtx) with(availW, availH float64) *measureCtx {
 
 // drawCtx carries context for the draw pass.
 type drawCtx struct {
-	ctx           *cv.Context
-	dpmm          float64 // logical DPMM (physical DPMM / scale)
-	scale         float64
-	roles         Roles
-	fonts         map[string]*FontFamily
-	ditherRegions []imageDitherRegion
-	textBlits     []textBlit
-	clip          image.Rectangle // physical-pixel clip for bitmap text and clipped sub-canvases
-	err           error           // first error encountered while drawing
+	ctx       *cv.Context
+	dpmm      float64 // logical DPMM (physical DPMM / scale)
+	scale     float64
+	roles     Roles
+	fonts     map[string]*FontFamily
+	palette   []color.Gray // output palette for per-image dithering; nil when not quantizing
+	textBlits []textBlit
+	clip      image.Rectangle // physical-pixel clip for bitmap text and clipped sub-canvases
+	err       error           // first error encountered while drawing
 }
 
 // setErr records err if no earlier draw error has been recorded.
@@ -551,8 +551,8 @@ func (n *frameNode) draw(dctx *drawCtx) {
 // physical resolution on whole physical pixels, so clipped content is as sharp
 // as unclipped content.
 func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
-	// Bitmap glyphs and dither regions apply to the root image after
-	// quantization, so they are clipped to the same physical-pixel bounds.
+	// Bitmap glyphs apply to the root image after quantization, so they are
+	// clipped to the same physical-pixel bounds.
 	// Limiting the sub-canvas to the visible region bounds its allocation by
 	// the root canvas regardless of the node's own size.
 	clip := image.Rect(
@@ -575,12 +575,13 @@ func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 	subCtx.Translate(-xMM, -yMM)
 
 	subDctx := &drawCtx{
-		ctx:   subCtx,
-		dpmm:  dctx.dpmm,
-		scale: dctx.scale,
-		roles: dctx.roles,
-		fonts: dctx.fonts,
-		clip:  clip,
+		ctx:     subCtx,
+		dpmm:    dctx.dpmm,
+		scale:   dctx.scale,
+		roles:   dctx.roles,
+		fonts:   dctx.fonts,
+		palette: dctx.palette,
+		clip:    clip,
 	}
 	for _, child := range children {
 		child.draw(subDctx)
@@ -589,12 +590,6 @@ func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 		dctx.setErr(subDctx.err)
 	}
 	dctx.textBlits = append(dctx.textBlits, subDctx.textBlits...)
-	for _, dr := range subDctx.ditherRegions {
-		dr.bounds = dr.bounds.Intersect(clip)
-		if !dr.bounds.Empty() {
-			dctx.ditherRegions = append(dctx.ditherRegions, dr)
-		}
-	}
 
 	subImg := image.NewRGBA(image.Rect(0, 0, clip.Dx(), clip.Dy()))
 	subCvs.RenderTo(newVectorRenderer(subImg, physDPMM))
@@ -1092,18 +1087,51 @@ func (n *imageNode) draw(dctx *drawCtx) {
 	default: // ImageFit
 		fit = cv.ImageContain
 	}
-	drawn := dctx.ctx.FitImage(img, rect, fit)
-	if n.dither != NoDithering {
-		// Dither only the area the image covers, not letterboxing around it.
-		physDPMM := dpmm * dctx.scale
-		px := image.Rect(
-			int(math.Round(drawn.X0*physDPMM)),
-			int(math.Round(drawn.Y0*physDPMM)),
-			int(math.Round(drawn.X1*physDPMM)),
-			int(math.Round(drawn.Y1*physDPMM)),
-		)
-		dctx.ditherRegions = append(dctx.ditherRegions, imageDitherRegion{bounds: px, algo: n.dither})
+	if n.dither == NoDithering || dctx.palette == nil {
+		dctx.ctx.FitImage(img, rect, fit)
+		return
 	}
+	n.drawDithered(dctx, img, rect, fit)
+}
+
+// drawDithered rasterizes the image alone at physical resolution, dithers it
+// to the output palette, and draws the result 1:1 on whole physical pixels.
+// Dithering in the draw pass leaves content drawn over the image untouched.
+func (n *imageNode) drawDithered(dctx *drawCtx, img image.Image, rect cv.Rect, fit cv.ImageFit) {
+	physDPMM := dctx.dpmm * dctx.scale
+	// Limiting the raster to the visible region bounds its allocation by the
+	// root canvas regardless of the node's own size.
+	px := image.Rect(
+		int(math.Floor(rect.X0*physDPMM)),
+		int(math.Floor(rect.Y0*physDPMM)),
+		int(math.Ceil(rect.X1*physDPMM)),
+		int(math.Ceil(rect.Y1*physDPMM)),
+	).Intersect(dctx.clip)
+	if px.Empty() {
+		return
+	}
+	xMM := float64(px.Min.X) / physDPMM
+	yMM := float64(px.Min.Y) / physDPMM
+
+	subCvs := cv.New(float64(px.Dx())/physDPMM, float64(px.Dy())/physDPMM)
+	subCtx := cv.NewContext(subCvs)
+	subCtx.SetCoordSystem(cv.CartesianIV)
+	subCtx.Translate(-xMM, -yMM)
+	drawn := subCtx.FitImage(img, rect, fit)
+
+	subImg := image.NewRGBA(image.Rect(0, 0, px.Dx(), px.Dy()))
+	subCvs.RenderTo(newVectorRenderer(subImg, physDPMM))
+
+	// Dither only the area the image covers, not letterboxing around it.
+	area := image.Rect(
+		int(math.Round(drawn.X0*physDPMM)),
+		int(math.Round(drawn.Y0*physDPMM)),
+		int(math.Round(drawn.X1*physDPMM)),
+		int(math.Round(drawn.Y1*physDPMM)),
+	).Sub(px.Min).Intersect(subImg.Bounds())
+	ditherRGBA(subImg, area, dctx.palette, n.dither)
+
+	dctx.ctx.DrawImage(xMM, yMM, subImg, cv.DPMM(physDPMM))
 }
 
 // --- barcodeNode ---

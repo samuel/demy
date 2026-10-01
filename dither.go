@@ -115,3 +115,40 @@ func diffuse(src *image.Gray, palette []color.Gray, kernel []diffusion) *image.G
 	}
 	return out
 }
+
+// ditherRGBA dithers the region r of img to palette in place. Each pixel is
+// dithered on its own (unpremultiplied) luminance and keeps its alpha, so a
+// translucent image still blends with what is drawn beneath it.
+func ditherRGBA(img *image.RGBA, r image.Rectangle, palette []color.Gray, algo Dither) {
+	r = r.Intersect(img.Bounds())
+	if r.Empty() {
+		return
+	}
+	gray := image.NewGray(image.Rect(0, 0, r.Dx(), r.Dy()))
+	for y := range r.Dy() {
+		i := img.PixOffset(r.Min.X, r.Min.Y+y)
+		src := img.Pix[i : i+4*r.Dx()]
+		dst := gray.Pix[y*gray.Stride : y*gray.Stride+r.Dx()]
+		for x := range dst {
+			p := src[4*x : 4*x+4 : 4*x+4]
+			a := uint32(p[3])
+			if a == 0 {
+				dst[x] = 255
+				continue
+			}
+			lum := (19595*uint32(p[0]) + 38470*uint32(p[1]) + 7471*uint32(p[2]) + 1<<15) >> 16
+			dst[x] = uint8(min((lum*255+a/2)/a, 255))
+		}
+	}
+	out := applyDither(gray, palette, algo)
+	for y := range r.Dy() {
+		i := img.PixOffset(r.Min.X, r.Min.Y+y)
+		dst := img.Pix[i : i+4*r.Dx()]
+		for x, v := range out.Pix[y*out.Stride : y*out.Stride+r.Dx()] {
+			p := dst[4*x : 4*x+4 : 4*x+4]
+			a := uint32(p[3])
+			c := uint8((uint32(v)*a + 127) / 255)
+			p[0], p[1], p[2] = c, c, c
+		}
+	}
+}

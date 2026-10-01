@@ -259,8 +259,10 @@ sources are safe to render: sizes, gaps, padding, and weights must be finite and
 
 ### Per-image dithering
 
-Rendering without global dithering keeps text crisp. Images can opt into dithering for their
-own region, applied after quantization in `OneBit`, `TwoBit`, and `FourBit` modes:
+Rendering without global dithering keeps text crisp. Images can opt into dithering of their
+own pixels in `OneBit`, `TwoBit`, and `FourBit` modes. The image is dithered as it is drawn,
+so text and shapes layered over it in a `ZStack` stay crisp. A translucent image is dithered
+on its own colors and then blended with what lies beneath it.
 
 ```go
 root := demy.VStack(

@@ -10,13 +10,6 @@ import (
 	cv "github.com/tdewolff/canvas"
 )
 
-// imageDitherRegion is a physical-pixel region of an image that requested its
-// own dithering algorithm.
-type imageDitherRegion struct {
-	bounds image.Rectangle
-	algo   Dither
-}
-
 // textBlit is one bitmap glyph to stamp onto the final image after
 // quantization, bypassing antialiasing and dithering.
 type textBlit struct {
@@ -125,8 +118,9 @@ func MustNew(cfg Config) *Canvas {
 }
 
 // draw builds, measures, lays out, and draws root, returning the vector canvas
-// plus the dither regions and bitmap glyphs to apply after rasterization.
-func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, []textBlit, error) {
+// plus the bitmap glyphs to apply after quantization. Images that request
+// dithering are dithered to pal while drawing; nil pal leaves them as is.
+func (c *Canvas) draw(root Node, pal []color.Gray) (*cv.Canvas, []textBlit, error) {
 	// Size the canvas from the pixel dimensions so millimeters map exactly onto
 	// whole pixels; PhysicalHeightMM need not match the width-derived density.
 	wMM := float64(c.cfg.PixelWidth) / c.physicalDPMM
@@ -137,7 +131,7 @@ func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, []textBlit, e
 
 	internal, err := buildNode(root, &c.cfg, dirVertical, 0)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	wLogical := float64(c.cfg.PixelWidth) / c.scale
@@ -164,18 +158,19 @@ func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, []textBlit, e
 	ctx.DrawPath(0, 0, cv.Rectangle(wMM, hMM))
 
 	dctx := &drawCtx{
-		ctx:   ctx,
-		dpmm:  c.dpmm,
-		scale: c.scale,
-		roles: c.cfg.Roles,
-		fonts: c.cfg.Fonts,
-		clip:  image.Rect(0, 0, c.cfg.PixelWidth, c.cfg.PixelHeight),
+		ctx:     ctx,
+		dpmm:    c.dpmm,
+		scale:   c.scale,
+		roles:   c.cfg.Roles,
+		fonts:   c.cfg.Fonts,
+		palette: pal,
+		clip:    image.Rect(0, 0, c.cfg.PixelWidth, c.cfg.PixelHeight),
 	}
 	internal.draw(dctx)
 	if dctx.err != nil {
-		return nil, nil, nil, dctx.err
+		return nil, nil, dctx.err
 	}
-	return cvs, dctx.ditherRegions, dctx.textBlits, nil
+	return cvs, dctx.textBlits, nil
 }
 
 // rasterize converts a rendered cv.Canvas into a pixel image.
@@ -195,7 +190,8 @@ func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image,
 	if mode == Unset {
 		mode = c.cfg.ColorMode
 	}
-	cvs, regions, blits, err := c.draw(root)
+	pal := palette(mode)
+	cvs, blits, err := c.draw(root, pal)
 	if err != nil {
 		return nil, err
 	}
@@ -206,51 +202,38 @@ func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image,
 	}
 
 	gray := toGray(rgba)
+	if pal == nil {
+		applyBlits(gray, blits)
+		return gray, nil
+	}
 
 	algorithm := NoDithering
 	if len(algo) > 0 {
 		algorithm = algo[0]
 	}
+	out := applyDither(gray, pal, algorithm)
+	applyBlits(out, blits)
+	return out, nil
+}
 
-	var pal []color.Gray
-	var out *image.Gray
+// palette returns the gray levels mode quantizes to, or nil when mode does
+// not quantize.
+func palette(mode ColorMode) []color.Gray {
 	switch mode {
 	case OneBit:
-		pal = []color.Gray{{Y: 0}, {Y: 255}}
+		return []color.Gray{{Y: 0}, {Y: 255}}
 	case TwoBit:
-		pal = []color.Gray{{Y: 0}, {Y: 85}, {Y: 170}, {Y: 255}}
+		return []color.Gray{{Y: 0}, {Y: 85}, {Y: 170}, {Y: 255}}
 	case FourBit:
-		pal = make([]color.Gray, 16)
+		pal := make([]color.Gray, 16)
 		for i := range 16 {
 			pal[i] = color.Gray{Y: uint8(i * 17)}
 		}
-	case BWRed:
-		// TODO: black+red two-layer encoder
-		applyBlits(gray, blits)
-		return gray, nil
-	case Grayscale:
-		applyBlits(gray, blits)
-		return gray, nil
+		return pal
 	default:
-		applyBlits(gray, blits)
-		return gray, nil
+		// TODO: black+red two-layer encoder for BWRed
+		return nil
 	}
-
-	out = applyDither(gray, pal, algorithm)
-
-	// Dither from the unquantized grayscale so error diffusion has the full range.
-	for _, r := range regions {
-		b := r.bounds.Intersect(gray.Bounds())
-		if b.Empty() {
-			continue
-		}
-		ditheredSub := applyDither(subGray(gray, b), pal, r.algo)
-		copyGrayRegion(out, ditheredSub, b.Min)
-	}
-
-	applyBlits(out, blits)
-
-	return out, nil
 }
 
 // applyDither quantizes a grayscale image to pal using the given algorithm.
@@ -262,26 +245,5 @@ func applyDither(src *image.Gray, pal []color.Gray, algo Dither) *image.Gray {
 		return ditherAtkinson(src, pal)
 	default:
 		return ditherNone(src, pal)
-	}
-}
-
-// subGray returns a copy of the region r of src, with origin (0,0). r must lie
-// within src's bounds.
-func subGray(src *image.Gray, r image.Rectangle) *image.Gray {
-	dst := image.NewGray(image.Rect(0, 0, r.Dx(), r.Dy()))
-	for y := range r.Dy() {
-		i := src.PixOffset(r.Min.X, r.Min.Y+y)
-		copy(dst.Pix[y*dst.Stride:], src.Pix[i:i+r.Dx()])
-	}
-	return dst
-}
-
-// copyGrayRegion copies src into dst with src's origin at pt. The destination
-// region must lie within dst's bounds.
-func copyGrayRegion(dst, src *image.Gray, pt image.Point) {
-	w := src.Bounds().Dx()
-	for y := range src.Bounds().Dy() {
-		i := src.PixOffset(src.Bounds().Min.X, src.Bounds().Min.Y+y)
-		copy(dst.Pix[dst.PixOffset(pt.X, pt.Y+y):], src.Pix[i:i+w])
 	}
 }

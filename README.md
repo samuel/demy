@@ -15,6 +15,9 @@ A declarative rendering library for e-ink and similar displays.
 - **Serialization**: JSON (`scene/jsonscene`) and XML with `text/template` support (`scene/xmlscene`)
 - **Scripting**: Starlark plugin host (`plugin/starlark`)
 
+Scenes, templates, scripts, and fonts must be trusted; see
+[Security and trusted input](#security-and-trusted-input).
+
 ## Quick start
 
 ```go
@@ -153,6 +156,10 @@ Zero-valued fields inherit (`FontInherit`, `TextAlignInherit`, `TextOverflowInhe
 `MaxLines: 0`), so any field can be set back to its default over a class:
 `demy.Style{Weight: demy.FontRegular, Align: demy.TextAlignLeft, MaxLines: demy.MaxLinesUnlimited}`.
 
+Text is sanitized before layout: each invalid UTF-8 byte, and each control character other
+than tab, line feed, and carriage return, becomes U+FFFD (�). Line feeds and carriage returns
+break lines.
+
 `MaxLines` truncates text to that many lines; with `TextOverflowEllipsis` the last line is
 shortened to fit an ellipsis.
 
@@ -271,10 +278,11 @@ dithering algorithms.
 A typical dashboard renders in about 10 ms on TRMNL Original and 40 ms on TRMNL X
 (`go test -bench RenderDashboard`, Apple M-series).
 
-`Render` returns an error rather than panicking on invalid trees, so scenes from untrusted
-sources are safe to render: sizes, gaps, padding, and weights must be finite and within
-`[0, 32768]`, trees may nest at most 1000 levels, and `GridRow` must be a direct child of
-`Grid`. XML and JSON scenes are also limited to 1000 levels of nesting.
+`Render` returns an error rather than panicking on invalid trees: sizes, gaps, padding, and
+weights must be finite and within `[0, 32768]`, trees may nest at most 1000 levels, and
+`GridRow` must be a direct child of `Grid`. XML and JSON scenes are also limited to 1000 levels
+of nesting. These checks don't make untrusted input safe to render; see
+[Security and trusted input](#security-and-trusted-input).
 
 ### Per-image dithering
 
@@ -429,6 +437,32 @@ go run ./cmd/demy-tutorial/
 Serves an interactive tutorial at http://127.0.0.1:8081. Lessons are XML scenes edited and
 rendered live in the browser. Use `-addr` to change the listen
 address.
+
+## Security and trusted input
+
+Scenes, templates, Starlark scripts, and BDF fonts must come from trusted sources. demy
+validates its input and returns errors instead of panicking on malformed trees, but it does not
+yet bound the time or memory a hostile input can use:
+
+- Layout time can grow exponentially with nesting depth: stacks and grids that measure a child
+  at more than one size re-measure its whole subtree each time, so an `HStack` or auto-column
+  `Grid` nested 12 deep around text takes about 100 ms, and each further level doubles it.
+- There is no limit on the number of nodes. A Starlark script can build a tree that shares
+  nodes (`x = VStack(x, x)` in a loop) whose expanded size is exponential in its source size.
+- Text length isn't capped, and every text node is shaped during both measure and draw.
+- A small BDF font can declare glyphs whose bitmaps take far more memory than its size
+  suggests.
+- `Canvas.Render` and `xmlscene.Execute` can't be cancelled.
+- `Environment.MaxSteps` bounds Starlark execution steps, not memory. A panic in a Go builtin
+  registered with `AddBuiltin` or `AddModule` crashes the process, and script `print()` output
+  isn't limited.
+
+Run untrusted input in a separate process with memory and time limits.
+
+## Dependencies
+
+Vector text and rasterization use [tdewolff/canvas](https://github.com/tdewolff/canvas), which
+brings a large dependency tree which demy never uses.
 
 ## Development
 

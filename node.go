@@ -8,6 +8,8 @@ import (
 	"math"
 	"reflect"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/qr"
@@ -1599,7 +1601,7 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		if cfg != nil {
 			style.Color = resolveColor(style.Color, cfg.Roles)
 		}
-		return &textNode{text: v.Text, style: style}, nil
+		return &textNode{text: sanitizeText(v.Text), style: style}, nil
 	case *ImageNode:
 		img := v.Image
 		if img == nil && v.Key != "" {
@@ -1672,6 +1674,28 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 	default:
 		return nil, fmt.Errorf("demy: unknown node type %T", n)
 	}
+}
+
+// sanitizeText replaces each invalid UTF-8 byte, and each control character
+// other than tab, line feed, and carriage return, with U+FFFD. Vector text
+// shaping panics on invalid UTF-8, and control characters would otherwise
+// render differently in vector and bitmap fonts.
+func sanitizeText(s string) string {
+	replace := func(r rune) bool {
+		return r == utf8.RuneError || unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r'
+	}
+	if !strings.ContainsFunc(s, replace) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s { // invalid bytes decode as utf8.RuneError, one per byte
+		if replace(r) {
+			r = utf8.RuneError
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // checkTextFont reports an error unless style names a loaded font in

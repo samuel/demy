@@ -32,6 +32,10 @@
 // Starlark execution steps (DefaultMaxSteps when zero) and are cancelled when
 // their context is done. print() output goes to Environment.Logger.
 //
+// Configure an Environment before the first Load and don't modify it while a
+// Load is running. A Plugin keeps the settings and globals the Environment had
+// when it was loaded, so later changes apply only to later Loads.
+//
 // Exposed globals:
 //
 //	Containers:   VStack(...), HStack(...), ZStack(...), Box(...), Grid(...),
@@ -105,6 +109,11 @@ const DefaultMaxSteps = 10_000_000
 
 // Environment holds user-registered globals merged into the Starlark execution
 // environment when a script is compiled. Its zero value is valid (no extra globals).
+//
+// Configure it before the first Load. Load copies the fields and globals into
+// the Plugin, so changing the Environment afterwards doesn't affect existing
+// Plugins. Load may be called concurrently once the Environment is no longer
+// being modified.
 type Environment struct {
 	// MaxSteps limits Starlark execution steps for module execution and for each
 	// Render call. Zero means DefaultMaxSteps.
@@ -169,26 +178,36 @@ func (e *Environment) LoadBytes(ctx context.Context, filename string, src []byte
 	return e.execFile(ctx, filename, src, cfg, loc)
 }
 
-// newThread returns a thread limited to the environment's step budget whose
-// print() output goes to the environment's logger. The returned stop function
-// must be called when execution finishes; until then, ctx being done cancels
-// the thread.
-func (e *Environment) newThread(ctx context.Context, name string) (*sl.Thread, func() bool) {
-	logger := e.Logger
-	if logger == nil {
-		logger = slog.Default()
+// threadConfig holds the Environment settings that a Plugin captures at Load,
+// with defaults applied.
+type threadConfig struct {
+	maxSteps uint64
+	logger   *slog.Logger
+}
+
+func (e *Environment) threadConfig() threadConfig {
+	tc := threadConfig{maxSteps: e.MaxSteps, logger: e.Logger}
+	if tc.maxSteps == 0 {
+		tc.maxSteps = DefaultMaxSteps
 	}
-	maxSteps := e.MaxSteps
-	if maxSteps == 0 {
-		maxSteps = DefaultMaxSteps
+	if tc.logger == nil {
+		tc.logger = slog.Default()
 	}
+	return tc
+}
+
+// newThread returns a thread limited to the step budget whose print() output
+// goes to the logger. The returned stop function must be called when execution
+// finishes; until then, ctx being done cancels the thread.
+func (tc threadConfig) newThread(ctx context.Context, name string) (*sl.Thread, func() bool) {
+	logger := tc.logger
 	thread := &sl.Thread{
 		Name: name,
 		Print: func(t *sl.Thread, msg string) {
 			logger.InfoContext(ContextFromThread(t), msg, "script", name)
 		},
 	}
-	thread.SetMaxExecutionSteps(maxSteps)
+	thread.SetMaxExecutionSteps(tc.maxSteps)
 	thread.SetLocal(contextKey, ctx)
 	stop := context.AfterFunc(ctx, func() {
 		thread.Cancel(context.Cause(ctx).Error())
@@ -216,7 +235,9 @@ func ToStarlark(v any) (sl.Value, error) {
 }
 
 // WrapNode wraps a demy.Node as a Starlark value that can be returned from a
-// BuiltinFunc and passed to layout constructors in scripts.
+// BuiltinFunc and passed to layout constructors in scripts. Don't modify n
+// after wrapping it: scripts can place it in several trees and keep it across
+// renders, and the trees Render returns hold n itself, not a copy.
 func WrapNode(n demy.Node) sl.Value {
 	return &nodeValue{n}
 }
@@ -232,8 +253,10 @@ func UnwrapNode(v sl.Value) (demy.Node, bool) {
 }
 
 // Plugin is a compiled Starlark script that exports a render(data) function.
+// Its module globals are frozen after Load, so Render may be called
+// concurrently.
 type Plugin struct {
-	env          *Environment
+	threads      threadConfig
 	name         string
 	globals      sl.StringDict
 	scriptStyles map[string]demy.Style
@@ -252,7 +275,8 @@ func (e *Environment) execFile(ctx context.Context, filename string, src any, cf
 	}
 	env := newEnv(cfg, loc, now)
 	maps.Copy(env, e.extras)
-	thread, stop := e.newThread(ctx, filename)
+	threads := e.threadConfig()
+	thread, stop := threads.newThread(ctx, filename)
 	globals, err := sl.ExecFileOptions(&syntax.FileOptions{}, thread, filename, src, env)
 	stop()
 	if err != nil {
@@ -261,7 +285,7 @@ func (e *Environment) execFile(ctx context.Context, filename string, src any, cf
 	if _, ok := globals["render"]; !ok {
 		return nil, fmt.Errorf("starlarkplugin: %s must define render(data)", filename)
 	}
-	p := &Plugin{env: e, name: filename, globals: globals}
+	p := &Plugin{threads: threads, name: filename, globals: globals}
 	if sv, ok := globals["styles"]; ok {
 		d, ok := sv.(*sl.Dict)
 		if !ok {
@@ -286,11 +310,12 @@ func (e *Environment) execFile(ctx context.Context, filename string, src any, cf
 	return p, nil
 }
 
-// Styles returns the named styles declared in the script's module-level "styles"
-// dict, or nil if there are none. Merge these into Config.Styles before rendering
-// so that Class(name) references in the returned node tree resolve.
+// Styles returns a copy of the named styles declared in the script's
+// module-level "styles" dict, or nil if there are none. Merge these into
+// Config.Styles before rendering so that Class(name) references in the returned
+// node tree resolve.
 func (p *Plugin) Styles() map[string]demy.Style {
-	return p.scriptStyles
+	return maps.Clone(p.scriptStyles)
 }
 
 // Render calls the script's render(data) and returns the root Node tree.
@@ -305,7 +330,7 @@ func (p *Plugin) Render(ctx context.Context, data map[string]any) (demy.Node, er
 	if err != nil {
 		return nil, fmt.Errorf("starlarkplugin: %w", err)
 	}
-	thread, stop := p.env.newThread(ctx, p.name)
+	thread, stop := p.threads.newThread(ctx, p.name)
 	defer stop()
 	result, err := sl.Call(thread, p.globals["render"], sl.Tuple{d}, nil)
 	if err != nil {

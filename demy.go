@@ -70,7 +70,9 @@ func (s FontStyle) cvStyle() cv.FontStyle {
 // either a vector family (TTF/OTF) or a bitmap family (BDF); the two cannot be
 // mixed. Text references a family by its key in Config.Fonts.
 //
-// A FontFamily may be shared by concurrent renders. Create one with a Load
+// A FontFamily may be shared by concurrent renders and canvases. Add all of its
+// styles before the first Render that uses it: AddStyle and AddStyleBDF are not
+// safe to call while a render may be reading the family. Create one with a Load
 // function; a zero value is not usable and rendering text with it is an error.
 type FontFamily struct {
 	name   string
@@ -153,7 +155,8 @@ func MustLoadFontBytes(name string, data []byte) *FontFamily {
 }
 
 // AddStyle adds a weight/style variant (e.g. FontBold, FontBold|FontItalic)
-// from TTF/OTF bytes. It returns an error for a bitmap family.
+// from TTF/OTF bytes. It returns an error for a bitmap family. Call it before
+// the family is used in a Render.
 func (ff *FontFamily) AddStyle(data []byte, style FontStyle) error {
 	if !ff.isLoaded() {
 		return errFontNotLoaded
@@ -206,7 +209,8 @@ func MustLoadBitmapFontBDFFile(name, path string) *FontFamily {
 }
 
 // AddStyleBDF adds a weight/style variant (e.g. FontBold) from BDF bytes.
-// It returns an error for a vector family.
+// It returns an error for a vector family. Call it before the family is used
+// in a Render.
 func (ff *FontFamily) AddStyleBDF(data []byte, style FontStyle) error {
 	if !ff.isLoaded() {
 		return errFontNotLoaded
@@ -223,6 +227,10 @@ func (ff *FontFamily) AddStyleBDF(data []byte, style FontStyle) error {
 }
 
 // Config describes a display and the resources available when rendering to it.
+//
+// New copies the Config but not the maps and slices it holds (Fonts, Images,
+// Styles, Palette), which the Canvas shares with the caller. Don't modify them
+// after the first Render; build a new Config and Canvas instead.
 type Config struct {
 	PixelWidth       int
 	PixelHeight      int

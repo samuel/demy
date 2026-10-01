@@ -259,7 +259,9 @@ img, err := c.Render(root, demy.TwoBit, demy.Atkinson) // dither the whole scene
 snapped to the palette's gray levels. Encode it with `image/png` or any other encoder.
 Translucent pixels (e.g. a translucent `Roles.Background`) are composited over white when
 converting to grayscale. `Render` is safe to call from multiple goroutines, and fonts can be
-shared between canvases. `New` rejects pixel dimensions outside 1–16384, non-positive physical
+shared between canvases. `New` copies the `Config` but shares its maps and slices (`Fonts`,
+`Images`, `Styles`, `Palette`), so don't modify them, or call `AddStyle`/`AddStyleBDF` on a
+font, after the first `Render`. `New` rejects pixel dimensions outside 1–16384, non-positive physical
 dimensions, an effective scale outside [0.5, 64], and an unsupported `Config.ColorMode`.
 `Render` returns an error for `BWRed` (not yet implemented) and for unknown color modes or
 dithering algorithms.
@@ -393,6 +395,12 @@ may share nodes between renders, so treat it as read-only.
 Module execution and each `Render` call are limited to `Environment.MaxSteps` Starlark
 execution steps (`DefaultMaxSteps`, 10 million, when zero) and stop when their context is
 cancelled. Script `print()` output goes to `Environment.Logger` (default `slog.Default()`).
+
+Configure an `Environment` (fields and `Add…` calls) before the first `Load`. Each `Plugin`
+keeps the settings and globals from its `Load`, so later changes affect only later loads.
+`Plugin.Render` may be called concurrently, and `Plugin.Styles` returns a copy. Nodes passed to
+`WrapNode` must not be modified afterwards, since scripts can share them between trees and
+renders.
 
 Globals:
 

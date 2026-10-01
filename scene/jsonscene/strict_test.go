@@ -1,9 +1,11 @@
 package jsonscene_test
 
 import (
+	"encoding/json/jsontext"
 	"image"
 	"image/color"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/samuel/demy"
@@ -25,6 +27,9 @@ func TestUnmarshalStrict(t *testing.T) {
 		"weighted two":      `{"type":"weighted","children":[{"type":"spacer"},{"type":"spacer"}]}`,
 		"trailing data":     `{"type":"vstack"} {"type":"hstack"}`,
 		"unknown type":      `{"type":"vstak"}`,
+		"duplicate field":   `{"type":"vstack","gap":1,"gap":2}`,
+		"field case":        `{"type":"vstack","Gap":4}`,
+		"invalid utf-8":     "{\"type\":\"text\",\"text\":\"\xff\"}",
 	}
 	for name, src := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -105,5 +110,30 @@ func TestFullRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(root, got) {
 		t.Errorf("round trip mismatch\nwant: %#v\ngot:  %#v\nJSON: %s", root, got, data)
+	}
+}
+
+func TestMarshalOmitsZero(t *testing.T) {
+	data, err := jsonscene.Marshal(&demy.VStackNode{Children: []demy.Node{&demy.SpacerNode{}}})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if want := `{"type":"vstack","children":[{"type":"spacer"}]}`; string(data) != want {
+		t.Errorf("Marshal = %s, want %s", data, want)
+	}
+}
+
+func TestMarshalOptions(t *testing.T) {
+	styles := map[string]demy.Style{"b": {Size: 2}, "a": {Size: 1}, "c": {Size: 3}}
+	data, err := jsonscene.MarshalScene(&demy.SpacerNode{}, styles, jsontext.WithIndent("  "))
+	if err != nil {
+		t.Fatalf("MarshalScene: %v", err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "\n  ") {
+		t.Errorf("expected indented output:\n%s", s)
+	}
+	if a, b, c := strings.Index(s, `"a"`), strings.Index(s, `"b"`), strings.Index(s, `"c"`); a >= b || b >= c {
+		t.Errorf("style keys not sorted:\n%s", s)
 	}
 }

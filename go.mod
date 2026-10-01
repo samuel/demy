@@ -1,6 +1,6 @@
 module github.com/samuel/demy
 
-go 1.26.3
+go 1.27
 
 require (
 	github.com/boombuler/barcode v1.1.0

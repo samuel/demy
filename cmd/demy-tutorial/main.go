@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"embed"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -90,7 +90,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 func lessonsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(tutorialLessons)
+	_ = json.MarshalWrite(w, tutorialLessons)
 }
 
 func renderHandler(w http.ResponseWriter, r *http.Request) {
@@ -154,7 +154,7 @@ func renderHandler(w http.ResponseWriter, r *http.Request) {
 func writeJSONError(w http.ResponseWriter, err error, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+	_ = json.MarshalWrite(w, map[string]string{"error": err.Error()})
 }
 
 type responseRecorder struct {

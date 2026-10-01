@@ -286,14 +286,19 @@ node, err := jsonscene.Unmarshal(data)
 // With embedded style definitions
 data, err = jsonscene.MarshalScene(root, cfg.Styles)
 node, styles, err := jsonscene.UnmarshalScene(data) // merge styles into cfg.Styles before rendering
+
+// Marshal options are passed to encoding/json/v2
+data, err = jsonscene.Marshal(root, jsontext.WithIndent("  "))
 ```
 
 Colors serialize as role names (`"muted"`) or `"#rrggbb"`/`"#rrggbbaa"` (straight alpha).
 Images serialize by key, resolved against `Config.Images`; an image with no key, a nil root,
 or an unknown role color is a marshal error. Nil children are omitted.
 
-Decoding is strict: unknown fields, unknown enum names (`"align":"right"` on a stack),
-children on leaf nodes, more than one child in `weighted`, and trailing data are errors.
+Decoding is strict: unknown or duplicate fields, field names that differ in case, unknown
+enum names (`"align":"right"` on a stack), children on leaf nodes, more than one child in
+`weighted`, invalid UTF-8, and trailing data are errors. Style keys are marshaled in sorted
+order.
 
 ## XML scenes and templates (`scene/xmlscene`)
 

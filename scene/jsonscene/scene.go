@@ -5,8 +5,9 @@
 // which unmarshal to demy.RoleColor and resolve against Config.Roles at render time,
 // or as "#rgb", "#rrggbb", or "#rrggbbaa" hex strings.
 //
-// Decoding is strict: unknown fields, unknown enum names, children on leaf
-// nodes, and trailing data are errors.
+// Decoding is strict: unknown or duplicate fields, field names that differ in
+// case, unknown enum names, children on leaf nodes, invalid UTF-8, and trailing
+// data are errors.
 //
 // Two formats are supported:
 //   - Bare node: {"type":"vstack",...} — Marshal/Unmarshal
@@ -14,11 +15,8 @@
 package jsonscene
 
 import (
-	"bytes"
-	"encoding/json"
-	"errors"
+	"encoding/json/v2"
 	"fmt"
-	"io"
 
 	"github.com/samuel/demy"
 	"github.com/samuel/demy/internal/codec"
@@ -26,35 +24,35 @@ import (
 
 // GridTrackDef serializes a single GridTrack.
 type GridTrackDef struct {
-	Kind   string  `json:"kind"`             // "auto", "fixed", or "fr"
-	Size   float64 `json:"size,omitempty"`   // "fixed" only
-	Weight float64 `json:"weight,omitempty"` // "fr" only
+	Kind   string  `json:"kind"`            // "auto", "fixed", or "fr"
+	Size   float64 `json:"size,omitzero"`   // "fixed" only
+	Weight float64 `json:"weight,omitzero"` // "fr" only
 }
 
 // Node is the JSON form of a demy.Node. Type selects the node kind; only the
 // fields relevant to that kind are set.
 type Node struct {
 	Type         string         `json:"type"`
-	Gap          float64        `json:"gap,omitempty"`
-	Padding      float64        `json:"padding,omitempty"`
-	BorderWidth  float64        `json:"border_width,omitempty"`
+	Gap          float64        `json:"gap,omitzero"`
+	Padding      float64        `json:"padding,omitzero"`
+	BorderWidth  float64        `json:"border_width,omitzero"`
 	BorderColor  string         `json:"border_color,omitempty"`
 	Background   string         `json:"background,omitempty"`
-	CornerRadius float64        `json:"corner_radius,omitempty"`
-	Clip         bool           `json:"clip,omitempty"`
-	Width        float64        `json:"width,omitempty"`
-	Height       float64        `json:"height,omitempty"`
-	Weight       float64        `json:"weight,omitempty"`
+	CornerRadius float64        `json:"corner_radius,omitzero"`
+	Clip         bool           `json:"clip,omitzero"`
+	Width        float64        `json:"width,omitzero"`
+	Height       float64        `json:"height,omitzero"`
+	Weight       float64        `json:"weight,omitzero"`
 	Color        string         `json:"color,omitempty"`
-	Size         float64        `json:"size,omitempty"`
+	Size         float64        `json:"size,omitzero"`
 	Align        string         `json:"align,omitempty"`
 	Columns      []GridTrackDef `json:"columns,omitempty"`
 	Rows         []GridTrackDef `json:"rows,omitempty"`
-	RowGap       float64        `json:"row_gap,omitempty"`
-	ColGap       float64        `json:"col_gap,omitempty"`
+	RowGap       float64        `json:"row_gap,omitzero"`
+	ColGap       float64        `json:"col_gap,omitzero"`
 	Text         string         `json:"text,omitempty"`
 	Class        string         `json:"class,omitempty"`
-	Style        *Style         `json:"style,omitempty"`
+	Style        *Style         `json:"style,omitzero"`
 	ImageKey     string         `json:"image_key,omitempty"`
 	Scale        string         `json:"scale,omitempty"`
 	Dither       string         `json:"dither,omitempty"`
@@ -67,12 +65,12 @@ type Node struct {
 // Style is the JSON form of demy.Style.
 type Style struct {
 	Font       string  `json:"font,omitempty"`
-	Size       float64 `json:"size,omitempty"`
+	Size       float64 `json:"size,omitzero"`
 	Weight     string  `json:"weight,omitempty"`
 	Color      string  `json:"color,omitempty"`
 	Align      string  `json:"align,omitempty"`
-	LineHeight float64 `json:"line_height,omitempty"`
-	MaxLines   int     `json:"max_lines,omitempty"`
+	LineHeight float64 `json:"line_height,omitzero"`
+	MaxLines   int     `json:"max_lines,omitzero"`
 	Overflow   string  `json:"overflow,omitempty"`
 }
 
@@ -83,12 +81,13 @@ type Scene struct {
 }
 
 // Marshal serializes a Node tree to JSON (bare node format, no styles envelope).
-func Marshal(n demy.Node) ([]byte, error) {
+// Options are passed to json.Marshal, e.g. jsontext.WithIndent for readable output.
+func Marshal(n demy.Node, opts ...json.Options) ([]byte, error) {
 	sn, err := rootToScene(n)
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(sn)
+	return marshal(sn, opts)
 }
 
 // Unmarshal deserializes bare-node JSON to a Node tree. Image keys are resolved
@@ -106,8 +105,8 @@ func Unmarshal(data []byte) (demy.Node, error) {
 }
 
 // MarshalScene serializes a Node tree and named style definitions to a JSON Scene
-// envelope.
-func MarshalScene(n demy.Node, styles map[string]demy.Style) ([]byte, error) {
+// envelope. Options are passed to json.Marshal. Style keys are sorted.
+func MarshalScene(n demy.Node, styles map[string]demy.Style, opts ...json.Options) ([]byte, error) {
 	root, err := rootToScene(n)
 	if err != nil {
 		return nil, err
@@ -123,7 +122,7 @@ func MarshalScene(n demy.Node, styles map[string]demy.Style) ([]byte, error) {
 			s.Styles[k] = ss
 		}
 	}
-	return json.Marshal(s)
+	return marshal(s, opts)
 }
 
 // UnmarshalScene deserializes a JSON Scene envelope, returning the root node and
@@ -152,16 +151,21 @@ func UnmarshalScene(data []byte) (demy.Node, map[string]demy.Style, error) {
 	return n, outStyles, nil
 }
 
-// decodeStrict decodes a single JSON value, rejecting unknown fields and
-// trailing data.
-func decodeStrict(data []byte, v any) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		return fmt.Errorf("jsonscene: %w", err)
+// marshal encodes v with deterministic map key order, then applies opts.
+func marshal(v any, opts []json.Options) ([]byte, error) {
+	data, err := json.Marshal(v, json.Deterministic(true), json.JoinOptions(opts...))
+	if err != nil {
+		return nil, fmt.Errorf("jsonscene: %w", err)
 	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return errors.New("jsonscene: unexpected data after the top-level value")
+	return data, nil
+}
+
+// decodeStrict decodes a single JSON value, rejecting unknown fields. Trailing
+// data, duplicate names, and invalid UTF-8 are rejected by json/v2 by default,
+// and field names match case-sensitively.
+func decodeStrict(data []byte, v any) error {
+	if err := json.Unmarshal(data, v, json.RejectUnknownMembers(true)); err != nil {
+		return fmt.Errorf("jsonscene: %w", err)
 	}
 	return nil
 }

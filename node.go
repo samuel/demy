@@ -1530,9 +1530,11 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 			style = cfg.DefaultTextStyle
 		}
 		if v.Class != "" && cfg != nil {
-			if classStyle, ok := cfg.Styles[string(v.Class)]; ok {
-				style = mergeStyle(style, classStyle)
+			classStyle, ok := cfg.Styles[string(v.Class)]
+			if !ok {
+				return nil, fmt.Errorf("demy: style class %q not found in Config.Styles", v.Class)
 			}
+			style = mergeStyle(style, classStyle)
 		}
 		style = mergeStyle(style, v.Style)
 		if err := checkDims("Text", dim{"size", style.Size}, dim{"line height", style.LineHeight}); err != nil {

@@ -21,7 +21,7 @@ import (
 	"io"
 
 	"github.com/samuel/demy"
-	"github.com/samuel/demy/scene/internal/codec"
+	"github.com/samuel/demy/internal/codec"
 )
 
 // GridTrackDef serializes a single GridTrack.

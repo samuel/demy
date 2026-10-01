@@ -3,7 +3,9 @@
 // Plugin.Render as a dict and returns a node.
 //
 // Scripts may declare a module-level "styles" dict of named styles. The host
-// retrieves it with Plugin.Styles and merges it into Config.Styles before rendering:
+// retrieves it with Plugin.Styles and merges it into Config.Styles before
+// rendering; Class(name) references resolve against the merged styles at render
+// time:
 //
 //	styles = {
 //	    "h1":   Style(font="sans", size=24),
@@ -11,7 +13,7 @@
 //	}
 //
 //	def render(data):
-//	    return VStack(Text(data["title"], styles["h1"]))
+//	    return VStack(Text(data["title"], Class("h1")))
 //
 // To expose custom Go functions to scripts, register them on an Environment
 // before loading the script:
@@ -20,7 +22,7 @@
 //	env.AddModule("svc", map[string]starlarkplugin.BuiltinFunc{
 //	    "fetch": func(thread *starlark.Thread, args starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
 //	        ctx := starlarkplugin.ContextFromThread(thread)
-//	        // ... use ctx to call a remote service ...
+//	        return fetch(ctx, args) // fetch calls a remote service
 //	    },
 //	})
 //	p, err := env.Load(ctx, "display.star", cfg, time.Local)
@@ -33,15 +35,18 @@
 // Exposed globals:
 //
 //	Containers:   VStack(...), HStack(...), ZStack(...), Box(...), Grid(...),
-//	              Frame(w, h, ...), GridRow(nodes...)
-//	Nodes:        Text(s, style...), ImageKey(key, ...), Barcode(content, ...),
+//	              Frame(w, h, ...), GridRow(nodes...), Weighted(weight, child)
+//	Nodes:        Text(s, style_or_class...), ImageKey(key, ...), Barcode(content, ...),
 //	              Spacer(weight?), Divider(size=, color=)
 //	Style:        Style(class=, font=, size=, weight=, color=, align=, line_height=,
 //	              max_lines=, overflow=)
-//	              class= starts from a named style in Config.Styles; other fields
-//	              override it. weight is "thin" … "black", optionally suffixed with
-//	              "-italic"; align is "left", "center", or "right"; overflow is
-//	              "wrap", "clip", or "ellipsis". size= is ignored for bitmap fonts.
+//	              class= copies a named style from Config.Styles (it must exist);
+//	              other fields override it. weight is "regular", "thin" … "black",
+//	              optionally suffixed with "-italic", or "italic"; align is "left",
+//	              "center", or "right"; overflow is "wrap", "clip", or "ellipsis";
+//	              max_lines=-1 is unlimited. size= is ignored for bitmap fonts.
+//	Class:        Class(name) references a named style resolved at render time,
+//	              including styles from the script's own styles dict.
 //	Options:      Gap(px), Padding(px), Background(color), Border(width, color),
 //	              CornerRadius(px), Children(nodes or list), Clip,
 //	              Columns(tracks or list), Rows(tracks or list), RowGap(px), ColGap(px)
@@ -56,21 +61,29 @@
 //	Colors:       Foreground, Accent, Muted (role names), Black, DarkGray, LightGray,
 //	              White, Red, Yellow (hex strings)
 //	Time:         now() → time value with .year .month .day .hour .minute .second
-//	              .weekday (0=Sun) .weekday_name .timezone .unix and .format(layout)
+//	              .weekday (0=Sun) .weekday_name .timezone .unix and .format(layout),
+//	              where layout is a Go time layout such as "Mon Jan 2 15:04"
 //
-// Color arguments accept role names ("foreground", "background", "accent", "muted")
-// or "#rrggbb"/"#rrggbbaa" hex strings. Named styles from Config.Styles are also
-// exposed as capitalized globals (e.g. "h1" → H1).
+// Builtins reject unknown keyword arguments, wrong argument types, and unknown
+// enum names. Color arguments accept role names ("foreground", "background",
+// "accent", "muted"; there is no Background color constant because the name is
+// the Background option) or "#rgb", "#rrggbb", "#rrggbbaa" hex strings. Named
+// styles from Config.Styles are also exposed as capitalized globals (e.g. "h1" →
+// H1) when the name is an identifier that doesn't shadow a builtin; use
+// Class(name) for the rest. Data passed to Render is converted with sorted map
+// keys, so iteration order is stable.
 package starlarkplugin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image/color"
 	"log/slog"
 	"maps"
-	"strconv"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -80,6 +93,7 @@ import (
 	"go.starlark.net/syntax"
 
 	"github.com/samuel/demy"
+	"github.com/samuel/demy/internal/codec"
 )
 
 // BuiltinFunc is the signature for Go functions exposed as Starlark builtins.
@@ -97,6 +111,9 @@ type Environment struct {
 	MaxSteps uint64
 	// Logger receives script print() output. Nil means slog.Default().
 	Logger *slog.Logger
+	// Now returns the current time for the now() builtin. Nil means time.Now;
+	// set it for deterministic previews and tests.
+	Now func() time.Time
 
 	extras sl.StringDict
 }
@@ -117,9 +134,11 @@ func (e *Environment) AddBuiltin(name string, fn BuiltinFunc) *Environment {
 	return e
 }
 
-// AddValue registers an arbitrary Starlark value as a named global.
+// AddValue registers an arbitrary Starlark value as a named global. The value
+// is frozen, since every script and render shares it.
 func (e *Environment) AddValue(name string, v sl.Value) *Environment {
 	e.initExtras()
+	v.Freeze()
 	e.extras[name] = v
 	return e
 }
@@ -189,9 +208,9 @@ func ContextFromThread(t *sl.Thread) context.Context {
 	return context.Background()
 }
 
-// ToStarlark converts a Go value to a Starlark value.
-// Supported types: nil, bool, int, int32, int64, float32, float64, string,
-// map[string]any, []any.
+// ToStarlark converts a Go value to a Starlark value. It accepts nil, Starlark
+// values, bools, strings, all integer and float kinds, json.Number, time.Time,
+// pointers, slices, arrays, and string-keyed maps of these.
 func ToStarlark(v any) (sl.Value, error) {
 	return anyToStarlark(v)
 }
@@ -227,7 +246,11 @@ func (e *Environment) execFile(ctx context.Context, filename string, src any, cf
 	if loc == nil {
 		loc = time.UTC
 	}
-	env := newEnv(cfg, loc)
+	now := e.Now
+	if now == nil {
+		now = time.Now
+	}
+	env := newEnv(cfg, loc, now)
 	maps.Copy(env, e.extras)
 	thread, stop := e.newThread(ctx, filename)
 	globals, err := sl.ExecFileOptions(&syntax.FileOptions{}, thread, filename, src, env)
@@ -240,22 +263,24 @@ func (e *Environment) execFile(ctx context.Context, filename string, src any, cf
 	}
 	p := &Plugin{env: e, name: filename, globals: globals}
 	if sv, ok := globals["styles"]; ok {
-		if d, ok := sv.(*sl.Dict); ok {
-			scriptStyles := make(map[string]demy.Style, d.Len())
-			for _, item := range d.Items() {
-				k, ok := sl.AsString(item[0])
-				if !ok {
-					return nil, fmt.Errorf("starlarkplugin: styles key must be a string, got %s", item[0].Type())
-				}
-				sv, ok := item[1].(*styleValue)
-				if !ok {
-					return nil, fmt.Errorf("starlarkplugin: styles[%q] must be a Style value, got %s", k, item[1].Type())
-				}
-				scriptStyles[k] = sv.s
+		d, ok := sv.(*sl.Dict)
+		if !ok {
+			return nil, fmt.Errorf("starlarkplugin: %s: styles must be a dict, got %s", filename, sv.Type())
+		}
+		scriptStyles := make(map[string]demy.Style, d.Len())
+		for _, item := range d.Items() {
+			k, ok := sl.AsString(item[0])
+			if !ok {
+				return nil, fmt.Errorf("starlarkplugin: styles key must be a string, got %s", item[0].Type())
 			}
-			if len(scriptStyles) > 0 {
-				p.scriptStyles = scriptStyles
+			sv, ok := item[1].(*styleValue)
+			if !ok {
+				return nil, fmt.Errorf("starlarkplugin: styles[%q] must be a Style value, got %s", k, item[1].Type())
 			}
+			scriptStyles[k] = sv.s
+		}
+		if len(scriptStyles) > 0 {
+			p.scriptStyles = scriptStyles
 		}
 	}
 	return p, nil
@@ -263,14 +288,15 @@ func (e *Environment) execFile(ctx context.Context, filename string, src any, cf
 
 // Styles returns the named styles declared in the script's module-level "styles"
 // dict, or nil if there are none. Merge these into Config.Styles before rendering
-// so that class references in the returned node tree resolve.
+// so that Class(name) references in the returned node tree resolve.
 func (p *Plugin) Styles() map[string]demy.Style {
 	return p.scriptStyles
 }
 
 // Render calls the script's render(data) and returns the root Node tree.
 // ctx is propagated to user-provided builtins via ContextFromThread, and
-// cancels the script when done.
+// cancels the script when done. The returned tree may share nodes with
+// module-level values and other renders, so treat it as read-only.
 func (p *Plugin) Render(ctx context.Context, data map[string]any) (demy.Node, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -326,44 +352,59 @@ func (v *trackValue) Freeze()               {}
 func (v *trackValue) Truth() sl.Bool        { return sl.True }
 func (v *trackValue) Hash() (uint32, error) { return 0, errors.New("unhashable: track") }
 
+// classValue is a StyleClass reference produced by Class(name).
+type classValue struct{ c demy.StyleClass }
+
+func (v *classValue) String() string        { return fmt.Sprintf("Class(%q)", string(v.c)) }
+func (v *classValue) Type() string          { return "class" }
+func (v *classValue) Freeze()               {}
+func (v *classValue) Truth() sl.Bool        { return sl.True }
+func (v *classValue) Hash() (uint32, error) { return 0, errors.New("unhashable: class") }
+
 // --- Environment ---
 
-func newEnv(cfg demy.Config, loc *time.Location) sl.StringDict {
+func newEnv(cfg demy.Config, loc *time.Location, now func() time.Time) sl.StringDict {
 	d := sl.StringDict{
 		// Layout constructors
-		"VStack":  sl.NewBuiltin("VStack", builtinVStack),
-		"HStack":  sl.NewBuiltin("HStack", builtinHStack),
-		"ZStack":  sl.NewBuiltin("ZStack", builtinZStack),
-		"Box":     sl.NewBuiltin("Box", builtinBox),
-		"Frame":   sl.NewBuiltin("Frame", builtinFrame),
-		"Spacer":  sl.NewBuiltin("Spacer", builtinSpacer),
-		"Divider": sl.NewBuiltin("Divider", builtinDivider),
-		"Grid":    sl.NewBuiltin("Grid", builtinGrid),
-		"GridRow": sl.NewBuiltin("GridRow", builtinGridRow),
+		"VStack":   positional("VStack", containerOf(demy.VStack)),
+		"HStack":   positional("HStack", containerOf(demy.HStack)),
+		"ZStack":   positional("ZStack", containerOf(demy.ZStack)),
+		"Box":      positional("Box", containerOf(demy.Box)),
+		"Grid":     positional("Grid", containerOf(demy.Grid)),
+		"Frame":    positional("Frame", builtinFrame),
+		"Spacer":   positional("Spacer", builtinSpacer),
+		"Weighted": positional("Weighted", builtinWeighted),
+		"Divider":  sl.NewBuiltin("Divider", builtinDivider),
+		"GridRow":  positional("GridRow", builtinGridRow),
 		// Grid track constructors
-		"GridFixed": sl.NewBuiltin("GridFixed", builtinGridFixed),
-		"GridAuto":  sl.NewBuiltin("GridAuto", builtinGridAuto),
-		"GridFr":    sl.NewBuiltin("GridFr", builtinGridFr),
+		"GridFixed": positional("GridFixed", trackOf(demy.GridFixed, "px")),
+		"GridAuto":  positional("GridAuto", builtinGridAuto),
+		"GridFr":    positional("GridFr", trackOf(demy.GridFr, "weight")),
 		// Grid layout options
-		"Columns": sl.NewBuiltin("Columns", builtinColumns),
-		"Rows":    sl.NewBuiltin("Rows", builtinRows),
-		"RowGap":  sl.NewBuiltin("RowGap", builtinRowGap),
-		"ColGap":  sl.NewBuiltin("ColGap", builtinColGap),
+		"Columns": positional("Columns", tracksOpt(demy.Columns)),
+		"Rows":    positional("Rows", tracksOpt(demy.Rows)),
+		"RowGap":  positional("RowGap", numberOpt(func(v float64) demy.Option { return demy.RowGap(v) })),
+		"ColGap":  positional("ColGap", numberOpt(func(v float64) demy.Option { return demy.ColGap(v) })),
 		// Widget constructors
-		"Text":     sl.NewBuiltin("Text", builtinText),
-		"ImageKey": sl.NewBuiltin("ImageKey", builtinImageKey),
-		"Barcode":  sl.NewBuiltin("Barcode", builtinBarcode),
+		"Text":     positional("Text", builtinText),
+		"Class":    positional("Class", builtinClass),
+		"ImageKey": positional("ImageKey", builtinImageKey),
+		"Barcode":  positional("Barcode", builtinBarcode),
 		// Style constructor
 		"Style": sl.NewBuiltin("Style", func(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
-			return builtinStyleWithClass(args, kwargs, cfg)
+			v, err := builtinStyle(args, kwargs, cfg)
+			if err != nil {
+				return nil, builtinError("Style", err)
+			}
+			return v, nil
 		}),
 		// Option constructors
-		"Gap":          sl.NewBuiltin("Gap", builtinGap),
-		"Padding":      sl.NewBuiltin("Padding", builtinPadding),
-		"Background":   sl.NewBuiltin("Background", builtinBackground),
-		"Border":       sl.NewBuiltin("Border", builtinBorder),
-		"CornerRadius": sl.NewBuiltin("CornerRadius", builtinCornerRadius),
-		"Children":     sl.NewBuiltin("Children", builtinChildren),
+		"Gap":          positional("Gap", numberOpt(func(v float64) demy.Option { return demy.Gap(v) })),
+		"Padding":      positional("Padding", numberOpt(func(v float64) demy.Option { return demy.Padding(v) })),
+		"CornerRadius": positional("CornerRadius", numberOpt(func(v float64) demy.Option { return demy.CornerRadius(v) })),
+		"Background":   positional("Background", builtinBackground),
+		"Border":       positional("Border", builtinBorder),
+		"Children":     positional("Children", builtinChildren),
 		// Clip constant
 		"Clip": &optValue{demy.Clip},
 		// Cross-axis alignment (VStack/HStack)
@@ -406,180 +447,252 @@ func newEnv(cfg demy.Config, loc *time.Location) sl.StringDict {
 		"Red":       colorHex(demy.Red),
 		"Yellow":    colorHex(demy.Yellow),
 		// Time
-		"now": sl.NewBuiltin("now", func(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
-			return builtinNow(loc)
+		"now": positional("now", func(args sl.Tuple) (sl.Value, error) {
+			if len(args) != 0 {
+				return nil, errors.New("takes no arguments")
+			}
+			return &timeValue{t: now().In(loc)}, nil
 		}),
 	}
-	// Named styles are exposed as capitalized globals ("h1" → H1).
+	// Named styles are exposed as capitalized globals ("h1" → H1) when the
+	// result is an identifier that doesn't shadow a builtin; every style is
+	// also reachable with Class(name).
 	for k, v := range cfg.Styles {
-		d[capitalizeFirst(k)] = &styleValue{v}
+		name := capitalizeFirst(k)
+		if _, taken := d[name]; !taken && isIdent(name) {
+			d[name] = &styleValue{v}
+		}
 	}
 	return d
 }
 
+// positional wraps a builtin that takes only positional arguments, rejecting
+// keyword arguments and prefixing errors with the builtin's name.
+func positional(name string, fn func(args sl.Tuple) (sl.Value, error)) *sl.Builtin {
+	return sl.NewBuiltin(name, func(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
+		if len(kwargs) > 0 {
+			return nil, builtinError(name, fmt.Errorf("unexpected keyword argument %s", kwargs[0][0]))
+		}
+		v, err := fn(args)
+		if err != nil {
+			return nil, builtinError(name, err)
+		}
+		return v, nil
+	})
+}
+
+// builtinError prefixes err with the name of the builtin that returned it.
+func builtinError(name string, err error) error {
+	return fmt.Errorf("%s: %w", name, err)
+}
+
 // --- Builtin implementations ---
 
-func builtinVStack(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	opts, err := argsToOptions(args)
-	if err != nil {
-		return nil, fmt.Errorf("vstack: %w", err)
+func containerOf[N demy.Node](ctor func(...demy.Option) N) func(sl.Tuple) (sl.Value, error) {
+	return func(args sl.Tuple) (sl.Value, error) {
+		opts, err := argsToOptions(args)
+		if err != nil {
+			return nil, err
+		}
+		return &nodeValue{ctor(opts...)}, nil
 	}
-	return &nodeValue{demy.VStack(opts...)}, nil
 }
 
-func builtinHStack(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	opts, err := argsToOptions(args)
-	if err != nil {
-		return nil, fmt.Errorf("hstack: %w", err)
+func numberOpt(ctor func(float64) demy.Option) func(sl.Tuple) (sl.Value, error) {
+	return func(args sl.Tuple) (sl.Value, error) {
+		if len(args) != 1 {
+			return nil, fmt.Errorf("expected 1 argument, got %d", len(args))
+		}
+		v, err := toFloat("argument", args[0])
+		if err != nil {
+			return nil, err
+		}
+		return &optValue{ctor(v)}, nil
 	}
-	return &nodeValue{demy.HStack(opts...)}, nil
 }
 
-func builtinZStack(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	opts, err := argsToOptions(args)
-	if err != nil {
-		return nil, fmt.Errorf("zstack: %w", err)
+func trackOf(ctor func(float64) demy.GridTrack, what string) func(sl.Tuple) (sl.Value, error) {
+	return func(args sl.Tuple) (sl.Value, error) {
+		if len(args) != 1 {
+			return nil, fmt.Errorf("expected 1 argument (%s), got %d", what, len(args))
+		}
+		v, err := toFloat(what, args[0])
+		if err != nil {
+			return nil, err
+		}
+		return &trackValue{ctor(v)}, nil
 	}
-	return &nodeValue{demy.ZStack(opts...)}, nil
 }
 
-func builtinBox(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	opts, err := argsToOptions(args)
-	if err != nil {
-		return nil, fmt.Errorf("box: %w", err)
+func tracksOpt[O demy.Option](ctor func(...demy.GridTrack) O) func(sl.Tuple) (sl.Value, error) {
+	return func(args sl.Tuple) (sl.Value, error) {
+		tracks, err := parseTracks(args)
+		if err != nil {
+			return nil, err
+		}
+		return &optValue{ctor(tracks...)}, nil
 	}
-	return &nodeValue{demy.Box(opts...)}, nil
 }
 
-func builtinFrame(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+func builtinFrame(args sl.Tuple) (sl.Value, error) {
 	if len(args) < 2 {
-		return nil, errors.New("frame: expected at least 2 arguments (w, h)")
+		return nil, errors.New("expected at least 2 arguments (w, h)")
 	}
-	w, ok := asFloat(args[0])
-	if !ok {
-		return nil, fmt.Errorf("frame: w must be a number, got %s", args[0].Type())
+	w, err := toFloat("w", args[0])
+	if err != nil {
+		return nil, err
 	}
-	h, ok := asFloat(args[1])
-	if !ok {
-		return nil, fmt.Errorf("frame: h must be a number, got %s", args[1].Type())
+	h, err := toFloat("h", args[1])
+	if err != nil {
+		return nil, err
 	}
 	opts, err := argsToOptions(args[2:])
 	if err != nil {
-		return nil, fmt.Errorf("frame: %w", err)
+		return nil, err
 	}
 	return &nodeValue{demy.Frame(w, h, opts...)}, nil
 }
 
-func builtinSpacer(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+func builtinSpacer(args sl.Tuple) (sl.Value, error) {
 	switch len(args) {
 	case 0:
 		return &nodeValue{demy.Spacer()}, nil
 	case 1:
-		w, ok := asFloat(args[0])
-		if !ok {
-			return nil, fmt.Errorf("spacer: weight must be a number, got %s", args[0].Type())
+		w, err := toFloat("weight", args[0])
+		if err != nil {
+			return nil, err
 		}
 		return &nodeValue{demy.Spacer(w)}, nil
 	default:
-		return nil, errors.New("spacer: expected at most 1 argument")
+		return nil, errors.New("expected at most 1 argument (weight)")
 	}
+}
+
+func builtinWeighted(args sl.Tuple) (sl.Value, error) {
+	if len(args) != 2 {
+		return nil, errors.New("expected 2 arguments (weight, child)")
+	}
+	w, err := toFloat("weight", args[0])
+	if err != nil {
+		return nil, err
+	}
+	nv, ok := args[1].(*nodeValue)
+	if !ok {
+		return nil, fmt.Errorf("child must be a node, got %s", args[1].Type())
+	}
+	return &nodeValue{demy.Weighted(w, nv.n)}, nil
 }
 
 func builtinDivider(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
 	if len(args) != 0 {
-		return nil, errors.New("divider: takes keyword arguments only (size, color)")
+		return nil, builtinError("Divider", errors.New("takes keyword arguments only (size, color)"))
 	}
 	n := demy.Divider()
 	for _, kv := range kwargs {
 		key, _ := sl.AsString(kv[0])
+		var err error
 		switch key {
 		case "size":
-			sz, ok := asFloat(kv[1])
-			if !ok {
-				return nil, fmt.Errorf("divider: size must be a number, got %s", kv[1].Type())
-			}
-			n.Size = sz
+			n.Size, err = toFloat("size", kv[1])
 		case "color":
-			cs, ok := sl.AsString(kv[1])
-			if !ok {
-				return nil, fmt.Errorf("divider: color must be a string, got %s", kv[1].Type())
-			}
-			c, err := parseColorStr(cs)
-			if err != nil {
-				return nil, fmt.Errorf("divider: %w", err)
-			}
-			n.Color = c
+			n.Color, err = toColor("color", kv[1])
 		default:
-			return nil, fmt.Errorf("divider: unknown keyword argument %q", key)
+			err = fmt.Errorf("unknown keyword argument %q", key)
+		}
+		if err != nil {
+			return nil, builtinError("Divider", err)
 		}
 	}
 	return &nodeValue{n}, nil
 }
 
-func builtinText(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+func builtinText(args sl.Tuple) (sl.Value, error) {
 	if len(args) < 1 {
-		return nil, errors.New("text: expected at least 1 argument")
+		return nil, errors.New("expected at least 1 argument")
 	}
-	s, ok := sl.AsString(args[0])
-	if !ok {
-		return nil, fmt.Errorf("text: first argument must be a string, got %s", args[0].Type())
+	s, err := toString("text", args[0])
+	if err != nil {
+		return nil, err
 	}
 	var textOpts []demy.TextOption
 	for _, arg := range args[1:] {
-		sv, ok := arg.(*styleValue)
-		if !ok {
-			return nil, fmt.Errorf("text: expected Style, got %s", arg.Type())
+		switch v := arg.(type) {
+		case *styleValue:
+			textOpts = append(textOpts, v.s)
+		case *classValue:
+			textOpts = append(textOpts, v.c)
+		default:
+			return nil, fmt.Errorf("expected Style or Class, got %s", arg.Type())
 		}
-		textOpts = append(textOpts, sv.s)
 	}
 	return &nodeValue{demy.Text(s, textOpts...)}, nil
 }
 
-func builtinImageKey(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	if len(args) < 1 {
-		return nil, errors.New("imageKey: expected at least 1 argument (key)")
+// builtinClass references a named style resolved at render time against
+// Config.Styles, which may include the script's own styles dict.
+func builtinClass(args sl.Tuple) (sl.Value, error) {
+	if len(args) != 1 {
+		return nil, errors.New("expected 1 argument (name)")
 	}
-	key, ok := sl.AsString(args[0])
-	if !ok {
-		return nil, fmt.Errorf("imageKey: key must be a string, got %s", args[0].Type())
+	name, err := toString("name", args[0])
+	if err != nil {
+		return nil, err
+	}
+	if name == "" {
+		return nil, errors.New("name must not be empty")
+	}
+	return &classValue{demy.Class(name)}, nil
+}
+
+func builtinImageKey(args sl.Tuple) (sl.Value, error) {
+	if len(args) < 1 {
+		return nil, errors.New("expected at least 1 argument (key)")
+	}
+	key, err := toString("key", args[0])
+	if err != nil {
+		return nil, err
 	}
 	opts, err := argsToOptions(args[1:])
 	if err != nil {
-		return nil, fmt.Errorf("imageKey: %w", err)
+		return nil, err
 	}
 	return &nodeValue{demy.ImageKey(key, opts...)}, nil
 }
 
-func builtinBarcode(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+func builtinBarcode(args sl.Tuple) (sl.Value, error) {
 	if len(args) < 1 {
-		return nil, errors.New("barcode: expected at least 1 argument (content)")
+		return nil, errors.New("expected at least 1 argument (content)")
 	}
-	content, ok := sl.AsString(args[0])
-	if !ok {
-		return nil, fmt.Errorf("barcode: content must be a string, got %s", args[0].Type())
+	content, err := toString("content", args[0])
+	if err != nil {
+		return nil, err
 	}
 	opts, err := argsToOptions(args[1:])
 	if err != nil {
-		return nil, fmt.Errorf("barcode: %w", err)
+		return nil, err
 	}
 	return &nodeValue{demy.Barcode(content, opts...)}, nil
 }
 
-func builtinStyleWithClass(args sl.Tuple, kwargs []sl.Tuple, cfg demy.Config) (sl.Value, error) {
+// builtinStyle builds a Style from keyword arguments. class= copies a named
+// style from Config.Styles as the base; the other fields override it.
+func builtinStyle(args sl.Tuple, kwargs []sl.Tuple, cfg demy.Config) (sl.Value, error) {
 	if len(args) > 0 {
-		return nil, errors.New("style: takes keyword arguments only")
+		return nil, errors.New("takes keyword arguments only")
 	}
 	var s demy.Style
 	// Pass 1: resolve class as base so per-field kwargs override it regardless of order.
 	for _, kv := range kwargs {
 		if key, _ := sl.AsString(kv[0]); key == "class" {
-			name, ok := sl.AsString(kv[1])
+			name, err := toString("class", kv[1])
+			if err != nil {
+				return nil, err
+			}
+			classStyle, ok := cfg.Styles[name]
 			if !ok {
-				return nil, errors.New("style: class must be a string")
+				return nil, fmt.Errorf("class %q not found in Config.Styles (use Class(%q) for styles merged at render time)", name, name)
 			}
-			if classStyle, ok := cfg.Styles[name]; ok {
-				s = classStyle
-			}
+			s = classStyle
 			break
 		}
 	}
@@ -587,172 +700,91 @@ func builtinStyleWithClass(args sl.Tuple, kwargs []sl.Tuple, cfg demy.Config) (s
 	for _, kv := range kwargs {
 		key, _ := sl.AsString(kv[0])
 		val := kv[1]
+		var (
+			err error
+			str string
+		)
 		switch key {
 		case "class":
 			// handled in pass 1
 		case "font":
-			s.Font, _ = sl.AsString(val)
+			s.Font, err = toString("font", val)
 		case "size":
-			s.Size, _ = asFloat(val)
-		case "weight":
-			w, ok := sl.AsString(val)
-			if !ok {
-				return nil, errors.New("style: weight must be a string")
-			}
-			s.Weight = parseWeight(w)
-		case "color":
-			cs, ok := sl.AsString(val)
-			if !ok {
-				return nil, errors.New("style: color must be a string")
-			}
-			c, err := parseColorStr(cs)
-			if err != nil {
-				return nil, fmt.Errorf("style: %w", err)
-			}
-			s.Color = c
-		case "align":
-			a, ok := sl.AsString(val)
-			if !ok {
-				return nil, errors.New("style: align must be a string")
-			}
-			s.Align = parseTextAlign(a)
+			s.Size, err = toFloat("size", val)
 		case "line_height":
-			s.LineHeight, _ = asFloat(val)
+			s.LineHeight, err = toFloat("line_height", val)
+		case "color":
+			s.Color, err = toColor("color", val)
 		case "max_lines":
-			n, err := sl.AsInt32(val)
-			if err != nil {
-				return nil, fmt.Errorf("style: max_lines: %w", err)
+			s.MaxLines, err = sl.AsInt32(val)
+			if err == nil && s.MaxLines < demy.MaxLinesUnlimited {
+				err = fmt.Errorf("max_lines %d must be at least -1 (-1 is unlimited)", s.MaxLines)
 			}
-			s.MaxLines = n
-		case "overflow":
-			o, ok := sl.AsString(val)
-			if !ok {
-				return nil, errors.New("style: overflow must be a string")
+		case "weight", "align", "overflow":
+			if str, err = toString(key, val); err != nil {
+				break
 			}
-			s.Overflow = parseOverflow(o)
+			switch key {
+			case "weight":
+				s.Weight, err = codec.ParseWeight(str)
+			case "align":
+				s.Align, err = codec.TextAlign.Parse(str)
+			case "overflow":
+				s.Overflow, err = codec.Overflow.Parse(str)
+			}
 		default:
-			return nil, fmt.Errorf("style: unknown field %q", key)
+			err = fmt.Errorf("unknown field %q", key)
+		}
+		if err != nil {
+			return nil, err
 		}
 	}
 	return &styleValue{s}, nil
 }
 
-func builtinGap(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+func builtinBackground(args sl.Tuple) (sl.Value, error) {
 	if len(args) != 1 {
-		return nil, errors.New("gap: expected 1 argument")
+		return nil, errors.New("expected 1 argument (color)")
 	}
-	px, ok := asFloat(args[0])
-	if !ok {
-		return nil, fmt.Errorf("gap: expected number, got %s", args[0].Type())
-	}
-	return &optValue{demy.Gap(px)}, nil
-}
-
-func builtinPadding(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	if len(args) != 1 {
-		return nil, errors.New("padding: expected 1 argument")
-	}
-	px, ok := asFloat(args[0])
-	if !ok {
-		return nil, fmt.Errorf("padding: expected number, got %s", args[0].Type())
-	}
-	return &optValue{demy.Padding(px)}, nil
-}
-
-// Background(color)
-func builtinBackground(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	if len(args) != 1 {
-		return nil, errors.New("background: expected 1 argument")
-	}
-	s, ok := sl.AsString(args[0])
-	if !ok {
-		return nil, fmt.Errorf("background: expected string, got %s", args[0].Type())
-	}
-	c, err := parseColorStr(s)
+	c, err := toColor("color", args[0])
 	if err != nil {
-		return nil, fmt.Errorf("background: %w", err)
+		return nil, err
 	}
 	return &optValue{demy.Background(c)}, nil
 }
 
-// Border(width, color)
-func builtinBorder(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+func builtinBorder(args sl.Tuple) (sl.Value, error) {
 	if len(args) != 2 {
-		return nil, errors.New("border: expected 2 arguments (width, color)")
+		return nil, errors.New("expected 2 arguments (width, color)")
 	}
-	w, ok := asFloat(args[0])
-	if !ok {
-		return nil, fmt.Errorf("border: width must be a number, got %s", args[0].Type())
-	}
-	cs, ok := sl.AsString(args[1])
-	if !ok {
-		return nil, fmt.Errorf("border: color must be a string, got %s", args[1].Type())
-	}
-	c, err := parseColorStr(cs)
+	w, err := toFloat("width", args[0])
 	if err != nil {
-		return nil, fmt.Errorf("border: %w", err)
+		return nil, err
+	}
+	c, err := toColor("color", args[1])
+	if err != nil {
+		return nil, err
 	}
 	return &optValue{demy.Border(w, c)}, nil
 }
 
-func builtinCornerRadius(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	if len(args) != 1 {
-		return nil, errors.New("cornerRadius: expected 1 argument")
-	}
-	px, ok := asFloat(args[0])
-	if !ok {
-		return nil, fmt.Errorf("cornerRadius: expected number, got %s", args[0].Type())
-	}
-	return &optValue{demy.CornerRadius(px)}, nil
-}
-
-func builtinGrid(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	opts, err := argsToOptions(args)
-	if err != nil {
-		return nil, fmt.Errorf("grid: %w", err)
-	}
-	return &nodeValue{demy.Grid(opts...)}, nil
-}
-
-func builtinGridRow(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+func builtinGridRow(args sl.Tuple) (sl.Value, error) {
 	var children []demy.Node
 	for _, arg := range args {
 		nv, ok := arg.(*nodeValue)
 		if !ok {
-			return nil, fmt.Errorf("GridRow: expected node, got %s", arg.Type())
+			return nil, fmt.Errorf("expected node, got %s", arg.Type())
 		}
 		children = append(children, nv.n)
 	}
 	return &nodeValue{demy.GridRow(children...)}, nil
 }
 
-func builtinGridFixed(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	if len(args) != 1 {
-		return nil, errors.New("GridFixed: expected 1 argument (px)")
-	}
-	px, ok := asFloat(args[0])
-	if !ok {
-		return nil, fmt.Errorf("GridFixed: expected number, got %s", args[0].Type())
-	}
-	return &trackValue{demy.GridFixed(px)}, nil
-}
-
-func builtinGridAuto(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+func builtinGridAuto(args sl.Tuple) (sl.Value, error) {
 	if len(args) != 0 {
-		return nil, errors.New("GridAuto: takes no arguments")
+		return nil, errors.New("takes no arguments")
 	}
 	return &trackValue{demy.GridAuto()}, nil
-}
-
-func builtinGridFr(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	if len(args) != 1 {
-		return nil, errors.New("GridFr: expected 1 argument (weight)")
-	}
-	w, ok := asFloat(args[0])
-	if !ok {
-		return nil, fmt.Errorf("GridFr: expected number, got %s", args[0].Type())
-	}
-	return &trackValue{demy.GridFr(w)}, nil
 }
 
 // parseTracks accepts tracks or lists of tracks.
@@ -778,46 +810,8 @@ func parseTracks(args sl.Tuple) ([]demy.GridTrack, error) {
 	return tracks, nil
 }
 
-func builtinColumns(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	tracks, err := parseTracks(args)
-	if err != nil {
-		return nil, fmt.Errorf("columns: %w", err)
-	}
-	return &optValue{demy.Columns(tracks...)}, nil
-}
-
-func builtinRows(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	tracks, err := parseTracks(args)
-	if err != nil {
-		return nil, fmt.Errorf("rows: %w", err)
-	}
-	return &optValue{demy.Rows(tracks...)}, nil
-}
-
-func builtinRowGap(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	if len(args) != 1 {
-		return nil, errors.New("RowGap: expected 1 argument")
-	}
-	px, ok := asFloat(args[0])
-	if !ok {
-		return nil, fmt.Errorf("RowGap: expected number, got %s", args[0].Type())
-	}
-	return &optValue{demy.RowGap(px)}, nil
-}
-
-func builtinColGap(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
-	if len(args) != 1 {
-		return nil, errors.New("ColGap: expected 1 argument")
-	}
-	px, ok := asFloat(args[0])
-	if !ok {
-		return nil, fmt.Errorf("ColGap: expected number, got %s", args[0].Type())
-	}
-	return &optValue{demy.ColGap(px)}, nil
-}
-
-// Children accepts individual nodes or a single Starlark list of nodes.
-func builtinChildren(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+// builtinChildren accepts individual nodes or Starlark lists of nodes.
+func builtinChildren(args sl.Tuple) (sl.Value, error) {
 	var nodes []demy.Node
 	for _, arg := range args {
 		switch v := arg.(type) {
@@ -828,12 +822,12 @@ func builtinChildren(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (
 				item := v.Index(i)
 				nv, ok := item.(*nodeValue)
 				if !ok {
-					return nil, fmt.Errorf("children: list item must be a node, got %s", item.Type())
+					return nil, fmt.Errorf("list item must be a node, got %s", item.Type())
 				}
 				nodes = append(nodes, nv.n)
 			}
 		default:
-			return nil, fmt.Errorf("children: expected node or list, got %s", arg.Type())
+			return nil, fmt.Errorf("expected node or list, got %s", arg.Type())
 		}
 	}
 	return &optValue{demy.Children(nodes...)}, nil
@@ -861,104 +855,43 @@ func argsToOptions(args sl.Tuple) ([]demy.Option, error) {
 	return opts, nil
 }
 
-func asFloat(v sl.Value) (float64, bool) {
+// toFloat converts an int or float argument. Range checks happen at render.
+func toFloat(what string, v sl.Value) (float64, error) {
 	switch t := v.(type) {
 	case sl.Float:
-		return float64(t), true
+		return float64(t), nil
 	case sl.Int:
-		n, ok := t.Int64()
-		return float64(n), ok
+		return float64(t.Float()), nil
 	}
-	return 0, false
+	return 0, fmt.Errorf("%s must be a number, got %s", what, v.Type())
+}
+
+func toString(what string, v sl.Value) (string, error) {
+	s, ok := sl.AsString(v)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string, got %s", what, v.Type())
+	}
+	return s, nil
+}
+
+func toColor(what string, v sl.Value) (color.Color, error) {
+	s, err := toString(what, v)
+	if err != nil {
+		return nil, err
+	}
+	if s == "" {
+		return nil, fmt.Errorf("%s must not be empty", what)
+	}
+	c, err := codec.ParseColor(s)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	return c, nil
 }
 
 func colorHex(c color.Color) sl.String {
 	r, g, b, _ := c.RGBA()
 	return sl.String(fmt.Sprintf("#%02x%02x%02x", r>>8, g>>8, b>>8))
-}
-
-func parseColorStr(s string) (color.Color, error) {
-	switch s {
-	case "foreground", "background", "accent", "muted":
-		return demy.RoleColor{Name: s}, nil
-	}
-	if !strings.HasPrefix(s, "#") {
-		return nil, fmt.Errorf("unknown color %q (use a role name or #rrggbb hex)", s)
-	}
-	hex := s[1:]
-	switch len(hex) {
-	case 6:
-		rv, e1 := strconv.ParseUint(hex[0:2], 16, 8)
-		gv, e2 := strconv.ParseUint(hex[2:4], 16, 8)
-		bv, e3 := strconv.ParseUint(hex[4:6], 16, 8)
-		if e1 != nil || e2 != nil || e3 != nil {
-			return nil, fmt.Errorf("invalid color %q", s)
-		}
-		return color.RGBA{R: uint8(rv), G: uint8(gv), B: uint8(bv), A: 255}, nil
-	case 8:
-		rv, e1 := strconv.ParseUint(hex[0:2], 16, 8)
-		gv, e2 := strconv.ParseUint(hex[2:4], 16, 8)
-		bv, e3 := strconv.ParseUint(hex[4:6], 16, 8)
-		av, e4 := strconv.ParseUint(hex[6:8], 16, 8)
-		if e1 != nil || e2 != nil || e3 != nil || e4 != nil {
-			return nil, fmt.Errorf("invalid color %q", s)
-		}
-		// Hex alpha is straight, not premultiplied.
-		return color.NRGBA{R: uint8(rv), G: uint8(gv), B: uint8(bv), A: uint8(av)}, nil
-	}
-	return nil, fmt.Errorf("invalid color %q (expected #rrggbb or #rrggbbaa)", s)
-}
-
-func parseWeight(s string) demy.FontStyle {
-	italic := strings.HasSuffix(s, "-italic") || s == "italic"
-	base := strings.TrimSuffix(s, "-italic")
-	var w demy.FontStyle
-	switch base {
-	case "thin":
-		w = demy.FontThin
-	case "extra-light":
-		w = demy.FontExtraLight
-	case "light":
-		w = demy.FontLight
-	case "medium":
-		w = demy.FontMedium
-	case "semi-bold":
-		w = demy.FontSemiBold
-	case "bold":
-		w = demy.FontBold
-	case "extra-bold":
-		w = demy.FontExtraBold
-	case "black":
-		w = demy.FontBlack
-	default:
-		w = demy.FontRegular
-	}
-	if italic {
-		return w | demy.FontItalic
-	}
-	return w
-}
-
-func parseTextAlign(s string) demy.TextAlign {
-	switch s {
-	case "center":
-		return demy.TextAlignCenter
-	case "right":
-		return demy.TextAlignRight
-	default:
-		return demy.TextAlignLeft
-	}
-}
-
-func parseOverflow(s string) demy.TextOverflow {
-	switch s {
-	case "clip":
-		return demy.TextOverflowClip
-	case "ellipsis":
-		return demy.TextOverflowEllipsis
-	default:
-		return demy.TextOverflowWrap
-	}
 }
 
 func capitalizeFirst(s string) string {
@@ -968,6 +901,16 @@ func capitalizeFirst(s string) string {
 	r := []rune(s)
 	r[0] = unicode.ToUpper(r[0])
 	return string(r)
+}
+
+// isIdent reports whether s is a valid Starlark identifier.
+func isIdent(s string) bool {
+	for i, r := range s {
+		if r != '_' && !unicode.IsLetter(r) && (i == 0 || !unicode.IsDigit(r)) {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // --- now() builtin ---
@@ -1023,16 +966,13 @@ func (v *timeValue) AttrNames() []string {
 	return []string{"unix", "year", "month", "day", "hour", "minute", "second", "weekday", "weekday_name", "timezone", "format"}
 }
 
-func builtinNow(loc *time.Location) (sl.Value, error) {
-	return &timeValue{t: time.Now().In(loc)}, nil
-}
-
 // --- Data conversion: Go map → Starlark dict ---
 
 func dataToStarlark(data map[string]any) (*sl.Dict, error) {
-	d := new(sl.Dict)
-	for k, v := range data {
-		sv, err := anyToStarlark(v)
+	d := sl.NewDict(len(data))
+	// Sorted keys give scripts a stable iteration order across renders.
+	for _, k := range slices.Sorted(maps.Keys(data)) {
+		sv, err := anyToStarlark(data[k])
 		if err != nil {
 			return nil, fmt.Errorf("data[%q]: %w", k, err)
 		}
@@ -1047,33 +987,81 @@ func anyToStarlark(v any) (sl.Value, error) {
 	switch t := v.(type) {
 	case nil:
 		return sl.None, nil
+	case sl.Value:
+		return t, nil
 	case bool:
 		return sl.Bool(t), nil
-	case int:
-		return sl.MakeInt(t), nil
-	case int32:
-		return sl.MakeInt(int(t)), nil
-	case int64:
-		return sl.MakeInt64(t), nil
-	case float32:
-		return sl.Float(t), nil
-	case float64:
-		return sl.Float(t), nil
 	case string:
 		return sl.String(t), nil
+	case json.Number:
+		if i, err := t.Int64(); err == nil {
+			return sl.MakeInt64(i), nil
+		}
+		f, err := t.Float64()
+		if err != nil {
+			return nil, fmt.Errorf("invalid json.Number %q", t)
+		}
+		return sl.Float(f), nil
+	case time.Time:
+		return &timeValue{t: t}, nil
 	case map[string]any:
 		return dataToStarlark(t)
-	case []any:
-		items := make([]sl.Value, len(t))
-		for i, item := range t {
-			sv, err := anyToStarlark(item)
+	}
+	return reflectToStarlark(reflect.ValueOf(v))
+}
+
+// reflectToStarlark converts numbers, strings, bools, slices, arrays,
+// string-keyed maps, and pointers to them.
+func reflectToStarlark(rv reflect.Value) (sl.Value, error) {
+	switch rv.Kind() {
+	case reflect.Bool:
+		return sl.Bool(rv.Bool()), nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return sl.MakeInt64(rv.Int()), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return sl.MakeUint64(rv.Uint()), nil
+	case reflect.Float32, reflect.Float64:
+		return sl.Float(rv.Float()), nil
+	case reflect.String:
+		return sl.String(rv.String()), nil
+	case reflect.Pointer, reflect.Interface:
+		if rv.IsNil() {
+			return sl.None, nil
+		}
+		return anyToStarlark(rv.Elem().Interface())
+	case reflect.Slice, reflect.Array:
+		if rv.Kind() == reflect.Slice && rv.IsNil() {
+			return sl.NewList(nil), nil
+		}
+		items := make([]sl.Value, rv.Len())
+		for i := range rv.Len() {
+			sv, err := anyToStarlark(rv.Index(i).Interface())
 			if err != nil {
 				return nil, fmt.Errorf("[%d]: %w", i, err)
 			}
 			items[i] = sv
 		}
 		return sl.NewList(items), nil
+	case reflect.Map:
+		if rv.Type().Key().Kind() != reflect.String {
+			return nil, fmt.Errorf("unsupported map key type %s", rv.Type().Key())
+		}
+		keys := rv.MapKeys()
+		slices.SortFunc(keys, func(a, b reflect.Value) int { return strings.Compare(a.String(), b.String()) })
+		d := sl.NewDict(len(keys))
+		for _, k := range keys {
+			sv, err := anyToStarlark(rv.MapIndex(k).Interface())
+			if err != nil {
+				return nil, fmt.Errorf("[%q]: %w", k.String(), err)
+			}
+			if err := d.SetKey(sl.String(k.String()), sv); err != nil {
+				return nil, err
+			}
+		}
+		return d, nil
+	case reflect.Invalid:
+		return sl.None, nil
 	default:
-		return nil, fmt.Errorf("unsupported type %T", v)
+		return nil, fmt.Errorf("unsupported type %s", rv.Type())
 	}
 }

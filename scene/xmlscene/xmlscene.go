@@ -56,7 +56,7 @@ import (
 	"text/template/parse"
 
 	"github.com/samuel/demy"
-	"github.com/samuel/demy/scene/internal/codec"
+	"github.com/samuel/demy/internal/codec"
 )
 
 // Marshal serializes a Node tree to indented XML.

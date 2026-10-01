@@ -1,5 +1,6 @@
-// Package codec holds the string encodings shared by the scene formats: colors,
-// enums, font weights, and grid tracks. Every parser rejects unknown values.
+// Package codec holds the string encodings shared by the scene formats and the
+// Starlark host: colors, enums, font weights, and grid tracks. Every parser
+// rejects unknown values.
 package codec
 
 import (

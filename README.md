@@ -151,7 +151,8 @@ Zero-valued fields inherit (`FontInherit`, `TextAlignInherit`, `TextOverflowInhe
 `MaxLines` truncates text to that many lines; with `TextOverflowEllipsis` the last line is
 shortened to fit an ellipsis. A `Font` name missing from `Config.Fonts` is a render error.
 
-`Text` with no style uses `Config.DefaultTextStyle`. Named styles in `Config.Styles` are
+`Text` with no style uses `Config.DefaultTextStyle`. A `Class` name missing from
+`Config.Styles` is a render error. Named styles in `Config.Styles` are
 referenced with `Class`, and inline `Style` fields override the class:
 
 ```go
@@ -321,7 +322,8 @@ A document can also be wrapped in `<scene>` with a `<styles>` block of
 ## Starlark plugins (`plugin/starlark`)
 
 A script defines `render(data)` returning a node tree. It may also define a module-level
-`styles` dict, which the host reads with `Plugin.Styles()`.
+`styles` dict, which the host reads with `Plugin.Styles()` and merges into `Config.Styles`
+before rendering; `Class("name")` references those styles at render time.
 
 ```python
 def render(data):
@@ -345,7 +347,15 @@ img, err := c.Render(node, demy.Unset)
 ```
 
 Use `Environment.AddBuiltin`, `AddValue`, and `AddModule` to expose Go functions to scripts.
-`ContextFromThread` retrieves the `Render` context inside a builtin.
+`ContextFromThread` retrieves the `Render` context inside a builtin. Values added with
+`AddValue` are frozen because every script and render shares them. `Render` data accepts
+`map[string]any`/`[]any` plus typed slices, string-keyed maps, all integer and float kinds,
+pointers, `json.Number`, and `time.Time` (as a `now()`-style time value); map keys are sorted
+so iteration order is stable. Set `Environment.Now` to fix the time `now()` returns.
+
+Builtins reject unknown keyword arguments, wrong argument types, unknown enum names (such as
+`weight="semibold"`), and `Style(class=)` names missing from `Config.Styles`. The returned tree
+may share nodes between renders, so treat it as read-only.
 
 Module execution and each `Render` call are limited to `Environment.MaxSteps` Starlark
 execution steps (`DefaultMaxSteps`, 10 million, when zero) and stop when their context is
@@ -355,17 +365,17 @@ Globals:
 
 | Category | Names |
 |----------|-------|
-| Layout | `VStack`, `HStack`, `ZStack`, `Box`, `Frame`, `Spacer`, `Divider(size=, color=)`, `Grid`, `GridRow` |
-| Widgets | `Text`, `ImageKey`, `Barcode` |
-| Style | `Style(class=, font=, size=, weight=, color=, align=, line_height=, max_lines=, overflow=)` |
+| Layout | `VStack`, `HStack`, `ZStack`, `Box`, `Frame`, `Spacer`, `Weighted(weight, child)`, `Divider(size=, color=)`, `Grid`, `GridRow` |
+| Widgets | `Text(s, style_or_class...)`, `ImageKey`, `Barcode` |
+| Style | `Style(class=, font=, size=, weight=, color=, align=, line_height=, max_lines=, overflow=)` (`max_lines=-1` is unlimited); `Class(name)` |
 | Options | `Gap`, `Padding`, `Background`, `Border`, `CornerRadius`, `Children`, `Clip`, `Columns`, `Rows`, `RowGap`, `ColGap` |
 | Grid tracks | `GridFixed`, `GridAuto`, `GridFr` |
 | Alignment | `AlignStart`, `AlignCenter`, `AlignEnd`; `TopLeading` … `BottomTrailing` |
 | Images | `ImageFit`, `ImageFill`, `ImageStretch`, `FloydSteinberg`, `Atkinson` |
 | Barcodes | `BarcodeTypeQR`, `ECLevelLow`, `ECLevelMedium`, `ECLevelQuartile`, `ECLevelHigh` |
 | Colors | `Foreground`, `Accent`, `Muted` (roles); `Black`, `DarkGray`, `LightGray`, `White`, `Red`, `Yellow` |
-| Time | `now()` with `.year` `.month` `.day` `.hour` `.minute` `.second` `.weekday` (0=Sun) `.weekday_name` `.timezone` `.unix` `.format(layout)` |
-| Styles | each `Config.Styles` entry, capitalized (`"h1"` → `H1`) |
+| Time | `now()` with `.year` `.month` `.day` `.hour` `.minute` `.second` `.weekday` (0=Sun) `.weekday_name` `.timezone` `.unix` `.format(layout)` (Go layout, e.g. `"Mon Jan 2 15:04"`) |
+| Styles | each `Config.Styles` entry, capitalized (`"h1"` → `H1`), unless the name isn't an identifier or would shadow a builtin; use `Class(name)` for those |
 
 ## Tutorial
 

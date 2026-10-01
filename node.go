@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
 	"math"
 	"reflect"
 	"strings"
@@ -1001,15 +1000,10 @@ type imageNode struct {
 	bounds nodeRect
 }
 
+// measure sizes the image. buildNode guarantees a non-empty image.
 func (n *imageNode) measure(mctx *measureCtx) nodeSize {
-	if n.img == nil {
-		return nodeSize{}
-	}
 	iw := float64(n.img.Bounds().Dx())
 	ih := float64(n.img.Bounds().Dy())
-	if iw == 0 || ih == 0 {
-		return nodeSize{}
-	}
 	availW := mctx.availW
 	availH := mctx.availH
 	switch n.scale {
@@ -1044,9 +1038,6 @@ func (n *imageNode) measure(mctx *measureCtx) nodeSize {
 func (n *imageNode) layout(bounds nodeRect) { n.bounds = bounds }
 
 func (n *imageNode) draw(dctx *drawCtx) {
-	if n.img == nil {
-		return
-	}
 	bw := n.bounds.w
 	bh := n.bounds.h
 	if bw == 0 || bh == 0 {
@@ -1065,12 +1056,8 @@ func (n *imageNode) draw(dctx *drawCtx) {
 	case ImageFill:
 		fit = cv.ImageCover
 		// The canvas crops cover images with SubImage and panics without it.
-		if _, ok := img.(interface {
-			SubImage(image.Rectangle) image.Image
-		}); !ok {
-			rgba := image.NewRGBA(img.Bounds())
-			draw.Draw(rgba, rgba.Bounds(), img, img.Bounds().Min, draw.Src)
-			img = rgba
+		if _, ok := img.(subImager); !ok {
+			img = imageView{img, img.Bounds()}
 		}
 	case ImageStretch:
 		fit = cv.ImageFill
@@ -1082,6 +1069,23 @@ func (n *imageNode) draw(dctx *drawCtx) {
 		return
 	}
 	n.drawDithered(dctx, img, rect, fit)
+}
+
+type subImager interface {
+	SubImage(image.Rectangle) image.Image
+}
+
+// imageView adds SubImage to an image that lacks it. A sub-image is a view of
+// the same pixels, so nothing is copied.
+type imageView struct {
+	image.Image
+	r image.Rectangle
+}
+
+func (v imageView) Bounds() image.Rectangle { return v.r }
+
+func (v imageView) SubImage(r image.Rectangle) image.Image {
+	return imageView{v.Image, r.Intersect(v.r)}
 }
 
 // drawDithered rasterizes the image alone at physical resolution, dithers it
@@ -1603,6 +1607,9 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 				return nil, imageKeyError(v.Key)
 			}
 		}
+		if err := checkImage(img); err != nil {
+			return nil, err
+		}
 		return &imageNode{img: img, scale: v.Scale, dither: v.Dither}, nil
 	case *BarcodeNode:
 		bc, err := encodeBarcode(v)
@@ -1679,6 +1686,26 @@ func checkTextFont(style Style, cfg *Config) error {
 	}
 	if !ff.isBitmap() && style.Size == 0 {
 		return fmt.Errorf("demy: Text in font %q has no size; set Style.Size or Config.DefaultTextStyle.Size", style.Font)
+	}
+	return nil
+}
+
+// maxImagePixels bounds the pixel count of an image. Resampling cost grows with
+// the source size, so an image with huge bounds but no pixel data, such as
+// image.Uniform, could otherwise stall a render.
+const maxImagePixels = 1 << 26
+
+// checkImage reports an error for a missing image, or one whose bounds are
+// empty, wider or taller than maxPixelDimension, or larger than maxImagePixels.
+func checkImage(img image.Image) error {
+	if v := reflect.ValueOf(img); !v.IsValid() || v.Kind() == reflect.Pointer && v.IsNil() {
+		return errors.New("demy: Image has no image or key")
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= 0 || h <= 0 || w > maxPixelDimension || h > maxPixelDimension || w*h > maxImagePixels {
+		return fmt.Errorf("demy: Image bounds %v out of range: each side must be in [1, %d] and the area at most %d pixels",
+			b, maxPixelDimension, maxImagePixels)
 	}
 	return nil
 }

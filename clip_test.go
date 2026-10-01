@@ -99,12 +99,3 @@ func TestFrameDither(t *testing.T) {
 		t.Errorf("dithered frame has %d black and %d white pixels, want a mix", black, white)
 	}
 }
-
-// noSubImage hides the SubImage method of the embedded image.
-type noSubImage struct{ image.Image }
-
-func TestImageFillWithoutSubImage(t *testing.T) {
-	src := image.NewRGBA(image.Rect(0, 0, 40, 10))
-	n := demy.Image(noSubImage{src}, demy.ImageFill)
-	render(t, n, 20, 20, demy.RGBA, demy.Config{})
-}

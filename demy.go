@@ -578,7 +578,9 @@ func (*TextNode) demyNode()   {}
 func (*TextNode) demyOption() {}
 
 // ImageNode renders an image. Set Image directly, or Key to reference an image
-// in Config.Images (required when the tree is serialized).
+// in Config.Images (required when the tree is serialized). Rendering fails if
+// there is no image, or its bounds are empty, wider or taller than 16384
+// pixels, or larger than 2²⁶ pixels (which rejects image.Uniform).
 type ImageNode struct {
 	Image  image.Image
 	Key    string

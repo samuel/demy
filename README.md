@@ -229,6 +229,10 @@ demy.ImageKey("logo")           // looks up Config.Images["logo"]
 `ImageFit` scales the image to fit the available space, preserving aspect ratio. Along an
 unbounded axis (height inside a `VStack`) it scales to the other axis.
 
+An image must be non-nil with each side in [1, 16384] and at most 2²⁶ pixels; otherwise
+rendering returns an error. Images with unbounded extents such as `image.Uniform` are
+rejected. Any `image.Image` works with every scale mode; it doesn't need a `SubImage` method.
+
 ## Barcodes
 
 ```go

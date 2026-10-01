@@ -632,10 +632,11 @@ func (t GridTrack) IsFixed() bool { return t.kind == gridTrackFixed }
 // IsFr reports whether the track takes a proportional share of remaining space.
 func (t GridTrack) IsFr() bool { return t.kind == gridTrackFr }
 
-// Size returns the size of a GridFixed track; 0 for other kinds.
+// Size returns the size of a GridFixed track in logical pixels; 0 for other kinds.
 func (t GridTrack) Size() float64 { return t.size }
 
 // Weight returns the fractional weight for a GridFr track; 0 for other kinds.
+// Weights are relative to the other Fr tracks in the same grid.
 func (t GridTrack) Weight() float64 { return t.weight }
 
 // GridAuto returns a track sized to the widest (or tallest) cell in it.
@@ -800,6 +801,10 @@ func (childrenOpt) demyOption() {}
 // Children passes a slice of nodes as a single option:
 //
 //	demy.VStack(demy.Gap(4), demy.Children(rows...))
+//
+// Nil children, including typed nil pointers such as a nil *TextNode, are
+// skipped when the tree is rendered, in every container. In a Grid a skipped
+// child takes no cell, so later children move up one cell.
 func Children(nodes ...Node) childrenOpt { return childrenOpt(nodes) }
 
 // appendChildren appends opts that are Node or childrenOpt values to dst.

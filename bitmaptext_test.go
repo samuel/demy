@@ -119,3 +119,30 @@ func TestBitmapTextOverDither(t *testing.T) {
 		}
 	}
 }
+
+// TestBitmapTextClipped draws an 8px-wide glyph into a 4px-wide clip at x=3
+// and checks that no glyph pixels land outside the clip.
+func TestBitmapTextClipped(t *testing.T) {
+	text := func() *TextNode { return Text("A", Style{Font: "px", Color: Black}) }
+	wrappers := map[string]func() Node{
+		"frame": func() Node { return Frame(4, 8, text()) },
+		"box":   func() Node { return Grid(Columns(GridFixed(4)), Box(Clip, text())) },
+	}
+	for name, wrap := range wrappers {
+		for _, scale := range []int{1, 2} {
+			g := renderBitmap(t, HStack(Frame(3, 8), Children(wrap())), 32*scale, 16*scale, float64(scale), OneBit)
+			clip := image.Rect(3*scale, 0, 7*scale, 8*scale)
+			// 'A' row 3 = 0x7E sets glyph columns 1..6, i.e. logical x 4..9.
+			if got := g.GrayAt(5*scale, 3*scale).Y; got != 0 {
+				t.Errorf("%s scale %d: pixel inside clip = %d, want 0", name, scale, got)
+			}
+			for y := range g.Bounds().Dy() {
+				for x := range g.Bounds().Dx() {
+					if !image.Pt(x, y).In(clip) && g.GrayAt(x, y).Y != 255 {
+						t.Fatalf("%s scale %d: pixel (%d,%d) outside clip = %d, want 255", name, scale, x, y, g.GrayAt(x, y).Y)
+					}
+				}
+			}
+		}
+	}
+}

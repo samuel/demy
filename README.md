@@ -80,6 +80,9 @@ for _, item := range items {
 demy.VStack(demy.Gap(4), demy.Children(rows...))
 ```
 
+Nil children (including typed nil pointers) are skipped, so optional nodes can be passed
+directly. In a `Grid` a skipped child takes no cell, so later children move up one cell.
+
 | Constructor | Options |
 |-------------|---------|
 | `VStack(opts...)` / `HStack(opts...)` | `Gap`, `Padding`, `AlignStart`/`AlignCenter`/`AlignEnd`, children |

@@ -1,6 +1,7 @@
 package demy_test
 
 import (
+	"image/color"
 	"testing"
 
 	"golang.org/x/image/font/gofont/goregular"
@@ -57,9 +58,18 @@ func TestGridEmptyChildren(t *testing.T) {
 }
 
 func TestGridNoColumns(t *testing.T) {
-	// No columns — should produce a zero-size node without panicking.
-	g := demy.Grid(demy.Text("x"))
-	renderGrid(t, g, 100, 100)
+	cfg := demy.Config{PixelWidth: 100, PixelHeight: 100, PhysicalWidthMM: 100, PhysicalHeightMM: 100}
+	for name, g := range map[string]*demy.GridNode{
+		"with children": demy.Grid(demy.Text("x")),
+		"empty":         demy.Grid(),
+		"rows only":     demy.Grid(demy.Rows(demy.GridAuto())),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := demy.MustNew(cfg).Render(g, demy.RGBA); err == nil {
+				t.Error("expected error for a Grid with no columns")
+			}
+		})
+	}
 }
 
 func TestGridConstructorGap(t *testing.T) {
@@ -141,13 +151,41 @@ func TestGridChildrenOption(t *testing.T) {
 }
 
 func TestGridExplicitRowsCap(t *testing.T) {
-	// Explicit rows shorter than ceil(children/cols) should silently drop excess children.
+	// Explicit rows shorter than ceil(children/cols) drop excess children.
 	g := demy.Grid(
 		demy.Columns(demy.GridFr(1)),
 		demy.Rows(demy.GridAuto()),
 		demy.Text("a"), demy.Text("b"), demy.Text("c"),
 	)
 	renderGrid(t, g, 200, 100)
+}
+
+func TestGridOverflowNotDrawn(t *testing.T) {
+	// Children beyond Rows×Columns get no cell and must not be drawn.
+	cfg := demy.Config{
+		PixelWidth: 100, PixelHeight: 100, PhysicalWidthMM: 100, PhysicalHeightMM: 100,
+		Fonts:            map[string]*demy.FontFamily{"sans": demy.MustLoadFontBytes("sans", goregular.TTF)},
+		DefaultTextStyle: demy.Style{Font: "sans", Size: 20},
+	}
+	g := demy.Grid(
+		demy.Columns(demy.GridFr(1), demy.GridFr(1)),
+		demy.Rows(demy.GridFixed(10)),
+		demy.Spacer(), demy.Spacer(),
+		demy.Text("overflow"),
+		demy.Box(demy.Background(color.Black), demy.Frame(100, 100)),
+	)
+	img, err := demy.MustNew(cfg).Render(g, demy.RGBA)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if r, _, _, _ := img.At(x, y).RGBA(); r != 0xffff {
+				t.Fatalf("pixel (%d,%d) = %v, want white", x, y, img.At(x, y))
+			}
+		}
+	}
 }
 
 func TestGridRowFlatten(t *testing.T) {

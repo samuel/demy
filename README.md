@@ -97,8 +97,9 @@ directly. In a `Grid` a skipped child takes no cell, so later children move up o
 
 ### Grid
 
-Cells fill row by row, left to right. Rows default to `GridAuto()`. When `Rows` is given it
-sets the row count: empty rows keep their size and children beyond the last row are dropped.
+Cells fill row by row, left to right. `Columns` is required; rendering a grid without columns
+is an error. Rows default to `GridAuto()`. When `Rows` is given it sets the row count: empty
+rows keep their size and children beyond the last cell are dropped (not measured or drawn).
 
 | Track | Meaning |
 |-------|---------|

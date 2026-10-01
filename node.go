@@ -1215,15 +1215,11 @@ type gridNode struct {
 func (n *gridNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
 
 func (n *gridNode) measureUncached(mctx *measureCtx) nodeSize {
-	if len(n.columns) == 0 {
-		return nodeSize{}
-	}
 	n.mctx = mctx
 	n.numCols = len(n.columns)
-	numChildren := len(n.children)
-	// Explicit row definitions fix the row count; children beyond the last
-	// row are dropped.
-	n.numRows = (numChildren + n.numCols - 1) / n.numCols
+	// Explicit row definitions fix the row count; buildNode drops children
+	// beyond the last cell.
+	n.numRows = (len(n.children) + n.numCols - 1) / n.numCols
 	if len(n.rows) > 0 {
 		n.numRows = len(n.rows)
 	}
@@ -1241,12 +1237,8 @@ func (n *gridNode) measureUncached(mctx *measureCtx) nodeSize {
 	roughColWidths := n.computeColWidths(availForCols, nil)
 
 	// Step 2: measure all children with the estimated widths.
-	total := n.numRows * n.numCols
-	n.cellSizes = make([]nodeSize, total)
+	n.cellSizes = make([]nodeSize, n.numRows*n.numCols)
 	for i, child := range n.children {
-		if i >= total {
-			break
-		}
 		col := i % n.numCols
 		n.cellSizes[i] = child.measure(mctx.with(roughColWidths[col], unbounded))
 	}
@@ -1257,9 +1249,6 @@ func (n *gridNode) measureUncached(mctx *measureCtx) nodeSize {
 	// Step 4: re-measure children whose column width changed so row heights
 	// reflect re-wrapped content.
 	for i, child := range n.children {
-		if i >= total {
-			break
-		}
 		col := i % n.numCols
 		if math.Abs(n.colWidths[col]-roughColWidths[col]) > 0.5 {
 			n.cellSizes[i] = child.measure(mctx.with(n.colWidths[col], unbounded))
@@ -1298,8 +1287,6 @@ func (n *gridNode) layout(bounds nodeRect) {
 	// Distribute Fr rows using the actual available height.
 	n.rowHeights = n.finalizeRowHeights(availForRows, n.cellSizes)
 
-	total := n.numRows * n.numCols
-
 	// Re-measure children in Fr rows with their definite height.
 	for row := range n.numRows {
 		rowTrack := n.rowTrack(row)
@@ -1308,7 +1295,7 @@ func (n *gridNode) layout(bounds nodeRect) {
 		}
 		for col := range n.numCols {
 			idx := row*n.numCols + col
-			if idx >= len(n.children) || idx >= total {
+			if idx >= len(n.children) {
 				break
 			}
 			n.cellSizes[idx] = n.children[idx].measure(n.mctx.with(n.colWidths[col], n.rowHeights[row]))
@@ -1331,14 +1318,8 @@ func (n *gridNode) layout(bounds nodeRect) {
 	originX := bounds.x + n.padding
 	originY := bounds.y + n.padding
 	for i, child := range n.children {
-		if i >= total {
-			break
-		}
 		col := i % n.numCols
 		row := i / n.numCols
-		if row >= n.numRows {
-			break
-		}
 		child.layout(nodeRect{
 			x: originX + colOffsets[col],
 			y: originY + rowOffsets[row],
@@ -1647,6 +1628,9 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		); err != nil {
 			return nil, err
 		}
+		if len(v.Columns) == 0 {
+			return nil, errors.New("demy: Grid has no columns")
+		}
 		if err := checkTracks("column", v.Columns); err != nil {
 			return nil, err
 		}
@@ -1664,6 +1648,13 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		children, err := buildNodes(flat, cfg, dirVertical, depth+1)
 		if err != nil {
 			return nil, err
+		}
+		// With explicit rows, children beyond the last cell get no cell and are
+		// dropped, so measure, layout, and draw never see them.
+		if len(v.Rows) > 0 {
+			if cells := len(v.Rows) * len(v.Columns); len(children) > cells {
+				children = children[:cells]
+			}
 		}
 		return &gridNode{
 			columns:  v.Columns,

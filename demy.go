@@ -650,8 +650,9 @@ func GridFixed(px float64) GridTrack { return GridTrack{kind: gridTrackFixed, si
 func GridFr(weight float64) GridTrack { return GridTrack{kind: gridTrackFr, weight: weight} }
 
 // GridNode lays children out in a 2D grid, filling cells row by row, left to
-// right. Columns are required. When Rows is empty every row is GridAuto;
-// otherwise the grid has at most len(Rows) rows and excess children are dropped.
+// right. Columns are required; rendering a grid without columns is an error.
+// When Rows is empty every row is GridAuto; otherwise the grid has len(Rows)
+// rows and children beyond the last cell are dropped.
 type GridNode struct {
 	Columns  []GridTrack // number of columns is len(Columns)
 	Rows     []GridTrack

@@ -399,3 +399,7 @@ go run ./cmd/demy-tutorial/
 Serves an interactive tutorial at http://127.0.0.1:8081. Lessons are XML scenes edited and
 rendered live in the browser. Use `-addr` to change the listen
 address.
+
+## License
+
+This code is MIT licensed. See LICENSE.

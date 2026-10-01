@@ -5,19 +5,23 @@
 // which unmarshal to demy.RoleColor and resolve against Config.Roles at render time,
 // or as "#rgb", "#rrggbb", or "#rrggbbaa" hex strings.
 //
+// Decoding is strict: unknown fields, unknown enum names, children on leaf
+// nodes, and trailing data are errors.
+//
 // Two formats are supported:
 //   - Bare node: {"type":"vstack",...} — Marshal/Unmarshal
 //   - Scene envelope: {"styles":{...},"root":{...}} — MarshalScene/UnmarshalScene
 package jsonscene
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"image/color"
-	"strconv"
-	"strings"
+	"io"
 
 	"github.com/samuel/demy"
+	"github.com/samuel/demy/scene/internal/codec"
 )
 
 // GridTrackDef serializes a single GridTrack.
@@ -80,7 +84,7 @@ type Scene struct {
 
 // Marshal serializes a Node tree to JSON (bare node format, no styles envelope).
 func Marshal(n demy.Node) ([]byte, error) {
-	sn, err := nodeToScene(n)
+	sn, err := rootToScene(n)
 	if err != nil {
 		return nil, err
 	}
@@ -91,16 +95,20 @@ func Marshal(n demy.Node) ([]byte, error) {
 // against Config.Images at render time.
 func Unmarshal(data []byte) (demy.Node, error) {
 	var sn Node
-	if err := json.Unmarshal(data, &sn); err != nil {
+	if err := decodeStrict(data, &sn); err != nil {
 		return nil, err
 	}
-	return sceneToNode(sn)
+	n, err := sceneToNode(sn)
+	if err != nil {
+		return nil, fmt.Errorf("jsonscene: %w", err)
+	}
+	return n, nil
 }
 
 // MarshalScene serializes a Node tree and named style definitions to a JSON Scene
 // envelope.
 func MarshalScene(n demy.Node, styles map[string]demy.Style) ([]byte, error) {
-	root, err := nodeToScene(n)
+	root, err := rootToScene(n)
 	if err != nil {
 		return nil, err
 	}
@@ -108,16 +116,11 @@ func MarshalScene(n demy.Node, styles map[string]demy.Style) ([]byte, error) {
 	if len(styles) > 0 {
 		s.Styles = make(map[string]Style, len(styles))
 		for k, v := range styles {
-			s.Styles[k] = Style{
-				Font:       v.Font,
-				Size:       v.Size,
-				Weight:     weightStr(v.Weight),
-				Color:      colorStr(v.Color),
-				Align:      textAlignStr(v.Align),
-				LineHeight: v.LineHeight,
-				MaxLines:   v.MaxLines,
-				Overflow:   overflowStr(v.Overflow),
+			ss, err := styleToScene(v)
+			if err != nil {
+				return nil, fmt.Errorf("jsonscene: style %q: %w", k, err)
 			}
+			s.Styles[k] = ss
 		}
 	}
 	return json.Marshal(s)
@@ -128,12 +131,12 @@ func MarshalScene(n demy.Node, styles map[string]demy.Style) ([]byte, error) {
 // so that class references in the node tree resolve correctly.
 func UnmarshalScene(data []byte) (demy.Node, map[string]demy.Style, error) {
 	var s Scene
-	if err := json.Unmarshal(data, &s); err != nil {
+	if err := decodeStrict(data, &s); err != nil {
 		return nil, nil, err
 	}
 	n, err := sceneToNode(s.Root)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("jsonscene: %w", err)
 	}
 	var outStyles map[string]demy.Style
 	if len(s.Styles) > 0 {
@@ -141,7 +144,7 @@ func UnmarshalScene(data []byte) (demy.Node, map[string]demy.Style, error) {
 		for k, ss := range s.Styles {
 			parsed, err := parseStyle(&ss)
 			if err != nil {
-				return nil, nil, fmt.Errorf("scene: style %q: %w", k, err)
+				return nil, nil, fmt.Errorf("jsonscene: style %q: %w", k, err)
 			}
 			outStyles[k] = parsed
 		}
@@ -149,126 +152,113 @@ func UnmarshalScene(data []byte) (demy.Node, map[string]demy.Style, error) {
 	return n, outStyles, nil
 }
 
+// decodeStrict decodes a single JSON value, rejecting unknown fields and
+// trailing data.
+func decodeStrict(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("jsonscene: %w", err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("jsonscene: unexpected data after the top-level value")
+	}
+	return nil
+}
+
 // --- marshal helpers ---
 
-func nodeToScene(n demy.Node) (Node, error) {
-	if n == nil {
-		return Node{Type: "spacer", Weight: 0}, nil
+func rootToScene(n demy.Node) (Node, error) {
+	if codec.IsNilNode(n) {
+		return Node{}, fmt.Errorf("jsonscene: %w", codec.ErrNilRoot)
 	}
+	sn, err := nodeToScene(n)
+	if err != nil {
+		return Node{}, fmt.Errorf("jsonscene: %w", err)
+	}
+	return sn, nil
+}
+
+// childrenToScene encodes children, skipping nil entries as rendering does.
+func childrenToScene(children []demy.Node) ([]Node, error) {
+	var out []Node
+	for _, child := range children {
+		if codec.IsNilNode(child) {
+			continue
+		}
+		cs, err := nodeToScene(child)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cs)
+	}
+	return out, nil
+}
+
+func nodeToScene(n demy.Node) (Node, error) {
+	// Field encoders below record the first error in err.
+	var (
+		err      error
+		sn       Node
+		children []demy.Node
+	)
 	switch v := n.(type) {
 	case *demy.VStackNode:
-		sn := Node{
-			Type:    "vstack",
-			Gap:     v.Gap,
-			Padding: v.Padding,
-			Align:   alignStr(v.Align),
-		}
-		for _, child := range v.Children {
-			cs, err := nodeToScene(child)
-			if err != nil {
-				return Node{}, err
-			}
-			sn.Children = append(sn.Children, cs)
-		}
-		return sn, nil
+		sn = Node{Type: "vstack", Gap: v.Gap, Padding: v.Padding, Align: codec.Align.Encode(v.Align, &err)}
+		children = v.Children
 	case *demy.HStackNode:
-		sn := Node{
-			Type:    "hstack",
-			Gap:     v.Gap,
-			Padding: v.Padding,
-			Align:   alignStr(v.Align),
-		}
-		for _, child := range v.Children {
-			cs, err := nodeToScene(child)
-			if err != nil {
-				return Node{}, err
-			}
-			sn.Children = append(sn.Children, cs)
-		}
-		return sn, nil
+		sn = Node{Type: "hstack", Gap: v.Gap, Padding: v.Padding, Align: codec.Align.Encode(v.Align, &err)}
+		children = v.Children
 	case *demy.ZStackNode:
-		sn := Node{
-			Type:  "zstack",
-			Align: zAlignStr(v.Align),
-		}
-		for _, child := range v.Children {
-			cs, err := nodeToScene(child)
-			if err != nil {
-				return Node{}, err
-			}
-			sn.Children = append(sn.Children, cs)
-		}
-		return sn, nil
+		sn = Node{Type: "zstack", Align: codec.ZAlign.Encode(v.Align, &err)}
+		children = v.Children
 	case *demy.BoxNode:
-		sn := Node{
+		sn = Node{
 			Type:         "box",
 			Padding:      v.Padding,
 			BorderWidth:  v.BorderWidth,
-			BorderColor:  colorStr(v.BorderColor),
-			Background:   colorStr(v.Background),
+			BorderColor:  codec.EncodeColor(v.BorderColor, &err),
+			Background:   codec.EncodeColor(v.Background, &err),
 			CornerRadius: v.CornerRadius,
 			Clip:         v.Clip,
 		}
-		for _, child := range v.Children {
-			cs, err := nodeToScene(child)
-			if err != nil {
-				return Node{}, err
-			}
-			sn.Children = append(sn.Children, cs)
-		}
-		return sn, nil
+		children = v.Children
 	case *demy.FrameNode:
-		sn := Node{
-			Type:   "frame",
-			Width:  v.Width,
-			Height: v.Height,
-		}
-		for _, child := range v.Children {
-			cs, err := nodeToScene(child)
-			if err != nil {
-				return Node{}, err
-			}
-			sn.Children = append(sn.Children, cs)
-		}
-		return sn, nil
+		sn = Node{Type: "frame", Width: v.Width, Height: v.Height}
+		children = v.Children
 	case *demy.SpacerNode:
-		return Node{Type: "spacer", Weight: v.Weight}, nil
+		sn = Node{Type: "spacer", Weight: v.Weight}
 	case *demy.WeightedNode:
-		var children []Node
-		if v.Child != nil {
-			cs, err := nodeToScene(v.Child)
-			if err != nil {
-				return Node{}, err
-			}
-			children = []Node{cs}
-		}
-		return Node{Type: "weighted", Weight: v.Weight, Children: children}, nil
+		sn = Node{Type: "weighted", Weight: v.Weight}
+		children = []demy.Node{v.Child}
 	case *demy.DividerNode:
-		return Node{Type: "divider", Color: colorStr(v.Color), Size: v.Size}, nil
+		sn = Node{Type: "divider", Color: codec.EncodeColor(v.Color, &err), Size: v.Size}
 	case *demy.TextNode:
-		sn := Node{
-			Type:  "text",
-			Text:  v.Text,
-			Class: string(v.Class),
-			Style: styleToScene(v.Style),
+		sn = Node{Type: "text", Text: v.Text, Class: string(v.Class)}
+		if v.Style != (demy.Style{}) {
+			var st Style
+			st, err = styleToScene(v.Style)
+			sn.Style = &st
 		}
-		return sn, nil
 	case *demy.ImageNode:
-		return Node{
+		if err := codec.CheckImage(v); err != nil {
+			return Node{}, err
+		}
+		sn = Node{
 			Type:     "image",
 			ImageKey: v.Key,
-			Scale:    scaleStr(v.Scale),
-			Dither:   ditherStr(v.Dither),
-		}, nil
+			Scale:    codec.ImageScale.Encode(v.Scale, &err),
+			Dither:   codec.Dither.Encode(v.Dither, &err),
+		}
 	case *demy.BarcodeNode:
-		return Node{
+		sn = Node{
 			Type:        "barcode",
 			Content:     v.Content,
-			BarcodeType: barcodeTypeStr(v.Type),
-			ECLevel:     ecLevelStr(v.ECLevel),
-		}, nil
+			BarcodeType: codec.BarcodeType.Encode(v.Type, &err),
+			ECLevel:     codec.ECLevel.Encode(v.ECLevel, &err),
+		}
 	case *demy.GridNode:
-		sn := Node{
+		sn = Node{
 			Type:    "grid",
 			Padding: v.Padding,
 			RowGap:  v.RowGap,
@@ -276,207 +266,155 @@ func nodeToScene(n demy.Node) (Node, error) {
 			Columns: trackDefsFromTracks(v.Columns),
 			Rows:    trackDefsFromTracks(v.Rows),
 		}
-		for _, child := range v.Children {
-			cs, err := nodeToScene(child)
-			if err != nil {
-				return Node{}, err
-			}
-			sn.Children = append(sn.Children, cs)
-		}
-		return sn, nil
+		children = v.Children
 	case *demy.GridRowNode:
-		sn := Node{Type: "row"}
-		for _, child := range v.Children {
-			cs, err := nodeToScene(child)
-			if err != nil {
-				return Node{}, err
-			}
-			sn.Children = append(sn.Children, cs)
-		}
-		return sn, nil
+		sn = Node{Type: "row"}
+		children = v.Children
 	default:
-		return Node{}, fmt.Errorf("scene: unknown node type %T", n)
+		return Node{}, fmt.Errorf("unknown node type %T", n)
 	}
+	if err != nil {
+		return Node{}, fmt.Errorf("%s: %w", sn.Type, err)
+	}
+	cs, err := childrenToScene(children)
+	if err != nil {
+		return Node{}, err
+	}
+	sn.Children = cs
+	return sn, nil
 }
 
-func styleToScene(s demy.Style) *Style {
-	if s == (demy.Style{}) {
-		return nil
-	}
-	return &Style{
+func styleToScene(s demy.Style) (Style, error) {
+	var err error
+	st := Style{
 		Font:       s.Font,
 		Size:       s.Size,
-		Weight:     weightStr(s.Weight),
-		Color:      colorStr(s.Color),
-		Align:      textAlignStr(s.Align),
+		Weight:     codec.EncodeWeight(s.Weight, &err),
+		Color:      codec.EncodeColor(s.Color, &err),
+		Align:      codec.TextAlign.Encode(s.Align, &err),
 		LineHeight: s.LineHeight,
 		MaxLines:   s.MaxLines,
-		Overflow:   overflowStr(s.Overflow),
+		Overflow:   codec.Overflow.Encode(s.Overflow, &err),
 	}
+	return st, err
 }
 
 // --- unmarshal helpers ---
 
+func childrenFromScene(children []Node) ([]demy.Node, error) {
+	var out []demy.Node
+	for _, child := range children {
+		c, err := sceneToNode(child)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
 func sceneToNode(sn Node) (demy.Node, error) {
+	var leaf bool
+	switch sn.Type {
+	case "spacer", "divider", "text", "image", "barcode":
+		leaf = true
+	}
+	if leaf && len(sn.Children) > 0 {
+		return nil, fmt.Errorf("%s: children are not allowed", sn.Type)
+	}
+	if sn.Type == "weighted" && len(sn.Children) > 1 {
+		return nil, fmt.Errorf("weighted: has %d children, want at most 1", len(sn.Children))
+	}
+	children, err := childrenFromScene(sn.Children)
+	if err != nil {
+		return nil, err
+	}
+
+	// Field decoders below record the first error in err.
+	var n demy.Node
 	switch sn.Type {
 	case "vstack":
-		n := &demy.VStackNode{
-			Gap:     sn.Gap,
-			Padding: sn.Padding,
-			Align:   parseAlign(sn.Align),
-		}
-		for _, child := range sn.Children {
-			c, err := sceneToNode(child)
-			if err != nil {
-				return nil, err
-			}
-			n.Children = append(n.Children, c)
-		}
-		return n, nil
+		n = &demy.VStackNode{Gap: sn.Gap, Padding: sn.Padding, Align: codec.Align.Decode(sn.Align, &err), Children: children}
 	case "hstack":
-		n := &demy.HStackNode{
-			Gap:     sn.Gap,
-			Padding: sn.Padding,
-			Align:   parseAlign(sn.Align),
-		}
-		for _, child := range sn.Children {
-			c, err := sceneToNode(child)
-			if err != nil {
-				return nil, err
-			}
-			n.Children = append(n.Children, c)
-		}
-		return n, nil
+		n = &demy.HStackNode{Gap: sn.Gap, Padding: sn.Padding, Align: codec.Align.Decode(sn.Align, &err), Children: children}
 	case "zstack":
-		n := &demy.ZStackNode{Align: parseZAlign(sn.Align)}
-		for _, child := range sn.Children {
-			c, err := sceneToNode(child)
-			if err != nil {
-				return nil, err
-			}
-			n.Children = append(n.Children, c)
-		}
-		return n, nil
+		n = &demy.ZStackNode{Align: codec.ZAlign.Decode(sn.Align, &err), Children: children}
 	case "box":
-		bc, err := parseColor(sn.BorderColor)
-		if err != nil {
-			return nil, err
-		}
-		bg, err := parseColor(sn.Background)
-		if err != nil {
-			return nil, err
-		}
-		n := &demy.BoxNode{
+		n = &demy.BoxNode{
 			Padding:      sn.Padding,
 			BorderWidth:  sn.BorderWidth,
-			BorderColor:  bc,
-			Background:   bg,
+			BorderColor:  codec.DecodeColor(sn.BorderColor, &err),
+			Background:   codec.DecodeColor(sn.Background, &err),
 			CornerRadius: sn.CornerRadius,
 			Clip:         sn.Clip,
+			Children:     children,
 		}
-		for _, child := range sn.Children {
-			c, err := sceneToNode(child)
-			if err != nil {
-				return nil, err
-			}
-			n.Children = append(n.Children, c)
-		}
-		return n, nil
 	case "frame":
-		n := &demy.FrameNode{Width: sn.Width, Height: sn.Height}
-		for _, child := range sn.Children {
-			c, err := sceneToNode(child)
-			if err != nil {
-				return nil, err
-			}
-			n.Children = append(n.Children, c)
-		}
-		return n, nil
+		n = &demy.FrameNode{Width: sn.Width, Height: sn.Height, Children: children}
 	case "spacer":
-		return &demy.SpacerNode{Weight: sn.Weight}, nil
+		n = &demy.SpacerNode{Weight: sn.Weight}
 	case "weighted":
-		var child demy.Node
-		if len(sn.Children) > 0 {
-			var err error
-			child, err = sceneToNode(sn.Children[0])
-			if err != nil {
-				return nil, err
-			}
+		w := &demy.WeightedNode{Weight: sn.Weight}
+		if len(children) == 1 {
+			w.Child = children[0]
 		}
-		return &demy.WeightedNode{Weight: sn.Weight, Child: child}, nil
+		n = w
 	case "divider":
-		clr, err := parseColor(sn.Color)
-		if err != nil {
-			return nil, fmt.Errorf("divider color: %w", err)
-		}
-		return &demy.DividerNode{Color: clr, Size: sn.Size}, nil
+		n = &demy.DividerNode{Color: codec.DecodeColor(sn.Color, &err), Size: sn.Size}
 	case "text":
-		style, err := parseStyle(sn.Style)
-		if err != nil {
-			return nil, err
-		}
-		return &demy.TextNode{Text: sn.Text, Class: demy.StyleClass(sn.Class), Style: style}, nil
+		var style demy.Style
+		style, err = parseStyle(sn.Style)
+		n = &demy.TextNode{Text: sn.Text, Class: demy.StyleClass(sn.Class), Style: style}
 	case "image":
-		return &demy.ImageNode{
+		n = &demy.ImageNode{
 			Key:    sn.ImageKey,
-			Scale:  parseScale(sn.Scale),
-			Dither: parseDither(sn.Dither),
-		}, nil
+			Scale:  codec.ImageScale.Decode(sn.Scale, &err),
+			Dither: codec.Dither.Decode(sn.Dither, &err),
+		}
 	case "barcode":
-		return &demy.BarcodeNode{
+		n = &demy.BarcodeNode{
 			Content: sn.Content,
-			Type:    parseBarcodeType(sn.BarcodeType),
-			ECLevel: parseECLevel(sn.ECLevel),
-		}, nil
+			Type:    codec.BarcodeType.Decode(sn.BarcodeType, &err),
+			ECLevel: codec.ECLevel.Decode(sn.ECLevel, &err),
+		}
 	case "grid":
-		n := &demy.GridNode{
-			Padding: sn.Padding,
-			RowGap:  sn.RowGap,
-			ColGap:  sn.ColGap,
-			Columns: tracksFromDefs(sn.Columns),
-			Rows:    tracksFromDefs(sn.Rows),
+		g := &demy.GridNode{
+			Padding:  sn.Padding,
+			RowGap:   sn.RowGap,
+			ColGap:   sn.ColGap,
+			Children: children,
 		}
-		for _, child := range sn.Children {
-			c, err := sceneToNode(child)
-			if err != nil {
-				return nil, err
-			}
-			n.Children = append(n.Children, c)
+		if g.Columns, err = tracksFromDefs(sn.Columns); err == nil {
+			g.Rows, err = tracksFromDefs(sn.Rows)
 		}
-		return n, nil
+		n = g
 	case "row":
-		n := &demy.GridRowNode{}
-		for _, child := range sn.Children {
-			c, err := sceneToNode(child)
-			if err != nil {
-				return nil, err
-			}
-			n.Children = append(n.Children, c)
-		}
-		return n, nil
+		n = &demy.GridRowNode{Children: children}
 	default:
-		return nil, fmt.Errorf("scene: unknown node type %q", sn.Type)
+		return nil, fmt.Errorf("unknown node type %q", sn.Type)
 	}
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", sn.Type, err)
+	}
+	return n, nil
 }
 
 func parseStyle(ss *Style) (demy.Style, error) {
 	if ss == nil {
 		return demy.Style{}, nil
 	}
-	clr, err := parseColor(ss.Color)
-	if err != nil {
-		return demy.Style{}, err
-	}
-	return demy.Style{
+	var err error
+	st := demy.Style{
 		Font:       ss.Font,
 		Size:       ss.Size,
-		Weight:     parseWeight(ss.Weight),
-		Color:      clr,
-		Align:      parseTextAlign(ss.Align),
+		Weight:     codec.DecodeWeight(ss.Weight, &err),
+		Color:      codec.DecodeColor(ss.Color, &err),
+		Align:      codec.TextAlign.Decode(ss.Align, &err),
 		LineHeight: ss.LineHeight,
 		MaxLines:   ss.MaxLines,
-		Overflow:   parseOverflow(ss.Overflow),
-	}, nil
+		Overflow:   codec.Overflow.Decode(ss.Overflow, &err),
+	}
+	return st, err
 }
 
 // --- grid track helpers ---
@@ -487,349 +425,28 @@ func trackDefsFromTracks(tracks []demy.GridTrack) []GridTrackDef {
 	}
 	defs := make([]GridTrackDef, len(tracks))
 	for i, t := range tracks {
-		switch {
-		case t.IsFixed():
-			defs[i] = GridTrackDef{Kind: "fixed", Size: t.Size()}
-		case t.IsFr():
-			defs[i] = GridTrackDef{Kind: "fr", Weight: t.Weight()}
-		default:
-			defs[i] = GridTrackDef{Kind: "auto"}
+		defs[i] = GridTrackDef{Kind: codec.TrackKind(t)}
+		switch defs[i].Kind {
+		case codec.TrackFixed:
+			defs[i].Size = t.Size()
+		case codec.TrackFr:
+			defs[i].Weight = t.Weight()
 		}
 	}
 	return defs
 }
 
-func tracksFromDefs(defs []GridTrackDef) []demy.GridTrack {
+func tracksFromDefs(defs []GridTrackDef) ([]demy.GridTrack, error) {
 	if len(defs) == 0 {
-		return nil
+		return nil, nil
 	}
 	tracks := make([]demy.GridTrack, len(defs))
 	for i, d := range defs {
-		switch d.Kind {
-		case "fixed":
-			tracks[i] = demy.GridFixed(d.Size)
-		case "fr":
-			tracks[i] = demy.GridFr(d.Weight)
-		default: // "auto" or unknown
-			tracks[i] = demy.GridAuto()
+		t, err := codec.ParseTrack(d.Kind, d.Size, d.Weight)
+		if err != nil {
+			return nil, err
 		}
+		tracks[i] = t
 	}
-	return tracks
-}
-
-// --- color helpers ---
-
-func colorStr(c color.Color) string {
-	if c == nil {
-		return ""
-	}
-	if rc, ok := c.(demy.RoleColor); ok {
-		return rc.Name
-	}
-	r, g, b, a := c.RGBA()
-	r8, g8, b8, a8 := uint8(r>>8), uint8(g>>8), uint8(b>>8), uint8(a>>8)
-	if a8 == 255 {
-		return fmt.Sprintf("#%02x%02x%02x", r8, g8, b8)
-	}
-	return fmt.Sprintf("#%02x%02x%02x%02x", r8, g8, b8, a8)
-}
-
-func parseColor(s string) (color.Color, error) {
-	if s == "" {
-		return nil, nil
-	}
-	switch s {
-	case "foreground", "background", "accent", "muted":
-		return demy.RoleColor{Name: s}, nil
-	}
-	if strings.HasPrefix(s, "#") {
-		hex := s[1:]
-		switch len(hex) {
-		case 3:
-			rv, _ := strconv.ParseUint(hex[0:1], 16, 8)
-			gv, _ := strconv.ParseUint(hex[1:2], 16, 8)
-			bv, _ := strconv.ParseUint(hex[2:3], 16, 8)
-			return color.RGBA{R: uint8(rv<<4 | rv), G: uint8(gv<<4 | gv), B: uint8(bv<<4 | bv), A: 255}, nil
-		case 6:
-			rv, _ := strconv.ParseUint(hex[0:2], 16, 8)
-			gv, _ := strconv.ParseUint(hex[2:4], 16, 8)
-			bv, _ := strconv.ParseUint(hex[4:6], 16, 8)
-			return color.RGBA{R: uint8(rv), G: uint8(gv), B: uint8(bv), A: 255}, nil
-		case 8:
-			rv, _ := strconv.ParseUint(hex[0:2], 16, 8)
-			gv, _ := strconv.ParseUint(hex[2:4], 16, 8)
-			bv, _ := strconv.ParseUint(hex[4:6], 16, 8)
-			av, _ := strconv.ParseUint(hex[6:8], 16, 8)
-			return color.RGBA{R: uint8(rv), G: uint8(gv), B: uint8(bv), A: uint8(av)}, nil
-		}
-	}
-	return nil, fmt.Errorf("scene: unknown color %q", s)
-}
-
-// --- alignment helpers ---
-
-func alignStr(a demy.Alignment) string {
-	switch a {
-	case demy.AlignCenter:
-		return "center"
-	case demy.AlignEnd:
-		return "end"
-	default:
-		return "" // AlignStart is the default; omit
-	}
-}
-
-func parseAlign(s string) demy.Alignment {
-	switch s {
-	case "center":
-		return demy.AlignCenter
-	case "end":
-		return demy.AlignEnd
-	default:
-		return demy.AlignStart
-	}
-}
-
-func zAlignStr(a demy.ZAlignment) string {
-	switch a {
-	case demy.Top:
-		return "top"
-	case demy.TopTrailing:
-		return "top-trailing"
-	case demy.Leading:
-		return "leading"
-	case demy.Center:
-		return "center"
-	case demy.Trailing:
-		return "trailing"
-	case demy.BottomLeading:
-		return "bottom-leading"
-	case demy.Bottom:
-		return "bottom"
-	case demy.BottomTrailing:
-		return "bottom-trailing"
-	default:
-		return "" // TopLeading is the default; omit
-	}
-}
-
-func parseZAlign(s string) demy.ZAlignment {
-	switch s {
-	case "top":
-		return demy.Top
-	case "top-trailing":
-		return demy.TopTrailing
-	case "leading":
-		return demy.Leading
-	case "center":
-		return demy.Center
-	case "trailing":
-		return demy.Trailing
-	case "bottom-leading":
-		return demy.BottomLeading
-	case "bottom":
-		return demy.Bottom
-	case "bottom-trailing":
-		return demy.BottomTrailing
-	default:
-		return demy.TopLeading
-	}
-}
-
-// --- text helpers ---
-
-func textAlignStr(a demy.TextAlign) string {
-	switch a {
-	case demy.TextAlignCenter:
-		return "center"
-	case demy.TextAlignRight:
-		return "right"
-	default:
-		return "" // left is default; omit
-	}
-}
-
-func parseTextAlign(s string) demy.TextAlign {
-	switch s {
-	case "center":
-		return demy.TextAlignCenter
-	case "right":
-		return demy.TextAlignRight
-	default:
-		return demy.TextAlignLeft
-	}
-}
-
-func overflowStr(o demy.TextOverflow) string {
-	switch o {
-	case demy.TextOverflowClip:
-		return "clip"
-	case demy.TextOverflowEllipsis:
-		return "ellipsis"
-	default:
-		return "" // wrap is default; omit
-	}
-}
-
-func parseOverflow(s string) demy.TextOverflow {
-	switch s {
-	case "clip":
-		return demy.TextOverflowClip
-	case "ellipsis":
-		return demy.TextOverflowEllipsis
-	default:
-		return demy.TextOverflowWrap
-	}
-}
-
-// --- font weight helpers ---
-
-func weightStr(w demy.FontStyle) string {
-	italic := w&demy.FontItalic != 0
-	var s string
-	switch w &^ demy.FontItalic {
-	case demy.FontThin:
-		s = "thin"
-	case demy.FontExtraLight:
-		s = "extra-light"
-	case demy.FontLight:
-		s = "light"
-	case demy.FontMedium:
-		s = "medium"
-	case demy.FontSemiBold:
-		s = "semi-bold"
-	case demy.FontBold:
-		s = "bold"
-	case demy.FontExtraBold:
-		s = "extra-bold"
-	case demy.FontBlack:
-		s = "black"
-	default:
-		s = "" // regular; omit
-	}
-	if italic {
-		if s == "" {
-			return "italic"
-		}
-		return s + "-italic"
-	}
-	return s
-}
-
-func parseWeight(s string) demy.FontStyle {
-	italic := strings.HasSuffix(s, "-italic") || s == "italic"
-	base := strings.TrimSuffix(s, "-italic")
-	var w demy.FontStyle
-	switch base {
-	case "thin":
-		w = demy.FontThin
-	case "extra-light":
-		w = demy.FontExtraLight
-	case "light":
-		w = demy.FontLight
-	case "medium":
-		w = demy.FontMedium
-	case "semi-bold":
-		w = demy.FontSemiBold
-	case "bold":
-		w = demy.FontBold
-	case "extra-bold":
-		w = demy.FontExtraBold
-	case "black":
-		w = demy.FontBlack
-	default:
-		w = demy.FontRegular
-	}
-	if italic {
-		return w | demy.FontItalic
-	}
-	return w
-}
-
-// --- image helpers ---
-
-func ditherStr(d demy.Dither) string {
-	switch d {
-	case demy.FloydSteinberg:
-		return "floyd-steinberg"
-	case demy.Atkinson:
-		return "atkinson"
-	default:
-		return "" // NoDithering is default; omit
-	}
-}
-
-func parseDither(s string) demy.Dither {
-	switch s {
-	case "floyd-steinberg":
-		return demy.FloydSteinberg
-	case "atkinson":
-		return demy.Atkinson
-	default:
-		return demy.NoDithering
-	}
-}
-
-func scaleStr(s demy.ImageScale) string {
-	switch s {
-	case demy.ImageFill:
-		return "fill"
-	case demy.ImageStretch:
-		return "stretch"
-	default:
-		return "" // fit is default; omit
-	}
-}
-
-func parseScale(s string) demy.ImageScale {
-	switch s {
-	case "fill":
-		return demy.ImageFill
-	case "stretch":
-		return demy.ImageStretch
-	default:
-		return demy.ImageFit
-	}
-}
-
-// --- barcode helpers ---
-
-func barcodeTypeStr(t demy.BarcodeType) string {
-	switch t {
-	default:
-		return "" // BarcodeTypeQR is the default; omit
-	}
-}
-
-func parseBarcodeType(s string) demy.BarcodeType {
-	switch s {
-	default:
-		return demy.BarcodeTypeQR
-	}
-}
-
-func ecLevelStr(l demy.ECLevel) string {
-	switch l {
-	case demy.ECLevelLow:
-		return "low"
-	case demy.ECLevelQuartile:
-		return "quartile"
-	case demy.ECLevelHigh:
-		return "high"
-	default: // ECLevelMedium is the default; omit
-		return ""
-	}
-}
-
-func parseECLevel(s string) demy.ECLevel {
-	switch s {
-	case "low":
-		return demy.ECLevelLow
-	case "quartile":
-		return demy.ECLevelQuartile
-	case "high":
-		return demy.ECLevelHigh
-	default:
-		return demy.ECLevelMedium
-	}
+	return tracks, nil
 }

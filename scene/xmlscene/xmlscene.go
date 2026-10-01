@@ -19,17 +19,26 @@
 // resolve against Config.Roles at render time, or "#rgb", "#rrggbb", or "#rrggbbaa"
 // hex strings.
 //
+// Decoding is strict: unknown elements and attributes, unknown enum names,
+// malformed numbers, children or text in elements that don't take them, and
+// content after the root element are errors.
+//
 // # Physical units
 //
-// Dimension attributes (width, height, padding, gap, size, etc.) accept an optional
+// Dimension attributes (width, height, padding, gap, etc.) accept an optional
 // unit suffix:
 //
 //   - Bare number or "px" → logical pixels (e.g. "240" or "240px")
 //   - "mm" → millimeters (e.g. "50mm")
 //   - "pt" → points, 1/72 inch (e.g. "12pt")
 //
-// "mm" and "pt" are converted using Config.DPMM and require Config.PhysicalWidthMM
-// to be set; otherwise they resolve to 0. Marshal always writes bare pixel values.
+// Font sizes (the size attribute of <text> and <style>) are in points: a bare
+// number or "pt" is points, and "mm" and "px" are converted to points.
+// line-height is a unitless multiplier.
+//
+// "mm" and "pt" dimensions and "px" font sizes are converted using Config.DPMM and
+// require Config.PhysicalWidthMM to be set; otherwise they are errors. Marshal
+// always writes bare values.
 package xmlscene
 
 import (
@@ -44,61 +53,41 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"text/template/parse"
 
 	"github.com/samuel/demy"
+	"github.com/samuel/demy/scene/internal/codec"
 )
 
 // Marshal serializes a Node tree to indented XML.
 func Marshal(n demy.Node) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := xml.NewEncoder(&buf)
-	enc.Indent("", "\t")
-	if err := marshalNode(enc, n); err != nil {
-		_ = enc.Close()
-		return nil, err
+	if codec.IsNilNode(n) {
+		return nil, fmt.Errorf("xmlscene: %w", codec.ErrNilRoot)
 	}
-	if err := enc.Flush(); err != nil {
-		_ = enc.Close()
-		return nil, fmt.Errorf("xmlscene: %w", err)
-	}
-	if err := enc.Close(); err != nil {
-		return nil, fmt.Errorf("xmlscene: %w", err)
-	}
-	return buf.Bytes(), nil
+	return encodeDoc(func(enc *xml.Encoder) error { return marshalNode(enc, n) })
 }
 
 // Unmarshal deserializes XML to a Node tree. Pass a demy.Config with physical
 // dimensions set to enable "mm" and "pt" unit suffixes in dimension attributes.
 func Unmarshal(data []byte, cfg demy.Config) (demy.Node, error) {
-	uctx := newUnmarshalCtx(cfg)
-	dec := xml.NewDecoder(bytes.NewReader(data))
-	for {
-		tok, err := dec.Token()
-		if errors.Is(err, io.EOF) {
-			return nil, errors.New("xmlscene: empty document")
-		}
-		if err != nil {
-			return nil, fmt.Errorf("xmlscene: %w", err)
-		}
-		if start, ok := tok.(xml.StartElement); ok {
-			return unmarshalElement(dec, start, uctx)
-		}
+	n, styles, err := unmarshalDoc(data, cfg, false)
+	if err != nil {
+		return nil, err
 	}
+	_ = styles // always nil without a <scene> wrapper
+	return n, nil
 }
 
 // Execute executes a text/template that produces XML and unmarshals the result
-// with Unmarshal. Template output is not XML-escaped; data containing "<" or "&"
-// must be escaped by the template (e.g. with the html function).
+// with Unmarshal. The output of every template action is XML-escaped, so data
+// can't inject markup; pipe a value to raw (e.g. {{.Snippet | raw}}) to insert
+// it unescaped.
 func Execute(tmplSrc []byte, data any, cfg demy.Config) (demy.Node, error) {
-	t, err := template.New("scene").Parse(string(tmplSrc))
+	out, err := executeTemplate(tmplSrc, data)
 	if err != nil {
-		return nil, fmt.Errorf("xmlscene: template parse: %w", err)
+		return nil, err
 	}
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, data); err != nil {
-		return nil, fmt.Errorf("xmlscene: template execute: %w", err)
-	}
-	return Unmarshal(buf.Bytes(), cfg)
+	return Unmarshal(out, cfg)
 }
 
 // MarshalScene serializes a Node tree and named style definitions to an indented
@@ -111,52 +100,145 @@ func Execute(tmplSrc []byte, data any, cfg demy.Config) (demy.Node, error) {
 //	  <vstack>...</vstack>
 //	</scene>
 func MarshalScene(n demy.Node, styles map[string]demy.Style) ([]byte, error) {
+	if codec.IsNilNode(n) {
+		return nil, fmt.Errorf("xmlscene: %w", codec.ErrNilRoot)
+	}
+	return encodeDoc(func(enc *xml.Encoder) error {
+		sceneElem := xml.StartElement{Name: xml.Name{Local: "scene"}}
+		if err := enc.EncodeToken(sceneElem); err != nil {
+			return err
+		}
+		if len(styles) > 0 {
+			stylesElem := xml.StartElement{Name: xml.Name{Local: "styles"}}
+			if err := enc.EncodeToken(stylesElem); err != nil {
+				return err
+			}
+			for _, k := range slices.Sorted(maps.Keys(styles)) {
+				b := newElem("style")
+				b.str("name", k)
+				b.style(styles[k])
+				if b.err != nil {
+					return fmt.Errorf("style %q: %w", k, b.err)
+				}
+				if err := encodeEmpty(enc, b.start); err != nil {
+					return err
+				}
+			}
+			if err := enc.EncodeToken(stylesElem.End()); err != nil {
+				return err
+			}
+		}
+		if err := marshalNode(enc, n); err != nil {
+			return err
+		}
+		return enc.EncodeToken(sceneElem.End())
+	})
+}
+
+// UnmarshalScene deserializes XML to a Node tree and style definitions.
+// The document may be a bare node element or a <scene> wrapper containing an
+// optional <styles> element and exactly one root element. Merge the returned
+// styles into Config.Styles before rendering so that class references resolve.
+// Pass a demy.Config with physical dimensions set to enable "mm" and "pt" unit
+// suffixes.
+func UnmarshalScene(data []byte, cfg demy.Config) (demy.Node, map[string]demy.Style, error) {
+	return unmarshalDoc(data, cfg, true)
+}
+
+// ExecuteScene executes a text/template that produces XML and unmarshals the result
+// with UnmarshalScene. Action output is XML-escaped as in Execute.
+func ExecuteScene(tmplSrc []byte, data any, cfg demy.Config) (demy.Node, map[string]demy.Style, error) {
+	out, err := executeTemplate(tmplSrc, data)
+	if err != nil {
+		return nil, nil, err
+	}
+	return UnmarshalScene(out, cfg)
+}
+
+// --- templates ---
+
+const (
+	escapeFunc = "xmlscene_escape"
+	rawFunc    = "raw"
+)
+
+// rawXML marks a value that the template inserts without escaping.
+type rawXML string
+
+var templateFuncs = template.FuncMap{
+	escapeFunc: func(args ...any) string {
+		if len(args) == 1 {
+			if r, ok := args[0].(rawXML); ok {
+				return string(r)
+			}
+		}
+		var buf bytes.Buffer
+		_ = xml.EscapeText(&buf, []byte(fmt.Sprint(args...))) //nolint:errcheck // writes to a bytes.Buffer can't fail
+		return buf.String()
+	},
+	rawFunc: func(v any) rawXML { return rawXML(fmt.Sprint(v)) },
+}
+
+func executeTemplate(src []byte, data any) ([]byte, error) {
+	t, err := template.New("scene").Funcs(templateFuncs).Parse(string(src))
+	if err != nil {
+		return nil, fmt.Errorf("xmlscene: template parse: %w", err)
+	}
+	for _, tt := range t.Templates() {
+		if tt.Tree != nil {
+			escapeActions(tt.Tree, tt.Root)
+		}
+	}
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return nil, fmt.Errorf("xmlscene: template execute: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// escapeActions appends the escape function to the pipeline of every action
+// that produces output, the way html/template rewrites its templates. Actions
+// that declare variables print nothing and are left alone. A value already
+// marked raw passes through the escape function unchanged.
+func escapeActions(tree *parse.Tree, n parse.Node) {
+	switch n := n.(type) {
+	case *parse.ListNode:
+		if n == nil {
+			return
+		}
+		for _, c := range n.Nodes {
+			escapeActions(tree, c)
+		}
+	case *parse.ActionNode:
+		if len(n.Pipe.Decl) > 0 {
+			return
+		}
+		id := parse.NewIdentifier(escapeFunc).SetTree(tree).SetPos(n.Pos)
+		n.Pipe.Cmds = append(n.Pipe.Cmds, &parse.CommandNode{
+			NodeType: parse.NodeCommand,
+			Pos:      n.Pos,
+			Args:     []parse.Node{id},
+		})
+	case *parse.IfNode:
+		escapeActions(tree, n.List)
+		escapeActions(tree, n.ElseList)
+	case *parse.RangeNode:
+		escapeActions(tree, n.List)
+		escapeActions(tree, n.ElseList)
+	case *parse.WithNode:
+		escapeActions(tree, n.List)
+		escapeActions(tree, n.ElseList)
+	}
+}
+
+// --- marshal ---
+
+func encodeDoc(write func(enc *xml.Encoder) error) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := xml.NewEncoder(&buf)
 	enc.Indent("", "\t")
-
-	sceneElem := xml.StartElement{Name: xml.Name{Local: "scene"}}
-	if err := enc.EncodeToken(sceneElem); err != nil {
-		_ = enc.Close()
-		return nil, fmt.Errorf("xmlscene: %w", err)
-	}
-
-	if len(styles) > 0 {
-		stylesElem := xml.StartElement{Name: xml.Name{Local: "styles"}}
-		if err := enc.EncodeToken(stylesElem); err != nil {
-			_ = enc.Close()
-			return nil, fmt.Errorf("xmlscene: %w", err)
-		}
-		for _, k := range slices.Sorted(maps.Keys(styles)) {
-			styleElem := xml.StartElement{Name: xml.Name{Local: "style"}}
-			appendStr(&styleElem, "name", k)
-			appendStyleAttrs(&styleElem, styles[k])
-			if err := enc.EncodeToken(styleElem); err != nil {
-				_ = enc.Close()
-				return nil, fmt.Errorf("xmlscene: %w", err)
-			}
-			if err := enc.EncodeToken(styleElem.End()); err != nil {
-				_ = enc.Close()
-				return nil, fmt.Errorf("xmlscene: %w", err)
-			}
-		}
-		if err := enc.EncodeToken(stylesElem.End()); err != nil {
-			_ = enc.Close()
-			return nil, fmt.Errorf("xmlscene: %w", err)
-		}
-	}
-
-	if err := marshalNode(enc, n); err != nil {
-		_ = enc.Close()
-		return nil, err
-	}
-
-	if err := enc.EncodeToken(sceneElem.End()); err != nil {
-		_ = enc.Close()
-		return nil, fmt.Errorf("xmlscene: %w", err)
-	}
-	if err := enc.Flush(); err != nil {
-		_ = enc.Close()
+	if err := write(enc); err != nil {
+		_ = enc.Close() //nolint:errcheck // the write error is the one to report
 		return nil, fmt.Errorf("xmlscene: %w", err)
 	}
 	if err := enc.Close(); err != nil {
@@ -165,982 +247,770 @@ func MarshalScene(n demy.Node, styles map[string]demy.Style) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// UnmarshalScene deserializes XML to a Node tree and style definitions.
-// The document may be a bare node element or a <scene> wrapper containing
-// <styles> and a root element. Merge the returned styles into Config.Styles before
-// rendering so that class references resolve. Pass a demy.Config with physical
-// dimensions set to enable "mm" and "pt" unit suffixes.
-func UnmarshalScene(data []byte, cfg demy.Config) (demy.Node, map[string]demy.Style, error) {
-	uctx := newUnmarshalCtx(cfg)
-	dec := xml.NewDecoder(bytes.NewReader(data))
-	for {
-		tok, err := dec.Token()
-		if errors.Is(err, io.EOF) {
-			return nil, nil, errors.New("xmlscene: empty document")
-		}
-		if err != nil {
-			return nil, nil, fmt.Errorf("xmlscene: %w", err)
-		}
-		if start, ok := tok.(xml.StartElement); ok {
-			if start.Name.Local == "scene" {
-				return unmarshalScene(dec, uctx)
-			}
-			n, err := unmarshalElement(dec, start, uctx)
-			return n, nil, err
-		}
+// elem builds a start element's attributes, recording the first encoding error.
+type elem struct {
+	start xml.StartElement
+	err   error
+}
+
+func newElem(name string) *elem {
+	return &elem{start: xml.StartElement{Name: xml.Name{Local: name}}}
+}
+
+func (b *elem) str(name, value string) {
+	if value != "" {
+		b.start.Attr = append(b.start.Attr, xml.Attr{Name: xml.Name{Local: name}, Value: value})
 	}
 }
 
-// ExecuteScene executes a text/template that produces XML and unmarshals the result
-// with UnmarshalScene.
-func ExecuteScene(tmplSrc []byte, data any, cfg demy.Config) (demy.Node, map[string]demy.Style, error) {
-	t, err := template.New("scene").Parse(string(tmplSrc))
-	if err != nil {
-		return nil, nil, fmt.Errorf("xmlscene: template parse: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, data); err != nil {
-		return nil, nil, fmt.Errorf("xmlscene: template execute: %w", err)
-	}
-	return UnmarshalScene(buf.Bytes(), cfg)
-}
-
-// --- marshal ---
-
-func marshalNode(enc *xml.Encoder, n demy.Node) error {
-	if n == nil {
-		start := xml.StartElement{Name: xml.Name{Local: "spacer"}}
-		if err := enc.EncodeToken(start); err != nil {
-			return err
-		}
-		return enc.EncodeToken(start.End())
-	}
-	switch v := n.(type) {
-	case *demy.VStackNode:
-		start := xml.StartElement{Name: xml.Name{Local: "vstack"}}
-		appendFloat(&start, "gap", v.Gap)
-		appendFloat(&start, "padding", v.Padding)
-		appendStr(&start, "align", alignStr(v.Align))
-		return marshalContainer(enc, start, v.Children)
-	case *demy.HStackNode:
-		start := xml.StartElement{Name: xml.Name{Local: "hstack"}}
-		appendFloat(&start, "gap", v.Gap)
-		appendFloat(&start, "padding", v.Padding)
-		appendStr(&start, "align", alignStr(v.Align))
-		return marshalContainer(enc, start, v.Children)
-	case *demy.ZStackNode:
-		start := xml.StartElement{Name: xml.Name{Local: "zstack"}}
-		appendStr(&start, "align", zAlignStr(v.Align))
-		return marshalContainer(enc, start, v.Children)
-	case *demy.BoxNode:
-		start := xml.StartElement{Name: xml.Name{Local: "box"}}
-		appendFloat(&start, "padding", v.Padding)
-		appendFloat(&start, "border-width", v.BorderWidth)
-		appendStr(&start, "border-color", colorStr(v.BorderColor))
-		appendStr(&start, "background", colorStr(v.Background))
-		appendFloat(&start, "corner-radius", v.CornerRadius)
-		appendBool(&start, "clip", v.Clip)
-		return marshalContainer(enc, start, v.Children)
-	case *demy.FrameNode:
-		start := xml.StartElement{Name: xml.Name{Local: "frame"}}
-		appendFloat(&start, "width", v.Width)
-		appendFloat(&start, "height", v.Height)
-		return marshalContainer(enc, start, v.Children)
-	case *demy.SpacerNode:
-		start := xml.StartElement{Name: xml.Name{Local: "spacer"}}
-		appendFloat(&start, "weight", v.Weight)
-		if err := enc.EncodeToken(start); err != nil {
-			return err
-		}
-		return enc.EncodeToken(start.End())
-	case *demy.WeightedNode:
-		start := xml.StartElement{Name: xml.Name{Local: "weighted"}}
-		appendFloat(&start, "weight", v.Weight)
-		var children []demy.Node
-		if v.Child != nil {
-			children = []demy.Node{v.Child}
-		}
-		return marshalContainer(enc, start, children)
-	case *demy.DividerNode:
-		start := xml.StartElement{Name: xml.Name{Local: "divider"}}
-		appendFloat(&start, "size", v.Size)
-		appendStr(&start, "color", colorStr(v.Color))
-		if err := enc.EncodeToken(start); err != nil {
-			return err
-		}
-		return enc.EncodeToken(start.End())
-	case *demy.TextNode:
-		start := xml.StartElement{Name: xml.Name{Local: "text"}}
-		appendStr(&start, "class", string(v.Class))
-		appendStyleAttrs(&start, v.Style)
-		if err := enc.EncodeToken(start); err != nil {
-			return err
-		}
-		if v.Text != "" {
-			if err := enc.EncodeToken(xml.CharData(v.Text)); err != nil {
-				return err
-			}
-		}
-		return enc.EncodeToken(start.End())
-	case *demy.ImageNode:
-		start := xml.StartElement{Name: xml.Name{Local: "image"}}
-		appendStr(&start, "key", v.Key)
-		appendStr(&start, "scale", scaleStr(v.Scale))
-		appendStr(&start, "dither", ditherStr(v.Dither))
-		if err := enc.EncodeToken(start); err != nil {
-			return err
-		}
-		return enc.EncodeToken(start.End())
-	case *demy.BarcodeNode:
-		start := xml.StartElement{Name: xml.Name{Local: "barcode"}}
-		appendStr(&start, "content", v.Content)
-		appendStr(&start, "type", barcodeTypeStr(v.Type))
-		appendStr(&start, "ec-level", ecLevelStr(v.ECLevel))
-		if err := enc.EncodeToken(start); err != nil {
-			return err
-		}
-		return enc.EncodeToken(start.End())
-	case *demy.GridNode:
-		start := xml.StartElement{Name: xml.Name{Local: "grid"}}
-		appendFloat(&start, "padding", v.Padding)
-		appendFloat(&start, "row-gap", v.RowGap)
-		appendFloat(&start, "col-gap", v.ColGap)
-		if err := enc.EncodeToken(start); err != nil {
-			return err
-		}
-		if len(v.Columns) > 0 {
-			colsElem := xml.StartElement{Name: xml.Name{Local: "columns"}}
-			if err := enc.EncodeToken(colsElem); err != nil {
-				return err
-			}
-			for _, t := range v.Columns {
-				if err := marshalTrack(enc, t); err != nil {
-					return err
-				}
-			}
-			if err := enc.EncodeToken(colsElem.End()); err != nil {
-				return err
-			}
-		}
-		if len(v.Rows) > 0 {
-			rowsElem := xml.StartElement{Name: xml.Name{Local: "rows"}}
-			if err := enc.EncodeToken(rowsElem); err != nil {
-				return err
-			}
-			for _, t := range v.Rows {
-				if err := marshalTrack(enc, t); err != nil {
-					return err
-				}
-			}
-			if err := enc.EncodeToken(rowsElem.End()); err != nil {
-				return err
-			}
-		}
-		for _, child := range v.Children {
-			if err := marshalNode(enc, child); err != nil {
-				return err
-			}
-		}
-		return enc.EncodeToken(start.End())
-	case *demy.GridRowNode:
-		return marshalContainer(enc, xml.StartElement{Name: xml.Name{Local: "row"}}, v.Children)
-	default:
-		return fmt.Errorf("xmlscene: unknown node type %T", n)
+func (b *elem) float(name string, v float64) {
+	if v != 0 {
+		b.str(name, strconv.FormatFloat(v, 'f', -1, 64))
 	}
 }
 
-func marshalTrack(enc *xml.Encoder, t demy.GridTrack) error {
-	var elem xml.StartElement
-	switch {
-	case t.IsFixed():
-		elem = xml.StartElement{Name: xml.Name{Local: "fixed"}}
-		appendFloat(&elem, "size", t.Size())
-	case t.IsFr():
-		elem = xml.StartElement{Name: xml.Name{Local: "fr"}}
-		appendFloat(&elem, "weight", t.Weight())
-	default:
-		elem = xml.StartElement{Name: xml.Name{Local: "auto"}}
+func (b *elem) int(name string, v int) {
+	if v != 0 {
+		b.str(name, strconv.Itoa(v))
 	}
-	if err := enc.EncodeToken(elem); err != nil {
-		return err
-	}
-	return enc.EncodeToken(elem.End())
 }
 
-func marshalContainer(enc *xml.Encoder, start xml.StartElement, children []demy.Node) error {
+func (b *elem) bool(name string, v bool) {
+	if v {
+		b.str(name, "true")
+	}
+}
+
+func (b *elem) color(name string, c color.Color) {
+	b.str(name, codec.EncodeColor(c, &b.err))
+}
+
+func (b *elem) style(s demy.Style) {
+	b.str("font", s.Font)
+	b.float("size", s.Size)
+	b.str("weight", codec.EncodeWeight(s.Weight, &b.err))
+	b.color("color", s.Color)
+	b.str("align", codec.TextAlign.Encode(s.Align, &b.err))
+	b.float("line-height", s.LineHeight)
+	b.int("max-lines", s.MaxLines)
+	b.str("overflow", codec.Overflow.Encode(s.Overflow, &b.err))
+}
+
+func encodeEmpty(enc *xml.Encoder, start xml.StartElement) error {
 	if err := enc.EncodeToken(start); err != nil {
 		return err
 	}
+	return enc.EncodeToken(start.End())
+}
+
+func marshalNode(enc *xml.Encoder, n demy.Node) error {
+	var (
+		b        *elem
+		children []demy.Node
+		text     string
+		grid     *demy.GridNode
+	)
+	switch v := n.(type) {
+	case *demy.VStackNode:
+		b = newElem("vstack")
+		b.float("gap", v.Gap)
+		b.float("padding", v.Padding)
+		b.str("align", codec.Align.Encode(v.Align, &b.err))
+		children = v.Children
+	case *demy.HStackNode:
+		b = newElem("hstack")
+		b.float("gap", v.Gap)
+		b.float("padding", v.Padding)
+		b.str("align", codec.Align.Encode(v.Align, &b.err))
+		children = v.Children
+	case *demy.ZStackNode:
+		b = newElem("zstack")
+		b.str("align", codec.ZAlign.Encode(v.Align, &b.err))
+		children = v.Children
+	case *demy.BoxNode:
+		b = newElem("box")
+		b.float("padding", v.Padding)
+		b.float("border-width", v.BorderWidth)
+		b.color("border-color", v.BorderColor)
+		b.color("background", v.Background)
+		b.float("corner-radius", v.CornerRadius)
+		b.bool("clip", v.Clip)
+		children = v.Children
+	case *demy.FrameNode:
+		b = newElem("frame")
+		b.float("width", v.Width)
+		b.float("height", v.Height)
+		children = v.Children
+	case *demy.SpacerNode:
+		b = newElem("spacer")
+		b.float("weight", v.Weight)
+	case *demy.WeightedNode:
+		b = newElem("weighted")
+		b.float("weight", v.Weight)
+		children = []demy.Node{v.Child}
+	case *demy.DividerNode:
+		b = newElem("divider")
+		b.float("size", v.Size)
+		b.color("color", v.Color)
+	case *demy.TextNode:
+		b = newElem("text")
+		b.str("class", string(v.Class))
+		b.style(v.Style)
+		text = v.Text
+	case *demy.ImageNode:
+		if err := codec.CheckImage(v); err != nil {
+			return err
+		}
+		b = newElem("image")
+		b.str("key", v.Key)
+		b.str("scale", codec.ImageScale.Encode(v.Scale, &b.err))
+		b.str("dither", codec.Dither.Encode(v.Dither, &b.err))
+	case *demy.BarcodeNode:
+		b = newElem("barcode")
+		b.str("content", v.Content)
+		b.str("type", codec.BarcodeType.Encode(v.Type, &b.err))
+		b.str("ec-level", codec.ECLevel.Encode(v.ECLevel, &b.err))
+	case *demy.GridNode:
+		b = newElem("grid")
+		b.float("padding", v.Padding)
+		b.float("row-gap", v.RowGap)
+		b.float("col-gap", v.ColGap)
+		children = v.Children
+		grid = v
+	case *demy.GridRowNode:
+		b = newElem("row")
+		children = v.Children
+	default:
+		return fmt.Errorf("unknown node type %T", n)
+	}
+	if b.err != nil {
+		return fmt.Errorf("<%s>: %w", b.start.Name.Local, b.err)
+	}
+
+	if err := enc.EncodeToken(b.start); err != nil {
+		return err
+	}
+	if text != "" {
+		if err := enc.EncodeToken(xml.CharData(text)); err != nil {
+			return err
+		}
+	}
+	if grid != nil {
+		if err := marshalTracks(enc, "columns", grid.Columns); err != nil {
+			return err
+		}
+		if err := marshalTracks(enc, "rows", grid.Rows); err != nil {
+			return err
+		}
+	}
 	for _, child := range children {
+		// Nil children are skipped when rendering, so they aren't written.
+		if codec.IsNilNode(child) {
+			continue
+		}
 		if err := marshalNode(enc, child); err != nil {
+			return err
+		}
+	}
+	return enc.EncodeToken(b.start.End())
+}
+
+func marshalTracks(enc *xml.Encoder, name string, tracks []demy.GridTrack) error {
+	if len(tracks) == 0 {
+		return nil
+	}
+	start := xml.StartElement{Name: xml.Name{Local: name}}
+	if err := enc.EncodeToken(start); err != nil {
+		return err
+	}
+	for _, t := range tracks {
+		b := newElem(codec.TrackKind(t))
+		switch b.start.Name.Local {
+		case codec.TrackFixed:
+			b.float("size", t.Size())
+		case codec.TrackFr:
+			b.float("weight", t.Weight())
+		}
+		if err := encodeEmpty(enc, b.start); err != nil {
 			return err
 		}
 	}
 	return enc.EncodeToken(start.End())
 }
 
-func appendFloat(start *xml.StartElement, name string, v float64) {
-	if v == 0 {
-		return
-	}
-	start.Attr = append(start.Attr, xml.Attr{
-		Name:  xml.Name{Local: name},
-		Value: strconv.FormatFloat(v, 'f', -1, 64),
-	})
-}
-
-func appendStr(start *xml.StartElement, name, value string) {
-	if value == "" {
-		return
-	}
-	start.Attr = append(start.Attr, xml.Attr{Name: xml.Name{Local: name}, Value: value})
-}
-
-func appendBool(start *xml.StartElement, name string, value bool) {
-	if !value {
-		return
-	}
-	start.Attr = append(start.Attr, xml.Attr{Name: xml.Name{Local: name}, Value: "true"})
-}
-
-func appendInt(start *xml.StartElement, name string, v int) {
-	if v == 0 {
-		return
-	}
-	start.Attr = append(start.Attr, xml.Attr{Name: xml.Name{Local: name}, Value: strconv.Itoa(v)})
-}
-
-func appendStyleAttrs(start *xml.StartElement, s demy.Style) {
-	appendStr(start, "font", s.Font)
-	appendFloat(start, "size", s.Size)
-	appendStr(start, "weight", weightStr(s.Weight))
-	appendStr(start, "color", colorStr(s.Color))
-	appendStr(start, "align", textAlignStr(s.Align))
-	appendFloat(start, "line-height", s.LineHeight)
-	appendInt(start, "max-lines", s.MaxLines)
-	appendStr(start, "overflow", overflowStr(s.Overflow))
-}
-
 // --- unmarshal context ---
 
-// unmarshalCtx carries per-parse state for resolving physical unit suffixes.
-// dpmm is 0 when the Config lacks physical dimensions.
 // maxDepth bounds element nesting so deeply nested input can't exhaust the stack.
 const maxDepth = 1000
 
+// unmarshalCtx carries per-parse state. dpmm is 0 when the Config lacks
+// physical dimensions.
 type unmarshalCtx struct {
+	dec   *xml.Decoder
 	dpmm  float64
 	depth int // element nesting depth
 }
 
-func newUnmarshalCtx(cfg demy.Config) unmarshalCtx {
-	if cfg.PhysicalWidthMM == 0 {
-		return unmarshalCtx{}
-	}
-	return unmarshalCtx{dpmm: cfg.DPMM()}
+// styleAttrs lists the attributes shared by <text> and <style>.
+var styleAttrs = []string{"font", "size", "weight", "color", "align", "line-height", "max-lines", "overflow"}
+
+// allowedAttrs lists the attributes each element accepts.
+var allowedAttrs = map[string][]string{
+	"scene":    nil,
+	"styles":   nil,
+	"style":    append([]string{"name"}, styleAttrs...),
+	"vstack":   {"gap", "padding", "align"},
+	"hstack":   {"gap", "padding", "align"},
+	"zstack":   {"align"},
+	"box":      {"padding", "border-width", "border-color", "background", "corner-radius", "clip"},
+	"frame":    {"width", "height"},
+	"spacer":   {"weight"},
+	"weighted": {"weight"},
+	"divider":  {"size", "color"},
+	"text":     append([]string{"class"}, styleAttrs...),
+	"image":    {"key", "scale", "dither"},
+	"barcode":  {"content", "type", "ec-level"},
+	"grid":     {"padding", "row-gap", "col-gap"},
+	"row":      nil,
+	"columns":  nil,
+	"rows":     nil,
+	"auto":     nil,
+	"fixed":    {"size"},
+	"fr":       {"weight"},
 }
 
-func (uctx unmarshalCtx) dim(attrs map[string]string, name string) float64 {
-	return parseDim(attrs[name], uctx.dpmm)
+// attrs reads an element's attributes, recording the first parse error.
+type attrs struct {
+	m    map[string]string
+	dpmm float64
+	err  error
 }
 
-// parseDim converts a dimension string with an optional "mm", "pt", or "px"
-// suffix to pixels.
-func parseDim(s string, dpmm float64) float64 {
-	if s == "" {
-		return 0
+func readAttrs(start xml.StartElement, dpmm float64) (*attrs, error) {
+	name := start.Name.Local
+	allowed, ok := allowedAttrs[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown element <%s>", name)
 	}
-	switch {
-	case strings.HasSuffix(s, "mm"):
-		v, _ := strconv.ParseFloat(s[:len(s)-2], 64)
-		return v * dpmm
-	case strings.HasSuffix(s, "pt"):
-		v, _ := strconv.ParseFloat(s[:len(s)-2], 64)
-		return v * dpmm * 25.4 / 72
-	case strings.HasSuffix(s, "px"):
-		v, _ := strconv.ParseFloat(s[:len(s)-2], 64)
-		return v
-	default:
-		v, _ := strconv.ParseFloat(s, 64)
-		return v
+	if start.Name.Space != "" {
+		return nil, fmt.Errorf("namespaced element <%s:%s> is not supported", start.Name.Space, name)
 	}
-}
-
-// --- unmarshal ---
-
-func unmarshalElement(dec *xml.Decoder, start xml.StartElement, uctx unmarshalCtx) (demy.Node, error) {
-	uctx.depth++
-	if uctx.depth > maxDepth {
-		return nil, fmt.Errorf("xmlscene: elements nested deeper than %d", maxDepth)
-	}
-	attrs := attrMap(start.Attr)
-	switch start.Name.Local {
-	case "vstack":
-		n := &demy.VStackNode{
-			Gap:     uctx.dim(attrs, "gap"),
-			Padding: uctx.dim(attrs, "padding"),
-			Align:   parseAlign(attrs["align"]),
+	m := make(map[string]string, len(start.Attr))
+	for _, a := range start.Attr {
+		if a.Name.Space != "" {
+			return nil, fmt.Errorf("<%s>: namespaced attribute %s:%s is not supported", name, a.Name.Space, a.Name.Local)
 		}
-		children, err := unmarshalChildren(dec, uctx)
-		if err != nil {
-			return nil, err
+		if !slices.Contains(allowed, a.Name.Local) {
+			return nil, fmt.Errorf("<%s>: unknown attribute %q", name, a.Name.Local)
 		}
-		n.Children = children
-		return n, nil
-	case "hstack":
-		n := &demy.HStackNode{
-			Gap:     uctx.dim(attrs, "gap"),
-			Padding: uctx.dim(attrs, "padding"),
-			Align:   parseAlign(attrs["align"]),
+		if _, dup := m[a.Name.Local]; dup {
+			return nil, fmt.Errorf("<%s>: duplicate attribute %q", name, a.Name.Local)
 		}
-		children, err := unmarshalChildren(dec, uctx)
-		if err != nil {
-			return nil, err
-		}
-		n.Children = children
-		return n, nil
-	case "zstack":
-		n := &demy.ZStackNode{Align: parseZAlign(attrs["align"])}
-		children, err := unmarshalChildren(dec, uctx)
-		if err != nil {
-			return nil, err
-		}
-		n.Children = children
-		return n, nil
-	case "box":
-		bc, err := parseColor(attrs["border-color"])
-		if err != nil {
-			return nil, err
-		}
-		bg, err := parseColor(attrs["background"])
-		if err != nil {
-			return nil, err
-		}
-		n := &demy.BoxNode{
-			Padding:      uctx.dim(attrs, "padding"),
-			BorderWidth:  uctx.dim(attrs, "border-width"),
-			BorderColor:  bc,
-			Background:   bg,
-			CornerRadius: uctx.dim(attrs, "corner-radius"),
-			Clip:         boolAttr(attrs, "clip"),
-		}
-		children, err := unmarshalChildren(dec, uctx)
-		if err != nil {
-			return nil, err
-		}
-		n.Children = children
-		return n, nil
-	case "frame":
-		n := &demy.FrameNode{
-			Width:  uctx.dim(attrs, "width"),
-			Height: uctx.dim(attrs, "height"),
-		}
-		children, err := unmarshalChildren(dec, uctx)
-		if err != nil {
-			return nil, err
-		}
-		n.Children = children
-		return n, nil
-	case "spacer":
-		if err := dec.Skip(); err != nil {
-			return nil, fmt.Errorf("xmlscene: %w", err)
-		}
-		return &demy.SpacerNode{Weight: floatAttr(attrs, "weight")}, nil
-	case "weighted":
-		children, err := unmarshalChildren(dec, uctx)
-		if err != nil {
-			return nil, err
-		}
-		var child demy.Node
-		if len(children) > 0 {
-			child = children[0]
-		}
-		return &demy.WeightedNode{Weight: floatAttr(attrs, "weight"), Child: child}, nil
-	case "divider":
-		if err := dec.Skip(); err != nil {
-			return nil, fmt.Errorf("xmlscene: %w", err)
-		}
-		clr, err := parseColor(attrs["color"])
-		if err != nil {
-			return nil, fmt.Errorf("xmlscene divider color: %w", err)
-		}
-		return &demy.DividerNode{Color: clr, Size: uctx.dim(attrs, "size")}, nil
-	case "text":
-		text, err := unmarshalTextContent(dec)
-		if err != nil {
-			return nil, err
-		}
-		style, err := styleFromAttrs(attrs, uctx)
-		if err != nil {
-			return nil, err
-		}
-		return &demy.TextNode{Text: text, Class: demy.StyleClass(attrs["class"]), Style: style}, nil
-	case "image":
-		if err := dec.Skip(); err != nil {
-			return nil, fmt.Errorf("xmlscene: %w", err)
-		}
-		return &demy.ImageNode{
-			Key:    attrs["key"],
-			Scale:  parseScale(attrs["scale"]),
-			Dither: parseDither(attrs["dither"]),
-		}, nil
-	case "barcode":
-		if err := dec.Skip(); err != nil {
-			return nil, fmt.Errorf("xmlscene: %w", err)
-		}
-		return &demy.BarcodeNode{
-			Content: attrs["content"],
-			Type:    parseBarcodeType(attrs["type"]),
-			ECLevel: parseECLevel(attrs["ec-level"]),
-		}, nil
-	case "grid":
-		n := &demy.GridNode{
-			Padding: uctx.dim(attrs, "padding"),
-			RowGap:  uctx.dim(attrs, "row-gap"),
-			ColGap:  uctx.dim(attrs, "col-gap"),
-		}
-		var err error
-		n.Columns, n.Rows, n.Children, err = unmarshalGridContents(dec, uctx)
-		if err != nil {
-			return nil, err
-		}
-		return n, nil
-	case "row":
-		children, err := unmarshalChildren(dec, uctx)
-		if err != nil {
-			return nil, err
-		}
-		return &demy.GridRowNode{Children: children}, nil
-	default:
-		return nil, fmt.Errorf("xmlscene: unknown element %q", start.Name.Local)
-	}
-}
-
-// unmarshalGridContents reads the children of a <grid> element, separating
-// <columns> and <rows> sub-elements from child nodes.
-func unmarshalGridContents(dec *xml.Decoder, uctx unmarshalCtx) (columns, rows []demy.GridTrack, children []demy.Node, err error) {
-	for {
-		tok, tokErr := dec.Token()
-		if tokErr != nil {
-			return nil, nil, nil, fmt.Errorf("xmlscene: %w", tokErr)
-		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			switch t.Name.Local {
-			case "columns":
-				columns, err = unmarshalTracks(dec, uctx)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-			case "rows":
-				rows, err = unmarshalTracks(dec, uctx)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-			default:
-				child, childErr := unmarshalElement(dec, t, uctx)
-				if childErr != nil {
-					return nil, nil, nil, childErr
-				}
-				children = append(children, child)
-			}
-		case xml.EndElement:
-			return columns, rows, children, nil
-		}
-	}
-}
-
-// unmarshalTracks reads <auto/>, <fixed size="..."/>, or <fr weight="..."/> elements.
-func unmarshalTracks(dec *xml.Decoder, uctx unmarshalCtx) ([]demy.GridTrack, error) {
-	var tracks []demy.GridTrack
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			return nil, fmt.Errorf("xmlscene: %w", err)
-		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			a := attrMap(t.Attr)
-			switch t.Name.Local {
-			case "fixed":
-				tracks = append(tracks, demy.GridFixed(uctx.dim(a, "size")))
-			case "fr":
-				tracks = append(tracks, demy.GridFr(floatAttr(a, "weight")))
-			default: // "auto" or unknown
-				tracks = append(tracks, demy.GridAuto())
-			}
-			if err := dec.Skip(); err != nil {
-				return nil, fmt.Errorf("xmlscene: %w", err)
-			}
-		case xml.EndElement:
-			return tracks, nil
-		}
-	}
-}
-
-func unmarshalStyles(dec *xml.Decoder, uctx unmarshalCtx) (map[string]demy.Style, error) {
-	styles := make(map[string]demy.Style)
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			return nil, fmt.Errorf("xmlscene: %w", err)
-		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			if t.Name.Local != "style" {
-				if err := dec.Skip(); err != nil {
-					return nil, fmt.Errorf("xmlscene: %w", err)
-				}
-				continue
-			}
-			attrs := attrMap(t.Attr)
-			name := attrs["name"]
-			if name == "" {
-				if err := dec.Skip(); err != nil {
-					return nil, fmt.Errorf("xmlscene: %w", err)
-				}
-				continue
-			}
-			style, err := styleFromAttrs(attrs, uctx)
-			if err != nil {
-				return nil, err
-			}
-			styles[name] = style
-			if err := dec.Skip(); err != nil {
-				return nil, fmt.Errorf("xmlscene: %w", err)
-			}
-		case xml.EndElement:
-			return styles, nil
-		}
-	}
-}
-
-func unmarshalScene(dec *xml.Decoder, uctx unmarshalCtx) (demy.Node, map[string]demy.Style, error) {
-	var (
-		root   demy.Node
-		styles map[string]demy.Style
-	)
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			return nil, nil, fmt.Errorf("xmlscene: %w", err)
-		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			if t.Name.Local == "styles" {
-				s, err := unmarshalStyles(dec, uctx)
-				if err != nil {
-					return nil, nil, err
-				}
-				styles = s
-			} else {
-				n, err := unmarshalElement(dec, t, uctx)
-				if err != nil {
-					return nil, nil, err
-				}
-				root = n
-			}
-		case xml.EndElement:
-			return root, styles, nil
-		}
-	}
-}
-
-func unmarshalChildren(dec *xml.Decoder, uctx unmarshalCtx) ([]demy.Node, error) {
-	var children []demy.Node
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			return nil, fmt.Errorf("xmlscene: %w", err)
-		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			child, err := unmarshalElement(dec, t, uctx)
-			if err != nil {
-				return nil, err
-			}
-			children = append(children, child)
-		case xml.EndElement:
-			return children, nil
-		}
-	}
-}
-
-func unmarshalTextContent(dec *xml.Decoder) (string, error) {
-	var sb strings.Builder
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			return "", fmt.Errorf("xmlscene: %w", err)
-		}
-		switch t := tok.(type) {
-		case xml.CharData:
-			sb.Write(t)
-		case xml.EndElement:
-			return sb.String(), nil
-		case xml.StartElement:
-			if err := dec.Skip(); err != nil {
-				return "", fmt.Errorf("xmlscene: %w", err)
-			}
-		}
-	}
-}
-
-func attrMap(attrs []xml.Attr) map[string]string {
-	m := make(map[string]string, len(attrs))
-	for _, a := range attrs {
 		m[a.Name.Local] = a.Value
 	}
-	return m
+	return &attrs{m: m, dpmm: dpmm}, nil
 }
 
-func floatAttr(attrs map[string]string, name string) float64 {
-	s := attrs[name]
+func (a *attrs) fail(name string, err error) {
+	if a.err == nil {
+		a.err = fmt.Errorf("attribute %q: %w", name, err)
+	}
+}
+
+func (a *attrs) str(name string) string { return a.m[name] }
+
+func (a *attrs) float(name string) float64 {
+	s := a.m[name]
 	if s == "" {
 		return 0
 	}
-	v, _ := strconv.ParseFloat(s, 64)
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		a.fail(name, fmt.Errorf("invalid number %q", s))
+	}
 	return v
 }
 
-func boolAttr(attrs map[string]string, name string) bool {
-	return attrs[name] == "true"
-}
-
-func styleFromAttrs(attrs map[string]string, uctx unmarshalCtx) (demy.Style, error) {
-	clr, err := parseColor(attrs["color"])
-	if err != nil {
-		return demy.Style{}, err
-	}
-	var maxLines int
-	if s := attrs["max-lines"]; s != "" {
-		maxLines, _ = strconv.Atoi(s)
-	}
-	return demy.Style{
-		Font:       attrs["font"],
-		Size:       uctx.dim(attrs, "size"),
-		Weight:     parseWeight(attrs["weight"]),
-		Color:      clr,
-		Align:      parseTextAlign(attrs["align"]),
-		LineHeight: uctx.dim(attrs, "line-height"),
-		MaxLines:   maxLines,
-		Overflow:   parseOverflow(attrs["overflow"]),
-	}, nil
-}
-
-// --- color ---
-
-func colorStr(c color.Color) string {
-	if c == nil {
-		return ""
-	}
-	if rc, ok := c.(demy.RoleColor); ok {
-		return rc.Name
-	}
-	r, g, b, a := c.RGBA()
-	r8, g8, b8, a8 := uint8(r>>8), uint8(g>>8), uint8(b>>8), uint8(a>>8)
-	if a8 == 255 {
-		return fmt.Sprintf("#%02x%02x%02x", r8, g8, b8)
-	}
-	return fmt.Sprintf("#%02x%02x%02x%02x", r8, g8, b8, a8)
-}
-
-func parseColor(s string) (color.Color, error) {
+func (a *attrs) int(name string) int {
+	s := a.m[name]
 	if s == "" {
-		return nil, nil
+		return 0
 	}
-	switch s {
-	case "foreground", "background", "accent", "muted":
-		return demy.RoleColor{Name: s}, nil
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		a.fail(name, fmt.Errorf("invalid integer %q", s))
 	}
-	if strings.HasPrefix(s, "#") {
-		hex := s[1:]
-		switch len(hex) {
-		case 3:
-			rv, _ := strconv.ParseUint(hex[0:1], 16, 8)
-			gv, _ := strconv.ParseUint(hex[1:2], 16, 8)
-			bv, _ := strconv.ParseUint(hex[2:3], 16, 8)
-			return color.RGBA{R: uint8(rv<<4 | rv), G: uint8(gv<<4 | gv), B: uint8(bv<<4 | bv), A: 255}, nil
-		case 6:
-			rv, _ := strconv.ParseUint(hex[0:2], 16, 8)
-			gv, _ := strconv.ParseUint(hex[2:4], 16, 8)
-			bv, _ := strconv.ParseUint(hex[4:6], 16, 8)
-			return color.RGBA{R: uint8(rv), G: uint8(gv), B: uint8(bv), A: 255}, nil
-		case 8:
-			rv, _ := strconv.ParseUint(hex[0:2], 16, 8)
-			gv, _ := strconv.ParseUint(hex[2:4], 16, 8)
-			bv, _ := strconv.ParseUint(hex[4:6], 16, 8)
-			av, _ := strconv.ParseUint(hex[6:8], 16, 8)
-			return color.RGBA{R: uint8(rv), G: uint8(gv), B: uint8(bv), A: uint8(av)}, nil
+	return v
+}
+
+func (a *attrs) bool(name string) bool {
+	switch s := a.m[name]; s {
+	case "", "false":
+		return false
+	case "true":
+		return true
+	default:
+		a.fail(name, fmt.Errorf("invalid boolean %q (want true or false)", s))
+		return false
+	}
+}
+
+func (a *attrs) color(name string) color.Color {
+	c, err := codec.ParseColor(a.m[name])
+	if err != nil {
+		a.fail(name, err)
+	}
+	return c
+}
+
+// splitUnit separates a numeric value from its unit suffix.
+func (a *attrs) splitUnit(name string) (float64, string, bool) {
+	s := a.m[name]
+	if s == "" {
+		return 0, "", false
+	}
+	num, unit := s, ""
+	for _, u := range []string{"mm", "pt", "px"} {
+		if n, ok := strings.CutSuffix(s, u); ok {
+			num, unit = n, u
+			break
 		}
 	}
-	return nil, fmt.Errorf("xmlscene: unknown color %q", s)
+	v, err := strconv.ParseFloat(num, 64)
+	if err != nil {
+		a.fail(name, fmt.Errorf("invalid dimension %q", s))
+		return 0, "", false
+	}
+	return v, unit, true
 }
 
-// --- alignment ---
-
-func alignStr(a demy.Alignment) string {
-	switch a {
-	case demy.AlignCenter:
-		return "center"
-	case demy.AlignEnd:
-		return "end"
-	default:
-		return ""
+// needDPMM records an error when unit can't be converted without physical
+// dimensions.
+func (a *attrs) needDPMM(name, unit string) bool {
+	if a.dpmm == 0 {
+		a.fail(name, fmt.Errorf("unit %q in %q needs Config physical dimensions", unit, a.m[name]))
+		return false
 	}
+	return true
 }
 
-func parseAlign(s string) demy.Alignment {
-	switch s {
-	case "center":
-		return demy.AlignCenter
-	case "end":
-		return demy.AlignEnd
-	default:
-		return demy.AlignStart
+// dim parses a dimension in logical pixels.
+func (a *attrs) dim(name string) float64 {
+	v, unit, ok := a.splitUnit(name)
+	if !ok {
+		return 0
 	}
-}
-
-func zAlignStr(a demy.ZAlignment) string {
-	switch a {
-	case demy.Top:
-		return "top"
-	case demy.TopTrailing:
-		return "top-trailing"
-	case demy.Leading:
-		return "leading"
-	case demy.Center:
-		return "center"
-	case demy.Trailing:
-		return "trailing"
-	case demy.BottomLeading:
-		return "bottom-leading"
-	case demy.Bottom:
-		return "bottom"
-	case demy.BottomTrailing:
-		return "bottom-trailing"
-	default:
-		return ""
-	}
-}
-
-func parseZAlign(s string) demy.ZAlignment {
-	switch s {
-	case "top":
-		return demy.Top
-	case "top-trailing":
-		return demy.TopTrailing
-	case "leading":
-		return demy.Leading
-	case "center":
-		return demy.Center
-	case "trailing":
-		return demy.Trailing
-	case "bottom-leading":
-		return demy.BottomLeading
-	case "bottom":
-		return demy.Bottom
-	case "bottom-trailing":
-		return demy.BottomTrailing
-	default:
-		return demy.TopLeading
-	}
-}
-
-// --- text style ---
-
-func textAlignStr(a demy.TextAlign) string {
-	switch a {
-	case demy.TextAlignCenter:
-		return "center"
-	case demy.TextAlignRight:
-		return "right"
-	default:
-		return ""
-	}
-}
-
-func parseTextAlign(s string) demy.TextAlign {
-	switch s {
-	case "center":
-		return demy.TextAlignCenter
-	case "right":
-		return demy.TextAlignRight
-	default:
-		return demy.TextAlignLeft
-	}
-}
-
-func overflowStr(o demy.TextOverflow) string {
-	switch o {
-	case demy.TextOverflowClip:
-		return "clip"
-	case demy.TextOverflowEllipsis:
-		return "ellipsis"
-	default:
-		return ""
-	}
-}
-
-func parseOverflow(s string) demy.TextOverflow {
-	switch s {
-	case "clip":
-		return demy.TextOverflowClip
-	case "ellipsis":
-		return demy.TextOverflowEllipsis
-	default:
-		return demy.TextOverflowWrap
-	}
-}
-
-// --- font weight ---
-
-func weightStr(w demy.FontStyle) string {
-	italic := w&demy.FontItalic != 0
-	var s string
-	switch w &^ demy.FontItalic {
-	case demy.FontThin:
-		s = "thin"
-	case demy.FontExtraLight:
-		s = "extra-light"
-	case demy.FontLight:
-		s = "light"
-	case demy.FontMedium:
-		s = "medium"
-	case demy.FontSemiBold:
-		s = "semi-bold"
-	case demy.FontBold:
-		s = "bold"
-	case demy.FontExtraBold:
-		s = "extra-bold"
-	case demy.FontBlack:
-		s = "black"
-	default:
-		s = ""
-	}
-	if italic {
-		if s == "" {
-			return "italic"
+	switch unit {
+	case "mm":
+		if !a.needDPMM(name, unit) {
+			return 0
 		}
-		return s + "-italic"
+		return v * a.dpmm
+	case "pt":
+		if !a.needDPMM(name, unit) {
+			return 0
+		}
+		return v * a.dpmm * 25.4 / 72
+	default:
+		return v
+	}
+}
+
+// fontSize parses a font size in points.
+func (a *attrs) fontSize(name string) float64 {
+	v, unit, ok := a.splitUnit(name)
+	if !ok {
+		return 0
+	}
+	switch unit {
+	case "mm":
+		return v * 72 / 25.4
+	case "px":
+		if !a.needDPMM(name, unit) {
+			return 0
+		}
+		return v / a.dpmm * 72 / 25.4
+	default:
+		return v
+	}
+}
+
+func (a *attrs) style() demy.Style {
+	var err error
+	s := demy.Style{
+		Font:       a.str("font"),
+		Size:       a.fontSize("size"),
+		Weight:     codec.DecodeWeight(a.str("weight"), &err),
+		Color:      a.color("color"),
+		Align:      codec.TextAlign.Decode(a.str("align"), &err),
+		LineHeight: a.float("line-height"),
+		MaxLines:   a.int("max-lines"),
+		Overflow:   codec.Overflow.Decode(a.str("overflow"), &err),
+	}
+	if err != nil && a.err == nil {
+		a.err = err
 	}
 	return s
 }
 
-func parseWeight(s string) demy.FontStyle {
-	italic := strings.HasSuffix(s, "-italic") || s == "italic"
-	base := strings.TrimSuffix(s, "-italic")
-	var w demy.FontStyle
-	switch base {
-	case "thin":
-		w = demy.FontThin
-	case "extra-light":
-		w = demy.FontExtraLight
-	case "light":
-		w = demy.FontLight
-	case "medium":
-		w = demy.FontMedium
-	case "semi-bold":
-		w = demy.FontSemiBold
-	case "bold":
-		w = demy.FontBold
-	case "extra-bold":
-		w = demy.FontExtraBold
-	case "black":
-		w = demy.FontBlack
-	default:
-		w = demy.FontRegular
+// --- unmarshal ---
+
+func unmarshalDoc(data []byte, cfg demy.Config, allowScene bool) (demy.Node, map[string]demy.Style, error) {
+	uctx := &unmarshalCtx{dec: xml.NewDecoder(bytes.NewReader(data))}
+	if cfg.PhysicalWidthMM != 0 {
+		uctx.dpmm = cfg.DPMM()
 	}
-	if italic {
-		return w | demy.FontItalic
+	start, err := uctx.nextStart()
+	if err != nil {
+		return nil, nil, fmt.Errorf("xmlscene: %w", err)
 	}
-	return w
+	var (
+		root   demy.Node
+		styles map[string]demy.Style
+	)
+	if allowScene && start.Name.Local == "scene" {
+		root, styles, err = uctx.scene(start)
+	} else {
+		root, err = uctx.element(start)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("xmlscene: %w", err)
+	}
+	if err := uctx.expectEOF(); err != nil {
+		return nil, nil, fmt.Errorf("xmlscene: %w", err)
+	}
+	return root, styles, nil
 }
 
-// --- image helpers ---
-
-func ditherStr(d demy.Dither) string {
-	switch d {
-	case demy.FloydSteinberg:
-		return "floyd-steinberg"
-	case demy.Atkinson:
-		return "atkinson"
-	default:
-		return ""
-	}
-}
-
-func parseDither(s string) demy.Dither {
-	switch s {
-	case "floyd-steinberg":
-		return demy.FloydSteinberg
-	case "atkinson":
-		return demy.Atkinson
-	default:
-		return demy.NoDithering
+// nextStart returns the first start element, skipping the prolog.
+func (u *unmarshalCtx) nextStart() (xml.StartElement, error) {
+	for {
+		tok, err := u.dec.Token()
+		if errors.Is(err, io.EOF) {
+			return xml.StartElement{}, errors.New("empty document")
+		}
+		if err != nil {
+			return xml.StartElement{}, err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			return t, nil
+		case xml.CharData:
+			if len(bytes.TrimSpace(t)) > 0 {
+				return xml.StartElement{}, fmt.Errorf("unexpected text %q before the root element", t)
+			}
+		}
 	}
 }
 
-func scaleStr(s demy.ImageScale) string {
-	switch s {
-	case demy.ImageFill:
-		return "fill"
-	case demy.ImageStretch:
-		return "stretch"
-	default:
-		return ""
+// expectEOF reports an error for anything but whitespace, comments, and
+// processing instructions after the root element.
+func (u *unmarshalCtx) expectEOF() error {
+	for {
+		tok, err := u.dec.Token()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			return fmt.Errorf("unexpected element <%s> after the root element", t.Name.Local)
+		case xml.CharData:
+			if len(bytes.TrimSpace(t)) > 0 {
+				return fmt.Errorf("unexpected text %q after the root element", t)
+			}
+		}
 	}
 }
 
-func parseScale(s string) demy.ImageScale {
-	switch s {
-	case "fill":
-		return demy.ImageFill
-	case "stretch":
-		return demy.ImageStretch
-	default:
-		return demy.ImageFit
+// contents reads the tokens of the current element up to its end, calling
+// onElem for each child element and onText for character data. A nil onText
+// rejects non-whitespace text; a nil onElem rejects child elements.
+func (u *unmarshalCtx) contents(parent string, onElem func(xml.StartElement) error, onText func([]byte)) error {
+	for {
+		tok, err := u.dec.Token()
+		if err != nil {
+			return err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if onElem == nil {
+				return fmt.Errorf("<%s> does not allow child elements, found <%s>", parent, t.Name.Local)
+			}
+			if err := onElem(t); err != nil {
+				return err
+			}
+		case xml.CharData:
+			switch {
+			case onText != nil:
+				onText(t)
+			case len(bytes.TrimSpace(t)) > 0:
+				return fmt.Errorf("<%s> does not allow text, found %q", parent, bytes.TrimSpace(t))
+			}
+		case xml.EndElement:
+			return nil
+		}
 	}
 }
 
-// --- barcode helpers ---
-
-func barcodeTypeStr(t demy.BarcodeType) string {
-	switch t {
-	default:
-		return "" // BarcodeTypeQR is the default; omit
-	}
+func (u *unmarshalCtx) children(parent string) ([]demy.Node, error) {
+	var out []demy.Node
+	err := u.contents(parent, func(t xml.StartElement) error {
+		n, err := u.element(t)
+		if err != nil {
+			return err
+		}
+		out = append(out, n)
+		return nil
+	}, nil)
+	return out, err
 }
 
-func parseBarcodeType(s string) demy.BarcodeType {
-	switch s {
-	default:
-		return demy.BarcodeTypeQR
+func (u *unmarshalCtx) element(start xml.StartElement) (demy.Node, error) {
+	u.depth++
+	defer func() { u.depth-- }()
+	if u.depth > maxDepth {
+		return nil, fmt.Errorf("elements nested deeper than %d", maxDepth)
 	}
+	name := start.Name.Local
+	a, err := readAttrs(start, u.dpmm)
+	if err != nil {
+		return nil, err
+	}
+
+	var n demy.Node
+	switch name {
+	case "vstack", "hstack":
+		gap, padding := a.dim("gap"), a.dim("padding")
+		align := codec.Align.Decode(a.str("align"), &err)
+		children, cerr := u.children(name)
+		if cerr != nil {
+			return nil, cerr
+		}
+		if name == "vstack" {
+			n = &demy.VStackNode{Gap: gap, Padding: padding, Align: align, Children: children}
+		} else {
+			n = &demy.HStackNode{Gap: gap, Padding: padding, Align: align, Children: children}
+		}
+	case "zstack":
+		align := codec.ZAlign.Decode(a.str("align"), &err)
+		children, cerr := u.children(name)
+		if cerr != nil {
+			return nil, cerr
+		}
+		n = &demy.ZStackNode{Align: align, Children: children}
+	case "box":
+		b := &demy.BoxNode{
+			Padding:      a.dim("padding"),
+			BorderWidth:  a.dim("border-width"),
+			BorderColor:  a.color("border-color"),
+			Background:   a.color("background"),
+			CornerRadius: a.dim("corner-radius"),
+			Clip:         a.bool("clip"),
+		}
+		if b.Children, err = u.children(name); err != nil {
+			return nil, err
+		}
+		n = b
+	case "frame":
+		f := &demy.FrameNode{Width: a.dim("width"), Height: a.dim("height")}
+		if f.Children, err = u.children(name); err != nil {
+			return nil, err
+		}
+		n = f
+	case "spacer":
+		n = &demy.SpacerNode{Weight: a.float("weight")}
+		if err := u.contents(name, nil, nil); err != nil {
+			return nil, err
+		}
+	case "weighted":
+		w := &demy.WeightedNode{Weight: a.float("weight")}
+		children, cerr := u.children(name)
+		if cerr != nil {
+			return nil, cerr
+		}
+		switch len(children) {
+		case 0:
+		case 1:
+			w.Child = children[0]
+		default:
+			return nil, fmt.Errorf("<weighted> has %d children, want at most 1", len(children))
+		}
+		n = w
+	case "divider":
+		n = &demy.DividerNode{Color: a.color("color"), Size: a.dim("size")}
+		if err := u.contents(name, nil, nil); err != nil {
+			return nil, err
+		}
+	case "text":
+		t := &demy.TextNode{Class: demy.StyleClass(a.str("class")), Style: a.style()}
+		var sb strings.Builder
+		if err := u.contents(name, nil, func(b []byte) { sb.Write(b) }); err != nil {
+			return nil, err
+		}
+		t.Text = sb.String()
+		n = t
+	case "image":
+		n = &demy.ImageNode{
+			Key:    a.str("key"),
+			Scale:  codec.ImageScale.Decode(a.str("scale"), &err),
+			Dither: codec.Dither.Decode(a.str("dither"), &err),
+		}
+		if err := u.contents(name, nil, nil); err != nil {
+			return nil, err
+		}
+	case "barcode":
+		n = &demy.BarcodeNode{
+			Content: a.str("content"),
+			Type:    codec.BarcodeType.Decode(a.str("type"), &err),
+			ECLevel: codec.ECLevel.Decode(a.str("ec-level"), &err),
+		}
+		if err := u.contents(name, nil, nil); err != nil {
+			return nil, err
+		}
+	case "grid":
+		g := &demy.GridNode{Padding: a.dim("padding"), RowGap: a.dim("row-gap"), ColGap: a.dim("col-gap")}
+		if gerr := u.grid(g); gerr != nil {
+			return nil, gerr
+		}
+		n = g
+	case "row":
+		r := &demy.GridRowNode{}
+		if r.Children, err = u.children(name); err != nil {
+			return nil, err
+		}
+		n = r
+	default:
+		return nil, fmt.Errorf("<%s> is not a node element", name)
+	}
+	if a.err != nil {
+		err = a.err
+	}
+	if err != nil {
+		return nil, fmt.Errorf("<%s>: %w", name, err)
+	}
+	return n, nil
 }
 
-func ecLevelStr(l demy.ECLevel) string {
-	switch l {
-	case demy.ECLevelLow:
-		return "low"
-	case demy.ECLevelQuartile:
-		return "quartile"
-	case demy.ECLevelHigh:
-		return "high"
-	default: // ECLevelMedium is the default; omit
-		return ""
-	}
+// grid reads a <grid> element's <columns>, <rows>, and child nodes.
+func (u *unmarshalCtx) grid(g *demy.GridNode) error {
+	var haveColumns, haveRows bool
+	return u.contents("grid", func(t xml.StartElement) error {
+		var err error
+		switch t.Name.Local {
+		case "columns":
+			if haveColumns {
+				return errors.New("<grid> has more than one <columns>")
+			}
+			haveColumns = true
+			g.Columns, err = u.tracks(t)
+		case "rows":
+			if haveRows {
+				return errors.New("<grid> has more than one <rows>")
+			}
+			haveRows = true
+			g.Rows, err = u.tracks(t)
+		default:
+			var n demy.Node
+			if n, err = u.element(t); err == nil {
+				g.Children = append(g.Children, n)
+			}
+		}
+		return err
+	}, nil)
 }
 
-func parseECLevel(s string) demy.ECLevel {
-	switch s {
-	case "low":
-		return demy.ECLevelLow
-	case "quartile":
-		return demy.ECLevelQuartile
-	case "high":
-		return demy.ECLevelHigh
-	default:
-		return demy.ECLevelMedium
+// tracks reads <auto/>, <fixed size="..."/>, or <fr weight="..."/> elements.
+func (u *unmarshalCtx) tracks(start xml.StartElement) ([]demy.GridTrack, error) {
+	if _, err := readAttrs(start, u.dpmm); err != nil {
+		return nil, err
 	}
+	parent := start.Name.Local
+	var tracks []demy.GridTrack
+	err := u.contents(parent, func(t xml.StartElement) error {
+		kind := t.Name.Local
+		if kind != codec.TrackAuto && kind != codec.TrackFixed && kind != codec.TrackFr {
+			return fmt.Errorf("<%s>: unknown track <%s> (want auto, fixed, or fr)", parent, kind)
+		}
+		a, err := readAttrs(t, u.dpmm)
+		if err != nil {
+			return err
+		}
+		track, err := codec.ParseTrack(kind, a.dim("size"), a.float("weight"))
+		if err == nil {
+			err = a.err
+		}
+		if err != nil {
+			return fmt.Errorf("<%s>: %w", kind, err)
+		}
+		tracks = append(tracks, track)
+		return u.contents(kind, nil, nil)
+	}, nil)
+	return tracks, err
+}
+
+func (u *unmarshalCtx) styles(start xml.StartElement) (map[string]demy.Style, error) {
+	if _, err := readAttrs(start, u.dpmm); err != nil {
+		return nil, err
+	}
+	styles := make(map[string]demy.Style)
+	err := u.contents("styles", func(t xml.StartElement) error {
+		if t.Name.Local != "style" {
+			return fmt.Errorf("<styles> allows only <style>, found <%s>", t.Name.Local)
+		}
+		a, err := readAttrs(t, u.dpmm)
+		if err != nil {
+			return err
+		}
+		name := a.str("name")
+		if name == "" {
+			return errors.New("<style> is missing a name")
+		}
+		if _, dup := styles[name]; dup {
+			return fmt.Errorf("duplicate style %q", name)
+		}
+		styles[name] = a.style()
+		if a.err != nil {
+			return fmt.Errorf("style %q: %w", name, a.err)
+		}
+		return u.contents("style", nil, nil)
+	}, nil)
+	return styles, err
+}
+
+func (u *unmarshalCtx) scene(start xml.StartElement) (demy.Node, map[string]demy.Style, error) {
+	if _, err := readAttrs(start, u.dpmm); err != nil {
+		return nil, nil, err
+	}
+	var (
+		root       demy.Node
+		styles     map[string]demy.Style
+		haveStyles bool
+	)
+	err := u.contents("scene", func(t xml.StartElement) error {
+		if t.Name.Local == "styles" {
+			if haveStyles {
+				return errors.New("<scene> has more than one <styles>")
+			}
+			haveStyles = true
+			var err error
+			styles, err = u.styles(t)
+			return err
+		}
+		if root != nil {
+			return fmt.Errorf("<scene> has more than one root element, found <%s>", t.Name.Local)
+		}
+		n, err := u.element(t)
+		root = n
+		return err
+	}, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	if root == nil {
+		return nil, nil, errors.New("<scene> has no root element")
+	}
+	return root, styles, nil
 }

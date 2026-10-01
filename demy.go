@@ -31,11 +31,14 @@ type Roles struct {
 }
 
 // FontStyle specifies a font weight and optional italic flag.
-// Weights can be OR'd with FontItalic, e.g. FontBold|FontItalic.
+// Weights can be OR'd with FontItalic, e.g. FontBold|FontItalic. The zero value
+// inherits the weight in a Style and is Regular otherwise; FontItalic alone is
+// Regular italic.
 type FontStyle int
 
 const (
-	FontRegular    FontStyle = iota // weight 400
+	FontInherit    FontStyle = iota // inherit; Regular when nothing sets a weight
+	FontRegular                     // weight 400
 	FontThin                        // weight 100
 	FontExtraLight                  // weight 200
 	FontLight                       // weight 300
@@ -47,6 +50,20 @@ const (
 
 	FontItalic FontStyle = 1 << 8 // OR with a weight constant
 )
+
+// normalized resolves FontInherit to FontRegular, keeping the italic flag.
+func (s FontStyle) normalized() FontStyle {
+	if s&^FontItalic == FontInherit {
+		return FontRegular | s&FontItalic
+	}
+	return s
+}
+
+// cvStyle converts s to the equivalent tdewolff/canvas font style.
+func (s FontStyle) cvStyle() cv.FontStyle {
+	n := s.normalized()
+	return cv.FontStyle(n&^FontItalic-FontRegular) | cv.FontStyle(n&FontItalic)
+}
 
 // FontFamily holds the weight/style variants of one font family. A family is
 // either a vector family (TTF/OTF) or a bitmap family (BDF); the two cannot be
@@ -64,7 +81,7 @@ func (ff *FontFamily) isBitmap() bool { return ff.bitmap != nil }
 // bitmapVariant returns the bitmap font for the requested style, falling back
 // to the Regular variant (then any variant) when the exact style is missing.
 func (ff *FontFamily) bitmapVariant(style FontStyle) *bitmapFont {
-	if bf, ok := ff.bitmap[style]; ok {
+	if bf, ok := ff.bitmap[style.normalized()]; ok {
 		return bf
 	}
 	if bf, ok := ff.bitmap[FontRegular]; ok {
@@ -119,7 +136,7 @@ func (ff *FontFamily) AddStyle(data []byte, style FontStyle) error {
 	if ff.isBitmap() {
 		return errors.New("demy: cannot add a vector style to a bitmap font family")
 	}
-	return ff.family.LoadFont(data, 0, cv.FontStyle(style))
+	return ff.family.LoadFont(data, 0, style.cvStyle())
 }
 
 // LoadBitmapFontBDF parses a BDF (Adobe Bitmap Distribution Format) font as
@@ -173,7 +190,7 @@ func (ff *FontFamily) AddStyleBDF(data []byte, style FontStyle) error {
 	if err != nil {
 		return err
 	}
-	ff.bitmap[style] = bf
+	ff.bitmap[style.normalized()] = bf
 	return nil
 }
 
@@ -223,34 +240,44 @@ func (cfg Config) Pt(n float64) float64 { return n * cfg.DPMM() * 25.4 / 72 }
 // MM converts n millimeters to logical pixels.
 func (cfg Config) MM(n float64) float64 { return n * cfg.DPMM() }
 
-// TextAlign controls horizontal text alignment within a text box.
+// TextAlign controls horizontal text alignment within a text box. The zero
+// value inherits in a Style and is left-aligned otherwise.
 type TextAlign int
 
 const (
-	TextAlignLeft TextAlign = iota
+	TextAlignInherit TextAlign = iota
+	TextAlignLeft
 	TextAlignCenter
 	TextAlignRight
 )
 
-// TextOverflow controls how text behaves when it exceeds its container.
+// TextOverflow controls how text behaves when it exceeds MaxLines. Wrap and
+// Clip truncate at MaxLines; Ellipsis also marks the truncation. The zero value
+// inherits in a Style and wraps otherwise.
 type TextOverflow int
 
 const (
-	TextOverflowWrap TextOverflow = iota
+	TextOverflowInherit TextOverflow = iota
+	TextOverflowWrap
 	TextOverflowClip
 	TextOverflowEllipsis
 )
 
+// MaxLinesUnlimited sets Style.MaxLines to no limit, overriding a limit
+// inherited from a class or Config.DefaultTextStyle.
+const MaxLinesUnlimited = -1
+
 // Style defines text rendering properties. Zero-valued fields inherit from
-// Config.DefaultTextStyle and any StyleClass.
+// Config.DefaultTextStyle and any StyleClass; each field's type documents how
+// to set it explicitly back to its default.
 type Style struct {
 	Font       string
 	Size       float64   // in points; ignored for bitmap fonts
-	Weight     FontStyle // 0 is FontRegular
+	Weight     FontStyle // FontInherit (0) inherits
 	Color      color.Color
 	Align      TextAlign
-	LineHeight float64 // line height multiplier; 0 defaults to 1.0
-	MaxLines   int     // 0 = unlimited
+	LineHeight float64 // line height multiplier; 0 inherits, default 1.0
+	MaxLines   int     // 0 inherits; MaxLinesUnlimited for no limit
 	Overflow   TextOverflow
 }
 

@@ -138,11 +138,15 @@ demy.Style{
     Weight:     demy.FontBold,
     Color:      demy.DarkGray,
     Align:      demy.TextAlignCenter,      // TextAlignLeft, TextAlignCenter, TextAlignRight
-    LineHeight: 1.2,                       // multiplier; 0 = 1.0
-    MaxLines:   2,                         // 0 = unlimited
+    LineHeight: 1.2,                       // multiplier; default 1.0
+    MaxLines:   2,                         // MaxLinesUnlimited for no limit
     Overflow:   demy.TextOverflowEllipsis, // TextOverflowWrap, TextOverflowClip, TextOverflowEllipsis
 }
 ```
+
+Zero-valued fields inherit (`FontInherit`, `TextAlignInherit`, `TextOverflowInherit`,
+`MaxLines: 0`), so any field can be set back to its default over a class:
+`demy.Style{Weight: demy.FontRegular, Align: demy.TextAlignLeft, MaxLines: demy.MaxLinesUnlimited}`.
 
 `MaxLines` truncates text to that many lines; with `TextOverflowEllipsis` the last line is
 shortened to fit an ellipsis. A `Font` name missing from `Config.Fonts` is a render error.
@@ -171,7 +175,7 @@ err = ff.AddStyle(boldItalicTTF, demy.FontBold|demy.FontItalic)
 cfg.Fonts = map[string]*demy.FontFamily{"sans": ff}
 ```
 
-Weights: `FontRegular`, `FontThin`, `FontExtraLight`, `FontLight`, `FontMedium`, `FontSemiBold`,
+Weights: `FontInherit` (zero value), `FontRegular`, `FontThin`, `FontExtraLight`, `FontLight`, `FontMedium`, `FontSemiBold`,
 `FontBold`, `FontExtraBold`, `FontBlack`. OR with `FontItalic` for italics.
 
 ### Bitmap fonts
@@ -270,13 +274,23 @@ data, err = jsonscene.MarshalScene(root, cfg.Styles)
 node, styles, err := jsonscene.UnmarshalScene(data) // merge styles into cfg.Styles before rendering
 ```
 
-Colors serialize as role names (`"muted"`) or `"#rrggbb"`. Images serialize by key, resolved
-against `Config.Images`.
+Colors serialize as role names (`"muted"`) or `"#rrggbb"`/`"#rrggbbaa"` (straight alpha).
+Images serialize by key, resolved against `Config.Images`; an image with no key, a nil root,
+or an unknown role color is a marshal error. Nil children are omitted.
+
+Decoding is strict: unknown fields, unknown enum names (`"align":"right"` on a stack),
+children on leaf nodes, more than one child in `weighted`, and trailing data are errors.
 
 ## XML scenes and templates (`scene/xmlscene`)
 
 Element names are node types and attributes are properties. Dimensions accept `px` (default),
-`mm`, and `pt` suffixes, so the `demy.Config` argument must have physical dimensions set.
+`mm`, and `pt` suffixes; `mm` and `pt` need the `demy.Config` argument to have physical
+dimensions set. Font sizes (`size` on `<text>` and `<style>`) are in points: a bare number or
+`pt` is points, and `mm`/`px` are converted. `line-height` is a unitless multiplier.
+
+Decoding is strict: unknown elements or attributes, unknown enum names, malformed numbers,
+booleans other than `true`/`false`, children or text in elements that don't take them, and
+anything but whitespace or comments after the root element are errors.
 
 ```go
 import "github.com/samuel/demy/scene/xmlscene"
@@ -296,6 +310,9 @@ const tmpl = `<vstack gap="4">
 </vstack>`
 node, err = xmlscene.Execute([]byte(tmpl), data, cfg)
 ```
+
+Template output is XML-escaped automatically, so data like `AT&T` or `</text>` is inserted as
+text and can't inject markup. Pipe a value to `raw` (`{{.Snippet | raw}}`) to insert XML as is.
 
 A document can also be wrapped in `<scene>` with a `<styles>` block of
 `<style name="…" font="…" size="…"/>` entries. Use `UnmarshalScene`, `ExecuteScene`, or

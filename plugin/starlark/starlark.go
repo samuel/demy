@@ -903,7 +903,8 @@ func parseColorStr(s string) (color.Color, error) {
 		if e1 != nil || e2 != nil || e3 != nil || e4 != nil {
 			return nil, fmt.Errorf("invalid color %q", s)
 		}
-		return color.RGBA{R: uint8(rv), G: uint8(gv), B: uint8(bv), A: uint8(av)}, nil
+		// Hex alpha is straight, not premultiplied.
+		return color.NRGBA{R: uint8(rv), G: uint8(gv), B: uint8(bv), A: uint8(av)}, nil
 	}
 	return nil, fmt.Errorf("invalid color %q (expected #rrggbb or #rrggbbaa)", s)
 }

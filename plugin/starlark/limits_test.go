@@ -3,6 +3,7 @@ package starlarkplugin_test
 import (
 	"bytes"
 	"context"
+	"image/color"
 	"log/slog"
 	"strings"
 	"testing"
@@ -65,5 +66,22 @@ func TestPrintLogged(t *testing.T) {
 	}
 	if out := buf.String(); !strings.Contains(out, "hello from script") || !strings.Contains(out, "script=print.star") {
 		t.Errorf("log output = %q", out)
+	}
+}
+
+func TestTranslucentColor(t *testing.T) {
+	var env starlarkplugin.Environment
+	src := "def render(data): return Box(Background(\"#ff000080\"))\n"
+	p, err := env.LoadBytes(t.Context(), "c.star", []byte(src), demy.TRMNLOriginal, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := p.Render(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := color.NRGBA{R: 0xff, A: 0x80}
+	if got := n.(*demy.BoxNode).Background; got != want { //nolint:forcetypeassert // test
+		t.Errorf("background = %#v, want %#v", got, want)
 	}
 }

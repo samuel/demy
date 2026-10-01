@@ -265,18 +265,21 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
-func TestNilRoundTrip(t *testing.T) {
-	data, err := xmlscene.Marshal(nil)
+func TestMarshalNil(t *testing.T) {
+	if _, err := xmlscene.Marshal(nil); err == nil {
+		t.Error("Marshal(nil): expected error")
+	}
+	// Nil children are skipped when rendering, so they aren't written.
+	data, err := xmlscene.Marshal(&demy.VStackNode{Children: []demy.Node{demy.Text("a"), nil, (*demy.TextNode)(nil), demy.Text("b")}})
 	if err != nil {
-		t.Fatalf("Marshal(nil): %v", err)
+		t.Fatalf("Marshal: %v", err)
 	}
 	got, err := xmlscene.Unmarshal(data, demy.Config{})
 	if err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	want := &demy.SpacerNode{Weight: 0}
-	if !reflect.DeepEqual(want, got) {
-		t.Errorf("nil round-trip: want %#v, got %#v", want, got)
+	if n := len(got.(*demy.VStackNode).Children); n != 2 { //nolint:forcetypeassert // test
+		t.Errorf("children = %d, want 2", n)
 	}
 }
 
@@ -368,7 +371,8 @@ func TestPhysicalUnits(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *TextNode, got %T", fr.Children[0])
 	}
-	wantSize := 12 * dpmm * 25.4 / 72
+	// Font sizes are in points, so 12pt stays 12.
+	const wantSize = 12
 	if txt.Style.Size != wantSize {
 		t.Errorf("text size: want %v, got %v", wantSize, txt.Style.Size)
 	}

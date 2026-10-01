@@ -46,7 +46,7 @@ func TestInvalidDimensions(t *testing.T) {
 		"negative fr":      demy.Grid(demy.Columns(demy.GridFr(-1))),
 		"nan fixed track":  demy.Grid(demy.Columns(demy.GridFixed(math.NaN()))),
 		"negative divider": &demy.DividerNode{Size: -1},
-		"negative lines":   demy.Text("a", demy.Style{MaxLines: -1}),
+		"negative lines":   demy.Text("a", demy.Style{MaxLines: -2}),
 	}
 	for name, n := range tests {
 		t.Run(name, func(t *testing.T) {

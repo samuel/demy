@@ -681,7 +681,7 @@ func (n *textNode) measure(mctx *measureCtx) nodeSize {
 	if clr == nil {
 		clr = Black
 	}
-	face := ff.family.Face(n.style.Size, clr, cv.FontStyle(n.style.Weight))
+	face := ff.family.Face(n.style.Size, clr, n.style.Weight.cvStyle())
 	tb := n.textBox(face, mctx.availW/mctx.dpmm)
 	return nodeSize{w: tb.Width * mctx.dpmm, h: tb.Height * mctx.dpmm}
 }
@@ -744,7 +744,7 @@ func (n *textNode) draw(dctx *drawCtx) {
 	if clr == nil {
 		clr = Black
 	}
-	face := ff.family.Face(n.style.Size, clr, cv.FontStyle(n.style.Weight))
+	face := ff.family.Face(n.style.Size, clr, n.style.Weight.cvStyle())
 	// The laid-out width is often exactly the measured width; the epsilon
 	// absorbs the float round trip so lines don't break differently than measured.
 	tb := n.textBox(face, n.bounds.w/dctx.dpmm+1e-6)
@@ -1538,7 +1538,10 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		if err := checkDims("Text", dim{"size", style.Size}, dim{"line height", style.LineHeight}); err != nil {
 			return nil, err
 		}
-		if style.MaxLines < 0 {
+		switch {
+		case style.MaxLines == MaxLinesUnlimited:
+			style.MaxLines = 0
+		case style.MaxLines < 0:
 			return nil, fmt.Errorf("demy: Text max lines %d must not be negative", style.MaxLines)
 		}
 		if style.Font != "" && cfg != nil && cfg.Fonts[style.Font] == nil {

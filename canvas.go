@@ -258,18 +258,18 @@ func applyDither(src *image.Gray, pal []color.Gray, algo Dither) *image.Gray {
 func subGray(src *image.Gray, r image.Rectangle) *image.Gray {
 	dst := image.NewGray(image.Rect(0, 0, r.Dx(), r.Dy()))
 	for y := range r.Dy() {
-		for x := range r.Dx() {
-			dst.SetGray(x, y, src.GrayAt(r.Min.X+x, r.Min.Y+y))
-		}
+		i := src.PixOffset(r.Min.X, r.Min.Y+y)
+		copy(dst.Pix[y*dst.Stride:], src.Pix[i:i+r.Dx()])
 	}
 	return dst
 }
 
-// copyGrayRegion copies src into dst with src's origin at pt.
+// copyGrayRegion copies src into dst with src's origin at pt. The destination
+// region must lie within dst's bounds.
 func copyGrayRegion(dst, src *image.Gray, pt image.Point) {
+	w := src.Bounds().Dx()
 	for y := range src.Bounds().Dy() {
-		for x := range src.Bounds().Dx() {
-			dst.SetGray(pt.X+x, pt.Y+y, src.GrayAt(x, y))
-		}
+		i := src.PixOffset(src.Bounds().Min.X, src.Bounds().Min.Y+y)
+		copy(dst.Pix[dst.PixOffset(pt.X, pt.Y+y):], src.Pix[i:i+w])
 	}
 }

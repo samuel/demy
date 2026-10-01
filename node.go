@@ -71,6 +71,26 @@ func (dctx *drawCtx) setErr(err error) {
 	}
 }
 
+// measureMemo remembers a node's most recent measurement. A node measured
+// again with the same available size returns the remembered result; its
+// measure-time state is still from that call, so layout stays consistent.
+// Only the most recent call is kept, since layout reads the state of the last
+// measurement.
+type measureMemo struct {
+	valid          bool
+	availW, availH float64
+	size           nodeSize
+}
+
+func (m *measureMemo) do(mctx *measureCtx, measure func(*measureCtx) nodeSize) nodeSize {
+	if m.valid && m.availW == mctx.availW && m.availH == mctx.availH {
+		return m.size
+	}
+	m.size = measure(mctx)
+	m.valid, m.availW, m.availH = true, mctx.availW, mctx.availH
+	return m.size
+}
+
 // node is the interface all layout and widget nodes implement.
 type node interface {
 	measure(mctx *measureCtx) nodeSize
@@ -81,6 +101,7 @@ type node interface {
 // --- vstackNode ---
 
 type vstackNode struct {
+	memo          measureMemo
 	gap           float64
 	padding       float64
 	align         Alignment
@@ -89,7 +110,9 @@ type vstackNode struct {
 	bounds        nodeRect
 }
 
-func (n *vstackNode) measure(mctx *measureCtx) nodeSize {
+func (n *vstackNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
+
+func (n *vstackNode) measureUncached(mctx *measureCtx) nodeSize {
 	innerW := math.Max(0, mctx.availW-2*n.padding)
 	n.measuredSizes = make([]nodeSize, len(n.children))
 	var totalH, maxW float64
@@ -182,6 +205,7 @@ func (n *vstackNode) draw(dctx *drawCtx) {
 // --- hstackNode ---
 
 type hstackNode struct {
+	memo          measureMemo
 	gap           float64
 	padding       float64
 	align         Alignment
@@ -190,7 +214,9 @@ type hstackNode struct {
 	bounds        nodeRect
 }
 
-func (n *hstackNode) measure(mctx *measureCtx) nodeSize {
+func (n *hstackNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
+
+func (n *hstackNode) measureUncached(mctx *measureCtx) nodeSize {
 	innerH := math.Max(0, mctx.availH-2*n.padding)
 	innerW := math.Max(0, mctx.availW-2*n.padding)
 	n.measuredSizes = make([]nodeSize, len(n.children))
@@ -339,13 +365,16 @@ func (n *hstackNode) draw(dctx *drawCtx) {
 // --- zstackNode ---
 
 type zstackNode struct {
+	memo          measureMemo
 	align         ZAlignment
 	children      []node
 	measuredSizes []nodeSize
 	bounds        nodeRect
 }
 
-func (n *zstackNode) measure(mctx *measureCtx) nodeSize {
+func (n *zstackNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
+
+func (n *zstackNode) measureUncached(mctx *measureCtx) nodeSize {
 	n.measuredSizes = make([]nodeSize, len(n.children))
 	var maxW, maxH float64
 	for i, child := range n.children {
@@ -398,6 +427,7 @@ func (n *zstackNode) draw(dctx *drawCtx) {
 // --- boxNode ---
 
 type boxNode struct {
+	memo          measureMemo
 	padding       float64
 	borderWidth   float64
 	borderColor   color.Color
@@ -417,7 +447,9 @@ func (n *boxNode) inset() float64 {
 	return n.padding + n.borderWidth
 }
 
-func (n *boxNode) measure(mctx *measureCtx) nodeSize {
+func (n *boxNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
+
+func (n *boxNode) measureUncached(mctx *measureCtx) nodeSize {
 	innerW := math.Max(0, mctx.availW-2*n.inset())
 	innerH := math.Max(0, mctx.availH-2*n.inset())
 	n.measuredSizes = make([]nodeSize, len(n.children))
@@ -585,6 +617,7 @@ func (n *spacerNode) draw(_ *drawCtx) {}
 // --- weightedNode ---
 
 type weightedNode struct {
+	memo   measureMemo
 	weight float64
 	child  node
 	mctx   *measureCtx // retained from measure to re-measure the child with its allocated bounds
@@ -593,7 +626,9 @@ type weightedNode struct {
 
 // measure returns the child's size. Stacks ignore the main-axis component and
 // use the cross-axis one.
-func (n *weightedNode) measure(mctx *measureCtx) nodeSize {
+func (n *weightedNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
+
+func (n *weightedNode) measureUncached(mctx *measureCtx) nodeSize {
 	n.mctx = mctx
 	return n.child.measure(mctx)
 }
@@ -661,12 +696,15 @@ func (n *dividerNode) draw(dctx *drawCtx) {
 // --- textNode ---
 
 type textNode struct {
+	memo   measureMemo
 	text   string
 	style  Style
 	bounds nodeRect
 }
 
-func (n *textNode) measure(mctx *measureCtx) nodeSize {
+func (n *textNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
+
+func (n *textNode) measureUncached(mctx *measureCtx) nodeSize {
 	ff := mctx.fonts[n.style.Font]
 	if ff == nil {
 		return nodeSize{}
@@ -1124,6 +1162,7 @@ func (n *barcodeNode) draw(dctx *drawCtx) {
 // --- gridNode ---
 
 type gridNode struct {
+	memo     measureMemo
 	columns  []GridTrack
 	rows     []GridTrack
 	rowGap   float64
@@ -1145,7 +1184,9 @@ type gridNode struct {
 	frRowsAuto bool
 }
 
-func (n *gridNode) measure(mctx *measureCtx) nodeSize {
+func (n *gridNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
+
+func (n *gridNode) measureUncached(mctx *measureCtx) nodeSize {
 	if len(n.columns) == 0 {
 		return nodeSize{}
 	}

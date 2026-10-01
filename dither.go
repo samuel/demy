@@ -3,35 +3,38 @@ package demy
 import (
 	"image"
 	"image/color"
-	"math"
 )
 
-// clamp restricts v to [lo, hi].
-func clamp(v, lo, hi float64) float64 {
-	return math.Max(lo, math.Min(hi, v))
-}
-
 // toGray converts an RGBA image to 8-bit grayscale using BT.601 luminance.
+// Translucent pixels are composited over white, matching an unlit e-ink panel.
 func toGray(rgba *image.RGBA) *image.Gray {
 	bounds := rgba.Bounds()
 	gray := image.NewGray(bounds)
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			c := rgba.RGBAAt(x, y)
-			lum := (19595*uint32(c.R) + 38470*uint32(c.G) + 7471*uint32(c.B) + 1<<15) >> 16
-			gray.SetGray(x, y, color.Gray{Y: uint8(lum)})
+	for y := range bounds.Dy() {
+		src := rgba.Pix[y*rgba.Stride : y*rgba.Stride+4*bounds.Dx()]
+		dst := gray.Pix[y*gray.Stride : y*gray.Stride+bounds.Dx()]
+		for x := range dst {
+			p := src[4*x : 4*x+4 : 4*x+4]
+			// Pix is premultiplied, so adding the uncovered fraction of white
+			// composites over a white backdrop.
+			white := 255 - uint32(p[3])
+			r, g, b := uint32(p[0])+white, uint32(p[1])+white, uint32(p[2])+white
+			dst[x] = uint8((19595*r + 38470*g + 7471*b + 1<<15) >> 16)
 		}
 	}
 	return gray
 }
 
-// nearestPalette returns the index of the closest palette entry to val (0–255).
-func nearestPalette(val float64, palette []color.Gray) int {
-	v := clamp(val, 0, 255)
+// nearestPalette returns the index of the closest palette entry to v.
+func nearestPalette(v float64, palette []color.Gray) int {
+	v = min(max(v, 0), 255)
 	nearest := 0
-	minDist := math.Abs(v - float64(palette[0].Y))
-	for i := 1; i < len(palette); i++ {
-		d := math.Abs(v - float64(palette[i].Y))
+	minDist := 256.0
+	for i, p := range palette {
+		d := v - float64(p.Y)
+		if d < 0 {
+			d = -d
+		}
 		if d < minDist {
 			minDist = d
 			nearest = i
@@ -42,91 +45,71 @@ func nearestPalette(val float64, palette []color.Gray) int {
 
 // ditherNone maps each pixel of src to its nearest palette entry.
 func ditherNone(src *image.Gray, palette []color.Gray) *image.Gray {
+	var lut [256]uint8
+	for v := range lut {
+		lut[v] = palette[nearestPalette(float64(v), palette)].Y
+	}
 	bounds := src.Bounds()
-	w := bounds.Dx()
-	h := bounds.Dy()
-
 	out := image.NewGray(bounds)
-	for y := range h {
-		for x := range w {
-			old := src.Pix[y*w+x]
-			idx := nearestPalette(float64(old), palette)
-			out.SetGray(bounds.Min.X+x, bounds.Min.Y+y, palette[idx])
+	for y := range bounds.Dy() {
+		in := src.Pix[y*src.Stride : y*src.Stride+bounds.Dx()]
+		o := out.Pix[y*out.Stride : y*out.Stride+bounds.Dx()]
+		for x, v := range in {
+			o[x] = lut[v]
 		}
 	}
 	return out
 }
 
+// diffusion is one neighbor of an error-diffusion kernel: an offset from the
+// current pixel and the fraction of the error it receives.
+type diffusion struct {
+	dx, dy int
+	weight float64
+}
+
+var (
+	floydSteinbergKernel = []diffusion{{1, 0, 7.0 / 16}, {-1, 1, 3.0 / 16}, {0, 1, 5.0 / 16}, {1, 1, 1.0 / 16}}
+	atkinsonKernel       = []diffusion{{1, 0, 1.0 / 8}, {2, 0, 1.0 / 8}, {-1, 1, 1.0 / 8}, {0, 1, 1.0 / 8}, {1, 1, 1.0 / 8}, {0, 2, 1.0 / 8}}
+)
+
 // ditherFloydSteinberg applies Floyd-Steinberg error diffusion to src using palette.
 func ditherFloydSteinberg(src *image.Gray, palette []color.Gray) *image.Gray {
-	bounds := src.Bounds()
-	w := bounds.Dx()
-	h := bounds.Dy()
-
-	errs := make([]float64, w*h)
-	for i, v := range src.Pix {
-		errs[i] = float64(v)
-	}
-
-	out := image.NewGray(bounds)
-	for y := range h {
-		for x := range w {
-			old := errs[y*w+x]
-			idx := nearestPalette(old, palette)
-			out.SetGray(bounds.Min.X+x, bounds.Min.Y+y, palette[idx])
-			e := old - float64(palette[idx].Y)
-			if x+1 < w {
-				errs[y*w+x+1] += e * 7 / 16
-			}
-			if y+1 < h {
-				if x > 0 {
-					errs[(y+1)*w+x-1] += e * 3 / 16
-				}
-				errs[(y+1)*w+x] += e * 5 / 16
-				if x+1 < w {
-					errs[(y+1)*w+x+1] += e * 1 / 16
-				}
-			}
-		}
-	}
-	return out
+	return diffuse(src, palette, floydSteinbergKernel)
 }
 
 // ditherAtkinson applies Atkinson error diffusion to src using palette.
 func ditherAtkinson(src *image.Gray, palette []color.Gray) *image.Gray {
-	bounds := src.Bounds()
-	w := bounds.Dx()
-	h := bounds.Dy()
+	return diffuse(src, palette, atkinsonKernel)
+}
 
-	errs := make([]float64, w*h)
-	for i, v := range src.Pix {
-		errs[i] = float64(v)
+// diffuse quantizes src to palette, spreading each pixel's quantization error
+// to its neighbors according to kernel. Error falling outside the image is
+// dropped.
+func diffuse(src *image.Gray, palette []color.Gray, kernel []diffusion) *image.Gray {
+	bounds := src.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+
+	vals := make([]float64, w*h)
+	for y := range h {
+		for x, v := range src.Pix[y*src.Stride : y*src.Stride+w] {
+			vals[y*w+x] = float64(v)
+		}
 	}
 
 	out := image.NewGray(bounds)
 	for y := range h {
+		o := out.Pix[y*out.Stride : y*out.Stride+w]
 		for x := range w {
-			old := errs[y*w+x]
-			idx := nearestPalette(old, palette)
-			out.SetGray(bounds.Min.X+x, bounds.Min.Y+y, palette[idx])
-			e := (old - float64(palette[idx].Y)) / 8
-			if x+1 < w {
-				errs[y*w+x+1] += e
-			}
-			if x+2 < w {
-				errs[y*w+x+2] += e
-			}
-			if y+1 < h {
-				if x > 0 {
-					errs[(y+1)*w+x-1] += e
+			old := vals[y*w+x]
+			q := palette[nearestPalette(old, palette)].Y
+			o[x] = q
+			e := old - float64(q)
+			for _, k := range kernel {
+				nx, ny := x+k.dx, y+k.dy
+				if nx >= 0 && nx < w && ny < h {
+					vals[ny*w+nx] += e * k.weight
 				}
-				errs[(y+1)*w+x] += e
-				if x+1 < w {
-					errs[(y+1)*w+x+1] += e
-				}
-			}
-			if y+2 < h {
-				errs[(y+2)*w+x] += e
 			}
 		}
 	}

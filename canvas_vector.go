@@ -2,6 +2,7 @@ package demy
 
 import (
 	"image"
+	"image/color"
 	"image/draw"
 	"math"
 
@@ -37,12 +38,8 @@ func (r *vectorRenderer) Size() (float64, float64) {
 }
 
 func (r *vectorRenderer) RenderPath(path *cv.Path, style cv.Style, m cv.Matrix) {
-	b := r.img.Bounds().Size()
 	if style.HasFill() && style.Fill.IsColor() {
-		fill := path.Copy().Transform(m)
-		r.ras.Reset(b.X, b.Y)
-		fill.ToVectorRasterizer(r.ras, r.resolution)
-		r.ras.Draw(r.img, r.img.Bounds(), image.NewUniform(style.Fill.Color), image.Point{})
+		r.fill(path.Copy().Transform(m), style.Fill.Color)
 	}
 	if style.HasStroke() && style.Stroke.IsColor() {
 		tolerance := cv.PixelTolerance / r.resolution.DPMM()
@@ -52,11 +49,39 @@ func (r *vectorRenderer) RenderPath(path *cv.Path, style cv.Style, m cv.Matrix) 
 			stroke = stroke.Dash(dashOffset, dashes...)
 		}
 		stroke = stroke.Stroke(style.StrokeWidth, style.StrokeCapper, style.StrokeJoiner, tolerance)
-		stroke = stroke.Transform(m)
-		r.ras.Reset(b.X, b.Y)
-		stroke.ToVectorRasterizer(r.ras, r.resolution)
-		r.ras.Draw(r.img, r.img.Bounds(), image.NewUniform(style.Stroke.Color), image.Point{})
+		r.fill(stroke.Transform(m), style.Stroke.Color)
 	}
+}
+
+// minRasterizerWidth exceeds x/image/vector's fixed-point threshold (512).
+const minRasterizerWidth = 513
+
+// fill rasterizes path (in millimeters, Y up) with c. The rasterizer covers
+// only the path's pixel bounding box, so the cost scales with the path's size
+// rather than the canvas's.
+func (r *vectorRenderer) fill(path *cv.Path, c color.Color) {
+	dpmm := r.resolution.DPMM()
+	h := float64(r.img.Bounds().Dy())
+	b := path.FastBounds()
+	px := image.Rect(
+		int(math.Floor(b.X0*dpmm))-1,
+		int(math.Floor(h-b.Y1*dpmm))-1,
+		int(math.Ceil(b.X1*dpmm))+1,
+		int(math.Ceil(h-b.Y0*dpmm))+1,
+	).Intersect(r.img.Bounds())
+	if px.Empty() {
+		return
+	}
+	// ToVectorRasterizer maps x to x*dpmm and y to rasterizerHeight-y*dpmm;
+	// shift the path so the bounding box lands at the rasterizer's origin.
+	path = path.Translate(-float64(px.Min.X)/dpmm, (float64(px.Dy())-h+float64(px.Min.Y))/dpmm)
+	// The rasterizer switches to lower-precision fixed-point math when both
+	// dimensions are at most 512; keep it wider so every path is rasterized
+	// with the same floating-point math regardless of its size. Draw only
+	// reads the px-sized corner.
+	r.ras.Reset(max(px.Dx(), minRasterizerWidth), px.Dy())
+	path.ToVectorRasterizer(r.ras, r.resolution)
+	r.ras.Draw(r.img, px, image.NewUniform(c), image.Point{})
 }
 
 func (r *vectorRenderer) RenderText(text *cv.Text, m cv.Matrix) {

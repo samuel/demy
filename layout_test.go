@@ -234,3 +234,17 @@ func imagesEqual(a, b image.Image) bool {
 	}
 	return true
 }
+
+// TestPathPartlyOffCanvas checks that a shape extending past the canvas is
+// still filled where it's visible.
+func TestPathPartlyOffCanvas(t *testing.T) {
+	n := demy.ZStack(demy.Bottom, demy.VStack(redBox(30, 30)))
+	img := render(t, n, 10, 10, demy.RGBA, demy.Config{})
+	for y := range 10 {
+		for x := range 10 {
+			if got := rgbaAt(img, x, y); got != testRed {
+				t.Fatalf("pixel (%d,%d) = %v, want %v", x, y, got, testRed)
+			}
+		}
+	}
+}

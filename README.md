@@ -243,6 +243,11 @@ img, err := c.Render(root, demy.TwoBit, demy.Atkinson) // dither the whole scene
 
 `Render` returns an `*image.RGBA` for `RGBA` and an `*image.Gray` otherwise, with quantized modes
 snapped to the palette's gray levels. Encode it with `image/png` or any other encoder.
+Translucent pixels (e.g. a translucent `Roles.Background`) are composited over white when
+converting to grayscale.
+
+A typical dashboard renders in about 10 ms on TRMNL Original and 40 ms on TRMNL X
+(`go test -bench RenderDashboard`, Apple M-series).
 
 `Render` returns an error rather than panicking on invalid trees, so scenes from untrusted
 sources are safe to render: sizes, gaps, padding, and weights must be finite and within

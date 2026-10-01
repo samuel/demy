@@ -13,6 +13,34 @@ func TestUnmarshalDepthLimit(t *testing.T) {
 	if _, err := xmlscene.Unmarshal([]byte(src), demy.Config{}); err == nil || !strings.Contains(err.Error(), "nested") {
 		t.Fatalf("err = %v, want nesting error", err)
 	}
+	src = strings.Repeat("<vstack>", 1000) + strings.Repeat("</vstack>", 1000)
+	if _, err := xmlscene.Unmarshal([]byte(src), demy.Config{}); err != nil {
+		t.Fatalf("1000 levels: %v", err)
+	}
+}
+
+func TestUnmarshalNumbers(t *testing.T) {
+	tests := map[string]float64{
+		"4":     4,
+		"+4":    4,
+		"-0":    0,
+		"4.5":   4.5,
+		".5":    0.5,
+		"1e2":   100,
+		"1E2px": 100,
+		"2.5px": 2.5,
+		"007":   7,
+	}
+	for in, want := range tests {
+		n, err := xmlscene.Unmarshal([]byte(`<frame width="`+in+`"/>`), demy.Config{})
+		if err != nil {
+			t.Errorf("width=%q: %v", in, err)
+			continue
+		}
+		if got := n.(*demy.FrameNode).Width; got != want { //nolint:forcetypeassert // test
+			t.Errorf("width=%q = %v, want %v", in, got, want)
+		}
+	}
 }
 
 func FuzzUnmarshalRender(f *testing.F) {

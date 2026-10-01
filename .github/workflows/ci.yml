@@ -43,6 +43,16 @@ jobs:
             target: FuzzUnmarshalRender
           - pkg: ./scene/xmlscene
             target: FuzzUnmarshalRender
+          - pkg: ./scene/jsonscene
+            target: FuzzRoundTrip
+          - pkg: ./scene/xmlscene
+            target: FuzzRoundTrip
+          - pkg: ./scene/xmlscene
+            target: FuzzRoundTripJSON
+          - pkg: ./internal/codec
+            target: FuzzColor
+          - pkg: ./internal/codec
+            target: FuzzWeight
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6

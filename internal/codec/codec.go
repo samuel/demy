@@ -38,7 +38,8 @@ func ColorString(c color.Color) (string, error) {
 }
 
 // ParseColor decodes a role name or a "#rgb", "#rrggbb", or "#rrggbbaa" hex
-// string. "" decodes as nil (the default color).
+// string. "" decodes as nil (the default color). Opaque colors decode as
+// color.RGBA and translucent ones as color.NRGBA.
 func ParseColor(s string) (color.Color, error) {
 	if s == "" {
 		return nil, nil
@@ -57,7 +58,9 @@ func ParseColor(s string) (color.Color, error) {
 	if err != nil || (len(b) != 3 && len(b) != 4) {
 		return nil, fmt.Errorf("invalid hex color %q (want #rgb, #rrggbb, or #rrggbbaa)", s)
 	}
-	if len(b) == 3 {
+	// Opaque colors decode as color.RGBA however they're written, so each
+	// color has one decoded form.
+	if len(b) == 3 || b[3] == 0xff {
 		return color.RGBA{R: b[0], G: b[1], B: b[2], A: 0xff}, nil
 	}
 	return color.NRGBA{R: b[0], G: b[1], B: b[2], A: b[3]}, nil
@@ -178,6 +181,10 @@ func ParseWeight(s string) (demy.FontStyle, error) {
 	}
 	return w, nil
 }
+
+// MaxDepth bounds node nesting in decoded scenes so deeply nested input can't
+// exhaust the stack.
+const MaxDepth = 1000
 
 // Grid track kinds.
 const (

@@ -6,8 +6,8 @@
 // or as "#rgb", "#rrggbb", or "#rrggbbaa" hex strings.
 //
 // Decoding is strict: unknown or duplicate fields, field names that differ in
-// case, unknown enum names, children on leaf nodes, invalid UTF-8, and trailing
-// data are errors.
+// case, unknown enum names, children on leaf nodes, nesting deeper than 1000
+// nodes, invalid UTF-8, and trailing data are errors.
 //
 // Two formats are supported:
 //   - Bare node: {"type":"vstack",...} — Marshal/Unmarshal
@@ -97,7 +97,7 @@ func Unmarshal(data []byte) (demy.Node, error) {
 	if err := decodeStrict(data, &sn); err != nil {
 		return nil, err
 	}
-	n, err := sceneToNode(sn)
+	n, err := sceneToNode(sn, 1)
 	if err != nil {
 		return nil, fmt.Errorf("jsonscene: %w", err)
 	}
@@ -133,7 +133,7 @@ func UnmarshalScene(data []byte) (demy.Node, map[string]demy.Style, error) {
 	if err := decodeStrict(data, &s); err != nil {
 		return nil, nil, err
 	}
-	n, err := sceneToNode(s.Root)
+	n, err := sceneToNode(s.Root, 1)
 	if err != nil {
 		return nil, nil, fmt.Errorf("jsonscene: %w", err)
 	}
@@ -305,10 +305,10 @@ func styleToScene(s demy.Style) (Style, error) {
 
 // --- unmarshal helpers ---
 
-func childrenFromScene(children []Node) ([]demy.Node, error) {
+func childrenFromScene(children []Node, depth int) ([]demy.Node, error) {
 	var out []demy.Node
 	for _, child := range children {
-		c, err := sceneToNode(child)
+		c, err := sceneToNode(child, depth)
 		if err != nil {
 			return nil, err
 		}
@@ -317,7 +317,11 @@ func childrenFromScene(children []Node) ([]demy.Node, error) {
 	return out, nil
 }
 
-func sceneToNode(sn Node) (demy.Node, error) {
+// sceneToNode converts sn, which is nested depth levels deep (the root is 1).
+func sceneToNode(sn Node, depth int) (demy.Node, error) {
+	if depth > codec.MaxDepth {
+		return nil, fmt.Errorf("nodes nested deeper than %d", codec.MaxDepth)
+	}
 	var leaf bool
 	switch sn.Type {
 	case "spacer", "divider", "text", "image", "barcode":
@@ -329,7 +333,7 @@ func sceneToNode(sn Node) (demy.Node, error) {
 	if sn.Type == "weighted" && len(sn.Children) > 1 {
 		return nil, fmt.Errorf("weighted: has %d children, want at most 1", len(sn.Children))
 	}
-	children, err := childrenFromScene(sn.Children)
+	children, err := childrenFromScene(sn.Children, depth+1)
 	if err != nil {
 		return nil, err
 	}

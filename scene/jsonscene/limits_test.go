@@ -1,11 +1,28 @@
 package jsonscene_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/samuel/demy"
 	"github.com/samuel/demy/scene/jsonscene"
 )
+
+func TestUnmarshalDepthLimit(t *testing.T) {
+	nested := func(depth int) []byte {
+		return []byte(strings.Repeat(`{"type":"vstack","children":[`, depth-1) + `{"type":"vstack"}` + strings.Repeat("]}", depth-1))
+	}
+	if _, err := jsonscene.Unmarshal(nested(1000)); err != nil {
+		t.Fatalf("1000 levels: %v", err)
+	}
+	if _, err := jsonscene.Unmarshal(nested(1001)); err == nil || !strings.Contains(err.Error(), "nested") {
+		t.Fatalf("1001 levels: err = %v, want nesting error", err)
+	}
+	scene := []byte(`{"root":` + string(nested(1001)) + `}`)
+	if _, _, err := jsonscene.UnmarshalScene(scene); err == nil || !strings.Contains(err.Error(), "nested") {
+		t.Fatalf("scene with 1001 levels: err = %v, want nesting error", err)
+	}
+}
 
 func FuzzUnmarshalRender(f *testing.F) {
 	f.Add(`{"type":"vstack","gap":4,"children":[{"type":"text","text":"hi"},{"type":"frame","width":10,"height":10}]}`)

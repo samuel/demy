@@ -20,8 +20,9 @@
 // hex strings.
 //
 // Decoding is strict: unknown elements and attributes, unknown enum names,
-// malformed numbers, children or text in elements that don't take them, and
-// content after the root element are errors.
+// malformed numbers (including NaN, Inf, and hex floats), children or text in
+// elements that don't take them, nesting deeper than 1000 elements, and content
+// after the root element are errors.
 //
 // # Physical units
 //
@@ -440,9 +441,6 @@ func marshalTracks(enc *xml.Encoder, name string, tracks []demy.GridTrack) error
 
 // --- unmarshal context ---
 
-// maxDepth bounds element nesting so deeply nested input can't exhaust the stack.
-const maxDepth = 1000
-
 // unmarshalCtx carries per-parse state. dpmm is 0 when the Config lacks
 // physical dimensions.
 type unmarshalCtx struct {
@@ -524,11 +522,20 @@ func (a *attrs) float(name string) float64 {
 	if s == "" {
 		return 0
 	}
-	v, err := strconv.ParseFloat(s, 64)
+	v, err := parseNumber(s)
 	if err != nil {
 		a.fail(name, fmt.Errorf("invalid number %q", s))
 	}
 	return v
+}
+
+// parseNumber parses a finite decimal number. strconv.ParseFloat also accepts
+// NaN, infinities, hex floats, and underscores, which scenes reject.
+func parseNumber(s string) (float64, error) {
+	if strings.ContainsFunc(s, func(r rune) bool { return !strings.ContainsRune("0123456789+-.eE", r) }) {
+		return 0, errors.New("not a decimal number")
+	}
+	return strconv.ParseFloat(s, 64) // rejects out-of-range values
 }
 
 func (a *attrs) int(name string) int {
@@ -576,7 +583,7 @@ func (a *attrs) splitUnit(name string) (float64, string, bool) {
 			break
 		}
 	}
-	v, err := strconv.ParseFloat(num, 64)
+	v, err := parseNumber(num)
 	if err != nil {
 		a.fail(name, fmt.Errorf("invalid dimension %q", s))
 		return 0, "", false
@@ -771,8 +778,8 @@ func (u *unmarshalCtx) children(parent string) ([]demy.Node, error) {
 func (u *unmarshalCtx) element(start xml.StartElement) (demy.Node, error) {
 	u.depth++
 	defer func() { u.depth-- }()
-	if u.depth > maxDepth {
-		return nil, fmt.Errorf("elements nested deeper than %d", maxDepth)
+	if u.depth > codec.MaxDepth {
+		return nil, fmt.Errorf("elements nested deeper than %d", codec.MaxDepth)
 	}
 	name := start.Name.Local
 	a, err := readAttrs(start, u.dpmm)

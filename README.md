@@ -270,7 +270,7 @@ A typical dashboard renders in about 10 ms on TRMNL Original and 40 ms on TRMNL 
 `Render` returns an error rather than panicking on invalid trees, so scenes from untrusted
 sources are safe to render: sizes, gaps, padding, and weights must be finite and within
 `[0, 32768]`, trees may nest at most 1000 levels, and `GridRow` must be a direct child of
-`Grid`. XML scenes are also limited to 1000 levels of element nesting.
+`Grid`. XML and JSON scenes are also limited to 1000 levels of nesting.
 
 ### Per-image dithering
 
@@ -318,6 +318,9 @@ Element names are node types and attributes are properties. Dimensions accept `p
 `mm`, and `pt` suffixes; `mm` and `pt` need the `demy.Config` argument to have physical
 dimensions set. Font sizes (`size` on `<text>` and `<style>`) are in points: a bare number or
 `pt` is points, and `mm`/`px` are converted. `line-height` is a unitless multiplier.
+
+Numbers are plain decimals (`4`, `-0.5`, `1e2`); `NaN`, `Inf`, hex floats, and underscores are
+rejected.
 
 Decoding is strict: unknown elements or attributes, unknown enum names, malformed numbers,
 booleans other than `true`/`false`, children or text in elements that don't take them, and
@@ -426,12 +429,13 @@ go build ./...
 go vet ./...
 go test -race ./...
 golangci-lint run ./...
-go test -run '^$' -fuzz '^FuzzParseBDF$' -fuzztime 30s .
-go test -run '^$' -fuzz '^FuzzUnmarshalRender$' -fuzztime 30s ./scene/jsonscene
-go test -run '^$' -fuzz '^FuzzUnmarshalRender$' -fuzztime 30s ./scene/xmlscene
+go test -run '^$' -fuzz '^FuzzRoundTrip$' -fuzztime 30s ./scene/jsonscene  # and each other fuzz target
 ```
 
-Failing fuzz inputs are uploaded as a workflow artifact; add them to the package's
+The fuzz targets are `FuzzParseBDF` (root), `FuzzUnmarshalRender` and `FuzzRoundTrip` (both
+scene packages), `FuzzRoundTripJSON` (XML→JSON→XML, in `scene/xmlscene`), and `FuzzColor` and
+`FuzzWeight` (`internal/codec`). Round-trip targets check that a decoded scene encodes back to
+the same tree and the same bytes. Failing fuzz inputs are uploaded as a workflow artifact; add them to the package's
 `testdata/fuzz/` to reproduce.
 
 ## License

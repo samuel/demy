@@ -37,6 +37,18 @@ func TestUnmarshalStrict(t *testing.T) {
 		"two roots":         `<vstack/><hstack/>`,
 		"trailing text":     `<vstack/>garbage`,
 		"empty":             ``,
+		"nan width":         `<frame width="NaN"/>`,
+		"inf width":         `<frame width="+Inf"/>`,
+		"infinity px":       `<frame width="infinitypx"/>`,
+		"hex width":         `<frame width="0x1p4"/>`,
+		"hex unit":          `<frame width="0x10px"/>`,
+		"overflow width":    `<frame width="1e400"/>`,
+		"nan size":          `<text size="NaN">a</text>`,
+		"inf size pt":       `<text size="Infpt">a</text>`,
+		"nan line height":   `<text line-height="NaN">a</text>`,
+		"inf track":         `<grid><columns><fixed size="Inf"/></columns></grid>`,
+		"hex fr":            `<grid><columns><fr weight="0x1"/></columns></grid>`,
+		"underscore":        `<vstack gap="1_0"/>`,
 	}
 	for name, src := range tests {
 		t.Run(name, func(t *testing.T) {

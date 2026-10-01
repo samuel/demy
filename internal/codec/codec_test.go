@@ -18,6 +18,7 @@ func TestParseColor(t *testing.T) {
 		{"#1a2", color.RGBA{R: 0x11, G: 0xaa, B: 0x22, A: 0xff}},
 		{"#123456", color.RGBA{R: 0x12, G: 0x34, B: 0x56, A: 0xff}},
 		{"#ff000080", color.NRGBA{R: 0xff, A: 0x80}},
+		{"#123456ff", color.RGBA{R: 0x12, G: 0x34, B: 0x56, A: 0xff}},
 	}
 	for _, tt := range tests {
 		got, err := ParseColor(tt.in)

@@ -230,6 +230,11 @@ img, err := c.Render(root, demy.TwoBit, demy.Atkinson) // dither the whole scene
 `Render` returns an `*image.RGBA` for `RGBA` and an `*image.Gray` otherwise, with quantized modes
 snapped to the palette's gray levels. Encode it with `image/png` or any other encoder.
 
+`Render` returns an error rather than panicking on invalid trees, so scenes from untrusted
+sources are safe to render: sizes, gaps, padding, and weights must be finite and within
+`[0, 32768]`, trees may nest at most 1000 levels, and `GridRow` must be a direct child of
+`Grid`. XML scenes are also limited to 1000 levels of element nesting.
+
 ### Per-image dithering
 
 Rendering without global dithering keeps text crisp. Images can opt into dithering for their
@@ -307,7 +312,7 @@ def render(data):
 import starlarkplugin "github.com/samuel/demy/plugin/starlark"
 
 env := &starlarkplugin.Environment{}
-p, err := env.Load("weather.star", cfg, loc) // loc sets the zone for now(); nil = UTC
+p, err := env.Load(ctx, "weather.star", cfg, loc) // loc sets the zone for now(); nil = UTC
 
 node, err := p.Render(ctx, map[string]any{"city": "Portland", "temp": 72.4, "items": items})
 img, err := c.Render(node, demy.Unset)
@@ -315,6 +320,10 @@ img, err := c.Render(node, demy.Unset)
 
 Use `Environment.AddBuiltin`, `AddValue`, and `AddModule` to expose Go functions to scripts.
 `ContextFromThread` retrieves the `Render` context inside a builtin.
+
+Module execution and each `Render` call are limited to `Environment.MaxSteps` Starlark
+execution steps (`DefaultMaxSteps`, 10 million, when zero) and stop when their context is
+cancelled. Script `print()` output goes to `Environment.Logger` (default `slog.Default()`).
 
 Globals:
 
@@ -338,4 +347,5 @@ Globals:
 go run ./cmd/demy-tutorial/
 ```
 
-Serves an interactive tutorial at http://localhost:8081.
+Serves an interactive tutorial at http://127.0.0.1:8081. Use `-addr` to change the listen
+address.

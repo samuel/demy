@@ -1,10 +1,13 @@
 package demy
 
 import (
+	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
 	"math"
+	"reflect"
 	"strings"
 
 	"github.com/boombuler/barcode"
@@ -42,7 +45,7 @@ type drawCtx struct {
 	fonts         map[string]*FontFamily
 	ditherRegions []imageDitherRegion
 	textBlits     []textBlit
-	clip          image.Rectangle // physical-pixel clip for bitmap text; empty means unclipped
+	clip          image.Rectangle // physical-pixel clip for bitmap text and clipped sub-canvases
 }
 
 // node is the interface all layout and widget nodes implement.
@@ -483,6 +486,26 @@ func (n *frameNode) draw(dctx *drawCtx) {
 // drawClipped draws children onto a sub-canvas the size of r and composites it
 // onto dctx, confining their vector content to r.
 func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
+	// Bitmap glyphs and dither regions apply to the root image after
+	// quantization, so they are clipped to r's physical-pixel bounds rather
+	// than relying on the sub-canvas crop that confines vector content.
+	clip := image.Rect(
+		int(math.Round(r.x*dctx.scale)),
+		int(math.Round(r.y*dctx.scale)),
+		int(math.Round((r.x+r.w)*dctx.scale)),
+		int(math.Round((r.y+r.h)*dctx.scale)),
+	).Intersect(dctx.clip)
+	if clip.Empty() {
+		return
+	}
+	// Shrink r to the visible region so the sub-canvas allocation is bounded
+	// by the root canvas regardless of the node's own size.
+	x0 := math.Max(r.x, float64(clip.Min.X)/dctx.scale)
+	y0 := math.Max(r.y, float64(clip.Min.Y)/dctx.scale)
+	x1 := math.Min(r.x+r.w, float64(clip.Max.X)/dctx.scale)
+	y1 := math.Min(r.y+r.h, float64(clip.Max.Y)/dctx.scale)
+	r = nodeRect{x: x0, y: y0, w: x1 - x0, h: y1 - y0}
+
 	dpmm := dctx.dpmm
 	wPx := int(math.Round(r.w))
 	hPx := int(math.Round(r.h))
@@ -499,18 +522,6 @@ func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 	subCtx.SetCoordSystem(cv.CartesianIV)
 	subCtx.Translate(-xMM, -yMM)
 
-	// Bitmap glyphs and dither regions apply to the root image after
-	// quantization, so they are clipped to r's physical-pixel bounds rather
-	// than relying on the sub-canvas crop that confines vector content.
-	clip := image.Rect(
-		int(math.Round(r.x*dctx.scale)),
-		int(math.Round(r.y*dctx.scale)),
-		int(math.Round((r.x+r.w)*dctx.scale)),
-		int(math.Round((r.y+r.h)*dctx.scale)),
-	)
-	if !dctx.clip.Empty() {
-		clip = clip.Intersect(dctx.clip)
-	}
 	subDctx := &drawCtx{
 		ctx:   subCtx,
 		dpmm:  dpmm,
@@ -1319,14 +1330,21 @@ func (n *gridNode) finalizeRowHeights(availForRows float64, cellSizes []nodeSize
 
 // buildNode converts an exported Node into the internal node used by the
 // measure/layout/draw pipeline. parentDir is the layout direction of the
-// enclosing container, used to infer DividerNode orientation.
-func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
-	if n == nil {
+// enclosing container, used to infer DividerNode orientation. depth is the
+// nesting depth of n, bounded by maxNodeDepth.
+func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error) {
+	if depth > maxNodeDepth {
+		return nil, fmt.Errorf("demy: node tree nested deeper than %d", maxNodeDepth)
+	}
+	if isNilNode(n) {
 		return &spacerNode{weight: 0}, nil
 	}
 	switch v := n.(type) {
 	case *VStackNode:
-		children, err := buildNodes(v.Children, cfg, dirVertical)
+		if err := checkDims("VStack", dim{"gap", v.Gap}, dim{"padding", v.Padding}); err != nil {
+			return nil, err
+		}
+		children, err := buildNodes(v.Children, cfg, dirVertical, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -1337,7 +1355,10 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 			children: children,
 		}, nil
 	case *HStackNode:
-		children, err := buildNodes(v.Children, cfg, dirHorizontal)
+		if err := checkDims("HStack", dim{"gap", v.Gap}, dim{"padding", v.Padding}); err != nil {
+			return nil, err
+		}
+		children, err := buildNodes(v.Children, cfg, dirHorizontal, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -1348,13 +1369,20 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 			children: children,
 		}, nil
 	case *ZStackNode:
-		children, err := buildNodes(v.Children, cfg, dirVertical)
+		children, err := buildNodes(v.Children, cfg, dirVertical, depth+1)
 		if err != nil {
 			return nil, err
 		}
 		return &zstackNode{align: v.Align, children: children}, nil
 	case *BoxNode:
-		children, err := buildNodes(v.Children, cfg, dirVertical)
+		if err := checkDims("Box",
+			dim{"padding", v.Padding},
+			dim{"border width", v.BorderWidth},
+			dim{"corner radius", v.CornerRadius},
+		); err != nil {
+			return nil, err
+		}
+		children, err := buildNodes(v.Children, cfg, dirVertical, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -1374,18 +1402,27 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 			children:     children,
 		}, nil
 	case *FrameNode:
-		children, err := buildNodes(v.Children, cfg, dirVertical)
+		if err := checkDims("Frame", dim{"width", v.Width}, dim{"height", v.Height}); err != nil {
+			return nil, err
+		}
+		children, err := buildNodes(v.Children, cfg, dirVertical, depth+1)
 		if err != nil {
 			return nil, err
 		}
 		return &frameNode{w: v.Width, h: v.Height, children: children}, nil
 	case *SpacerNode:
+		if err := checkDims("Spacer", dim{"weight", v.Weight}); err != nil {
+			return nil, err
+		}
 		w := v.Weight
 		if w == 0 {
 			w = 1
 		}
 		return &spacerNode{weight: w}, nil
 	case *WeightedNode:
+		if err := checkDims("Weighted", dim{"weight", v.Weight}); err != nil {
+			return nil, err
+		}
 		w := v.Weight
 		if w == 0 {
 			w = 1
@@ -1393,7 +1430,7 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 		var child node
 		if v.Child != nil {
 			var err error
-			child, err = buildNode(v.Child, cfg, parentDir)
+			child, err = buildNode(v.Child, cfg, parentDir, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -1402,6 +1439,9 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 		}
 		return &weightedNode{weight: w, child: child}, nil
 	case *DividerNode:
+		if err := checkDims("Divider", dim{"size", v.Size}); err != nil {
+			return nil, err
+		}
 		clr := v.Color
 		if cfg != nil {
 			clr = resolveColor(clr, cfg.Roles)
@@ -1418,6 +1458,12 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 			}
 		}
 		style = mergeStyle(style, v.Style)
+		if err := checkDims("Text", dim{"size", style.Size}, dim{"line height", style.LineHeight}); err != nil {
+			return nil, err
+		}
+		if style.MaxLines < 0 {
+			return nil, fmt.Errorf("demy: Text max lines %d must not be negative", style.MaxLines)
+		}
 		if cfg != nil {
 			style.Color = resolveColor(style.Color, cfg.Roles)
 		}
@@ -1436,15 +1482,28 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 	case *BarcodeNode:
 		return &barcodeNode{content: v.Content, btype: v.Type, ecLevel: v.ECLevel}, nil
 	case *GridNode:
+		if err := checkDims("Grid",
+			dim{"row gap", v.RowGap},
+			dim{"column gap", v.ColGap},
+			dim{"padding", v.Padding},
+		); err != nil {
+			return nil, err
+		}
+		if err := checkTracks("column", v.Columns); err != nil {
+			return nil, err
+		}
+		if err := checkTracks("row", v.Rows); err != nil {
+			return nil, err
+		}
 		flat := make([]Node, 0, len(v.Children))
 		for _, child := range v.Children {
-			if row, ok := child.(*GridRowNode); ok {
+			if row, ok := child.(*GridRowNode); ok && row != nil {
 				flat = append(flat, row.Children...)
 			} else {
 				flat = append(flat, child)
 			}
 		}
-		children, err := buildNodes(flat, cfg, dirVertical)
+		children, err := buildNodes(flat, cfg, dirVertical, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -1456,19 +1515,63 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 			padding:  v.Padding,
 			children: children,
 		}, nil
+	case *GridRowNode:
+		return nil, errors.New("demy: GridRow must be a direct child of Grid")
 	default:
-		panic("demy: unknown node type")
+		return nil, fmt.Errorf("demy: unknown node type %T", n)
 	}
 }
 
+// maxDimension bounds every size, gap, and weight in a node tree so untrusted
+// scenes can't request unbounded allocations or overflow layout math.
+const maxDimension = 1 << 15
+
+// maxNodeDepth bounds node tree nesting so recursion in measure, layout, and
+// draw can't exhaust the stack.
+const maxNodeDepth = 1000
+
+type dim struct {
+	name string
+	v    float64
+}
+
+// checkDims reports an error if any value is NaN, infinite, negative, or
+// larger than maxDimension.
+func checkDims(kind string, dims ...dim) error {
+	for _, d := range dims {
+		if math.IsNaN(d.v) || d.v < 0 || d.v > maxDimension {
+			return fmt.Errorf("demy: %s %s %v out of range [0, %d]", kind, d.name, d.v, maxDimension)
+		}
+	}
+	return nil
+}
+
+func checkTracks(kind string, tracks []GridTrack) error {
+	for _, t := range tracks {
+		if err := checkDims("Grid", dim{kind + " size", t.size}, dim{kind + " weight", t.weight}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isNilNode reports whether n is nil or a typed nil pointer.
+func isNilNode(n Node) bool {
+	if n == nil {
+		return true
+	}
+	v := reflect.ValueOf(n)
+	return v.Kind() == reflect.Pointer && v.IsNil()
+}
+
 // buildNodes converts a slice of exported Nodes, skipping nil entries.
-func buildNodes(nodes []Node, cfg *Config, parentDir layoutDir) ([]node, error) {
+func buildNodes(nodes []Node, cfg *Config, parentDir layoutDir, depth int) ([]node, error) {
 	result := make([]node, 0, len(nodes))
 	for _, n := range nodes {
-		if n == nil {
+		if isNilNode(n) {
 			continue
 		}
-		built, err := buildNode(n, cfg, parentDir)
+		built, err := buildNode(n, cfg, parentDir, depth)
 		if err != nil {
 			return nil, err
 		}

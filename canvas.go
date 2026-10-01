@@ -121,7 +121,7 @@ func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, []textBlit, e
 	ctx := cv.NewContext(cvs)
 	ctx.SetCoordSystem(cv.CartesianIV)
 
-	internal, err := buildNode(root, &c.cfg, dirVertical)
+	internal, err := buildNode(root, &c.cfg, dirVertical, 0)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -154,6 +154,7 @@ func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, []textBlit, e
 		scale: c.scale,
 		roles: c.Roles,
 		fonts: c.cfg.Fonts,
+		clip:  image.Rect(0, 0, c.cfg.PixelWidth, c.cfg.PixelHeight),
 	}
 	internal.draw(dctx)
 	return cvs, dctx.ditherRegions, dctx.textBlits, nil

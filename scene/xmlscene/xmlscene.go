@@ -425,8 +425,12 @@ func appendStyleAttrs(start *xml.StartElement, s demy.Style) {
 
 // unmarshalCtx carries per-parse state for resolving physical unit suffixes.
 // dpmm is 0 when the Config lacks physical dimensions.
+// maxDepth bounds element nesting so deeply nested input can't exhaust the stack.
+const maxDepth = 1000
+
 type unmarshalCtx struct {
-	dpmm float64
+	dpmm  float64
+	depth int // element nesting depth
 }
 
 func newUnmarshalCtx(cfg demy.Config) unmarshalCtx {
@@ -465,6 +469,10 @@ func parseDim(s string, dpmm float64) float64 {
 // --- unmarshal ---
 
 func unmarshalElement(dec *xml.Decoder, start xml.StartElement, uctx unmarshalCtx) (demy.Node, error) {
+	uctx.depth++
+	if uctx.depth > maxDepth {
+		return nil, fmt.Errorf("xmlscene: elements nested deeper than %d", maxDepth)
+	}
 	attrs := attrMap(start.Attr)
 	switch start.Name.Local {
 	case "vstack":

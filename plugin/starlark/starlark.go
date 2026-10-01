@@ -23,8 +23,12 @@
 //	        // ... use ctx to call a remote service ...
 //	    },
 //	})
-//	p, err := env.Load("display.star", cfg, time.Local)
+//	p, err := env.Load(ctx, "display.star", cfg, time.Local)
 //	node, err := p.Render(r.Context(), data)
+//
+// Module execution and each Render call are limited to Environment.MaxSteps
+// Starlark execution steps (DefaultMaxSteps when zero) and are cancelled when
+// their context is done. print() output goes to Environment.Logger.
 //
 // Exposed globals:
 //
@@ -64,6 +68,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"log/slog"
 	"maps"
 	"strconv"
 	"strings"
@@ -81,9 +86,18 @@ import (
 // Use ContextFromThread(thread) to retrieve the context.Context passed to Render.
 type BuiltinFunc func(thread *sl.Thread, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error)
 
+// DefaultMaxSteps is the execution step limit used when Environment.MaxSteps is zero.
+const DefaultMaxSteps = 10_000_000
+
 // Environment holds user-registered globals merged into the Starlark execution
 // environment when a script is compiled. Its zero value is valid (no extra globals).
 type Environment struct {
+	// MaxSteps limits Starlark execution steps for module execution and for each
+	// Render call. Zero means DefaultMaxSteps.
+	MaxSteps uint64
+	// Logger receives script print() output. Nil means slog.Default().
+	Logger *slog.Logger
+
 	extras sl.StringDict
 }
 
@@ -124,16 +138,43 @@ func (e *Environment) AddModule(name string, fns map[string]BuiltinFunc) *Enviro
 	return e
 }
 
-// Load compiles the Starlark script at path.
+// Load compiles and executes the Starlark script at path.
 // loc sets the timezone used by the now() builtin; nil defaults to UTC.
-func (e *Environment) Load(path string, cfg demy.Config, loc *time.Location) (*Plugin, error) {
-	return execFile(path, nil, cfg, loc, e.extras)
+func (e *Environment) Load(ctx context.Context, path string, cfg demy.Config, loc *time.Location) (*Plugin, error) {
+	return e.execFile(ctx, path, nil, cfg, loc)
 }
 
-// LoadBytes compiles src as a Starlark script named filename.
+// LoadBytes compiles and executes src as a Starlark script named filename.
 // loc sets the timezone used by the now() builtin; nil defaults to UTC.
-func (e *Environment) LoadBytes(filename string, src []byte, cfg demy.Config, loc *time.Location) (*Plugin, error) {
-	return execFile(filename, src, cfg, loc, e.extras)
+func (e *Environment) LoadBytes(ctx context.Context, filename string, src []byte, cfg demy.Config, loc *time.Location) (*Plugin, error) {
+	return e.execFile(ctx, filename, src, cfg, loc)
+}
+
+// newThread returns a thread limited to the environment's step budget whose
+// print() output goes to the environment's logger. The returned stop function
+// must be called when execution finishes; until then, ctx being done cancels
+// the thread.
+func (e *Environment) newThread(ctx context.Context, name string) (*sl.Thread, func() bool) {
+	logger := e.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	maxSteps := e.MaxSteps
+	if maxSteps == 0 {
+		maxSteps = DefaultMaxSteps
+	}
+	thread := &sl.Thread{
+		Name: name,
+		Print: func(t *sl.Thread, msg string) {
+			logger.InfoContext(ContextFromThread(t), msg, "script", name)
+		},
+	}
+	thread.SetMaxExecutionSteps(maxSteps)
+	thread.SetLocal(contextKey, ctx)
+	stop := context.AfterFunc(ctx, func() {
+		thread.Cancel(context.Cause(ctx).Error())
+	})
+	return thread, stop
 }
 
 // contextKey is the thread-local key holding the context.Context passed to Render.
@@ -173,25 +214,31 @@ func UnwrapNode(v sl.Value) (demy.Node, bool) {
 
 // Plugin is a compiled Starlark script that exports a render(data) function.
 type Plugin struct {
+	env          *Environment
+	name         string
 	globals      sl.StringDict
 	scriptStyles map[string]demy.Style
 }
 
-func execFile(filename string, src any, cfg demy.Config, loc *time.Location, extras sl.StringDict) (*Plugin, error) {
+func (e *Environment) execFile(ctx context.Context, filename string, src any, cfg demy.Config, loc *time.Location) (*Plugin, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if loc == nil {
 		loc = time.UTC
 	}
 	env := newEnv(cfg, loc)
-	maps.Copy(env, extras)
-	thread := &sl.Thread{Name: filename}
+	maps.Copy(env, e.extras)
+	thread, stop := e.newThread(ctx, filename)
 	globals, err := sl.ExecFileOptions(&syntax.FileOptions{}, thread, filename, src, env)
+	stop()
 	if err != nil {
 		return nil, fmt.Errorf("starlarkplugin: load %s: %w", filename, err)
 	}
 	if _, ok := globals["render"]; !ok {
 		return nil, fmt.Errorf("starlarkplugin: %s must define render(data)", filename)
 	}
-	p := &Plugin{globals: globals}
+	p := &Plugin{env: e, name: filename, globals: globals}
 	if sv, ok := globals["styles"]; ok {
 		if d, ok := sv.(*sl.Dict); ok {
 			scriptStyles := make(map[string]demy.Style, d.Len())
@@ -222,7 +269,8 @@ func (p *Plugin) Styles() map[string]demy.Style {
 }
 
 // Render calls the script's render(data) and returns the root Node tree.
-// ctx is propagated to user-provided builtins via ContextFromThread.
+// ctx is propagated to user-provided builtins via ContextFromThread, and
+// cancels the script when done.
 func (p *Plugin) Render(ctx context.Context, data map[string]any) (demy.Node, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -231,8 +279,8 @@ func (p *Plugin) Render(ctx context.Context, data map[string]any) (demy.Node, er
 	if err != nil {
 		return nil, fmt.Errorf("starlarkplugin: %w", err)
 	}
-	thread := &sl.Thread{Name: "render"}
-	thread.SetLocal(contextKey, ctx)
+	thread, stop := p.env.newThread(ctx, p.name)
+	defer stop()
 	result, err := sl.Call(thread, p.globals["render"], sl.Tuple{d}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("starlarkplugin: render: %w", err)

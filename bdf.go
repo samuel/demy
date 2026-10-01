@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // bitmapGlyph is one rendered character: a 1-bit mask plus placement metrics.
@@ -60,6 +61,10 @@ func (f *bitmapFont) glyph(r rune) (bitmapGlyph, bool) {
 	return bitmapGlyph{}, false
 }
 
+// maxBDFGlyphSize bounds glyph bounding boxes so malformed fonts can't
+// request huge allocations.
+const maxBDFGlyphSize = 4096
+
 // parseBDF parses the subset of the Adobe BDF format that demy needs: the font
 // bounding box, ascent/descent and default-char properties, and each glyph's
 // encoding, advance, bounding box, and bitmap rows. Unknown keywords are ignored.
@@ -78,6 +83,7 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 		inBitmap  bool
 		enc       rune
 		dwidth    int
+		hasDWidth bool
 		gw, gh    int
 		gxoff     int
 		gyoff     int
@@ -87,7 +93,7 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 
 	resetGlyph := func() {
 		inChar, inBitmap = false, false
-		enc, dwidth = -1, 0
+		enc, dwidth, hasDWidth = -1, 0, false
 		gw, gh, gxoff, gyoff = 0, 0, 0, 0
 		rows = nil
 		bytesWide = 0
@@ -105,6 +111,11 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 		if inBitmap {
 			if strings.HasPrefix(line, "ENDCHAR") {
 				if enc >= 0 {
+					// Pad missing rows so every mask row is addressable.
+					rows = append(rows, make([]byte, gh*bytesWide-len(rows))...)
+					if !hasDWidth {
+						dwidth = gw
+					}
 					f.glyphs[enc] = bitmapGlyph{
 						width:   gw,
 						height:  gh,
@@ -116,6 +127,9 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 				}
 				resetGlyph()
 				continue
+			}
+			if len(rows) >= gh*bytesWide {
+				continue // ignore rows beyond the bounding box
 			}
 			row, err := parseHexRow(line, bytesWide)
 			if err != nil {
@@ -146,7 +160,7 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 			}
 		case "DEFAULT_CHAR":
 			if len(fields) >= 2 {
-				f.defaultChar = rune(atoiOr(fields[1], -1))
+				f.defaultChar = toRune(atoiOr(fields[1], -1))
 			}
 		case "STARTCHAR":
 			resetGlyph()
@@ -158,6 +172,7 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 		case "DWIDTH":
 			if inChar && len(fields) >= 2 {
 				dwidth = atoiOr(fields[1], 0)
+				hasDWidth = true
 			}
 		case "BBX":
 			if inChar && len(fields) >= 5 {
@@ -165,6 +180,9 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 				gh = atoiOr(fields[2], 0)
 				gxoff = atoiOr(fields[3], 0)
 				gyoff = atoiOr(fields[4], 0)
+				if gw < 0 || gh < 0 || gw > maxBDFGlyphSize || gh > maxBDFGlyphSize {
+					return nil, fmt.Errorf("bdf: glyph bounding box %dx%d out of range [0, %d]", gw, gh, maxBDFGlyphSize)
+				}
 				bytesWide = (gw + 7) / 8
 			}
 		case "BITMAP":
@@ -175,6 +193,9 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("bdf: read: %w", err)
+	}
+	if inChar {
+		return nil, errors.New("bdf: missing ENDCHAR at end of file")
 	}
 
 	if len(f.glyphs) == 0 {
@@ -194,6 +215,9 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 	f.lineHeight = f.ascent + f.descent
 	if f.lineHeight <= 0 {
 		f.lineHeight = bbHeight
+	}
+	if f.lineHeight <= 0 || f.lineHeight > maxBDFGlyphSize {
+		return nil, fmt.Errorf("bdf: line height %d out of range [1, %d]", f.lineHeight, maxBDFGlyphSize)
 	}
 	f.pixelSize = f.lineHeight
 
@@ -220,12 +244,23 @@ func parseEncoding(fields []string) rune {
 	if v < 0 && len(fields) >= 3 {
 		v = atoiOr(fields[2], -1)
 	}
+	return toRune(v)
+}
+
+// toRune converts v to a rune, returning -1 when it isn't a valid codepoint.
+func toRune(v int) rune {
+	if v < 0 || v > unicode.MaxRune {
+		return -1
+	}
 	return rune(v)
 }
 
 // parseHexRow decodes one BITMAP line into at most bytesWide bytes.
 func parseHexRow(line string, bytesWide int) ([]byte, error) {
 	line = strings.TrimSpace(line)
+	if len(line)%2 != 0 {
+		return nil, errors.New("odd number of hex digits")
+	}
 	out := make([]byte, 0, bytesWide)
 	for i := 0; i+1 < len(line) && len(out) < bytesWide; i += 2 {
 		b, err := strconv.ParseUint(line[i:i+2], 16, 8)

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"image/png"
 	"io"
@@ -37,7 +39,13 @@ type lesson struct {
 	SceneXML string `json:"scene_xml"`
 }
 
+// maxBodyBytes bounds the size of a posted scene.
+const maxBodyBytes = 1 << 20
+
 func main() {
+	addr := flag.String("addr", "127.0.0.1:8081", "listen address")
+	flag.Parse()
+
 	font := demy.MustLoadFontBytes("sans", goregular.TTF)
 	baseCfg = demy.TRMNLOriginal
 	baseCfg.Fonts = map[string]*demy.FontFamily{
@@ -51,15 +59,18 @@ func main() {
 	mux.HandleFunc("GET /lessons", lessonsHandler)
 	mux.HandleFunc("POST /render", renderHandler)
 
-	const addr = ":8081"
+	// Reject cross-origin POSTs so other web pages can't drive /render.
+	handler := http.NewCrossOriginProtection().Handler(mux)
 	srv := &http.Server{
-		Addr:           addr,
-		Handler:        requestLogger(mux),
-		ReadTimeout:    30 * time.Second,
-		WriteTimeout:   30 * time.Second,
-		MaxHeaderBytes: 1 << 20,
+		Addr:              *addr,
+		Handler:           requestLogger(handler),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
-	slog.Info("demy-tutorial listening", "addr", addr, "url", "http://localhost"+addr)
+	slog.Info("demy-tutorial listening", "addr", *addr, "url", "http://"+*addr)
 	log.Fatal(srv.ListenAndServe())
 }
 
@@ -83,9 +94,13 @@ func lessonsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func renderHandler(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		writeJSONError(w, fmt.Errorf("reading body: %w", err), http.StatusBadRequest)
+		status := http.StatusBadRequest
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSONError(w, fmt.Errorf("reading body: %w", err), status)
 		return
 	}
 

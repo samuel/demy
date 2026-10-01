@@ -1,10 +1,11 @@
 package demy
 
 import (
-	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
+	"math"
 
 	cv "github.com/tdewolff/canvas"
 )
@@ -64,7 +65,9 @@ func applyBlits(dst draw.Image, blits []textBlit) {
 	}
 }
 
-// Canvas renders Node trees for a display Config. It holds no per-render state.
+// Canvas renders Node trees for a display Config. It holds no per-render state,
+// so Render may be called from multiple goroutines, including with fonts shared
+// between Canvases.
 //
 // Layout dimensions are in logical pixels and font sizes in points; the scale
 // factor maps logical to physical pixels. The origin is the top-left corner
@@ -76,14 +79,21 @@ type Canvas struct {
 	scale        float64
 }
 
-// New creates a Canvas for cfg. It returns an error if cfg has zero physical or
-// pixel dimensions.
+// maxPixelDimension bounds Config.PixelWidth and PixelHeight.
+const maxPixelDimension = 1 << 14
+
+// New creates a Canvas for cfg. It returns an error unless the pixel dimensions
+// are in [1, 16384], the physical dimensions are finite and positive, and Scale
+// is finite and non-negative (0 selects it automatically).
 func New(cfg Config) (*Canvas, error) {
-	if cfg.PhysicalWidthMM == 0 || cfg.PhysicalHeightMM == 0 {
-		return nil, errors.New("demy: Config must have non-zero physical dimensions")
+	if cfg.PixelWidth <= 0 || cfg.PixelHeight <= 0 || cfg.PixelWidth > maxPixelDimension || cfg.PixelHeight > maxPixelDimension {
+		return nil, fmt.Errorf("demy: Config pixel dimensions %dx%d out of range [1, %d]", cfg.PixelWidth, cfg.PixelHeight, maxPixelDimension)
 	}
-	if cfg.PixelWidth == 0 || cfg.PixelHeight == 0 {
-		return nil, errors.New("demy: Config must have non-zero pixel dimensions")
+	if !positiveFinite(cfg.PhysicalWidthMM) || !positiveFinite(cfg.PhysicalHeightMM) {
+		return nil, fmt.Errorf("demy: Config physical dimensions %vx%v mm must be positive", cfg.PhysicalWidthMM, cfg.PhysicalHeightMM)
+	}
+	if cfg.Scale < 0 || math.IsNaN(cfg.Scale) || math.IsInf(cfg.Scale, 0) {
+		return nil, fmt.Errorf("demy: Config.Scale %v must be finite and non-negative", cfg.Scale)
 	}
 	scale := cfg.EffectiveScale()
 	return &Canvas{
@@ -93,6 +103,8 @@ func New(cfg Config) (*Canvas, error) {
 		scale:        scale,
 	}, nil
 }
+
+func positiveFinite(v float64) bool { return v > 0 && !math.IsInf(v, 1) }
 
 // Scale returns the display scale factor (logical pixels to physical pixels).
 func (c *Canvas) Scale() float64 { return c.scale }

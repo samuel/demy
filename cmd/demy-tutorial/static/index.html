@@ -394,9 +394,17 @@
     render();
   }
 
+  // The in-flight render, aborted when a newer one starts so a slow response
+  // can't overwrite a newer preview.
+  let renderController = null;
+
   async function render() {
     const code = document.getElementById('code-editor').value.trim();
     if (!code) return;
+
+    if (renderController) renderController.abort();
+    const controller = new AbortController();
+    renderController = controller;
 
     const mode = document.getElementById('mode-select').value;
     const dither = document.getElementById('dither-select').value;
@@ -410,6 +418,7 @@
       const res = await fetch('/render?mode=' + encodeURIComponent(mode) + '&dither=' + encodeURIComponent(dither), {
         method: 'POST',
         body: code,
+        signal: controller.signal,
       });
 
       const img = document.getElementById('preview-img');
@@ -432,10 +441,14 @@
         showError(msg);
       }
     } catch (e) {
-      showError('Network error: ' + e.message);
+      if (e.name !== 'AbortError') showError('Network error: ' + e.message);
     } finally {
-      btn.disabled = false;
-      loading.classList.remove('visible');
+      // Only the latest render owns the button and loading indicator.
+      if (renderController === controller) {
+        renderController = null;
+        btn.disabled = false;
+        loading.classList.remove('visible');
+      }
     }
   }
 

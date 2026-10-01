@@ -83,3 +83,29 @@ func TestNodeDepthLimit(t *testing.T) {
 		t.Fatalf("err = %v, want nesting error", err)
 	}
 }
+
+func TestNewValidatesConfig(t *testing.T) {
+	ok := demy.Config{PixelWidth: 10, PixelHeight: 10, PhysicalWidthMM: 10, PhysicalHeightMM: 10}
+	if _, err := demy.New(ok); err != nil {
+		t.Fatalf("valid config: %v", err)
+	}
+	tests := map[string]func(*demy.Config){
+		"zero width":      func(c *demy.Config) { c.PixelWidth = 0 },
+		"negative height": func(c *demy.Config) { c.PixelHeight = -1 },
+		"huge width":      func(c *demy.Config) { c.PixelWidth = 1 << 20 },
+		"negative mm":     func(c *demy.Config) { c.PhysicalWidthMM = -10 },
+		"nan mm":          func(c *demy.Config) { c.PhysicalHeightMM = math.NaN() },
+		"inf mm":          func(c *demy.Config) { c.PhysicalWidthMM = math.Inf(1) },
+		"negative scale":  func(c *demy.Config) { c.Scale = -1 },
+		"nan scale":       func(c *demy.Config) { c.Scale = math.NaN() },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := ok
+			mutate(&cfg)
+			if _, err := demy.New(cfg); err == nil {
+				t.Error("expected error")
+			}
+		})
+	}
+}

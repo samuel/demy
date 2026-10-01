@@ -222,3 +222,58 @@ func TestNowHook(t *testing.T) {
 		t.Errorf("now = %q", got)
 	}
 }
+
+func TestImageKeyAndBarcode(t *testing.T) {
+	src := `def render(d): return VStack(
+    ImageKey("logo", ImageFill, Atkinson),
+    Barcode("https://example.com", ECLevelHigh),
+)`
+	n, err := run(t, &starlarkplugin.Environment{}, testCfg(), src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vs := n.(*demy.VStackNode) //nolint:forcetypeassert // test
+	img, ok := vs.Children[0].(*demy.ImageNode)
+	if !ok || img.Key != "logo" || img.Scale != demy.ImageFill || img.Dither != demy.Atkinson {
+		t.Errorf("image = %#v", vs.Children[0])
+	}
+	bc, ok := vs.Children[1].(*demy.BarcodeNode)
+	if !ok || bc.Content != "https://example.com" || bc.ECLevel != demy.ECLevelHigh {
+		t.Errorf("barcode = %#v", vs.Children[1])
+	}
+	for _, expr := range []string{`ImageKey(1)`, `ImageKey("k", "fill")`, `Barcode(1)`, `Barcode("x", Gap)`} {
+		if _, err := run(t, &starlarkplugin.Environment{}, testCfg(), "def render(d): return "+expr, nil); err == nil {
+			t.Errorf("%s: expected error", expr)
+		}
+	}
+}
+
+// TestConcurrentRender renders one plugin from many goroutines; run with -race.
+func TestConcurrentRender(t *testing.T) {
+	src := `
+HEADER = Text("header")
+def render(d):
+    rows = [Text(k + "=" + str(v)) for k, v in d.items()]
+    return VStack(HEADER, Children(rows))
+`
+	p, err := (&starlarkplugin.Environment{}).LoadBytes(t.Context(), "t.star", []byte(src), testCfg(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := demy.MustNew(testCfg())
+	errs := make(chan error, 8)
+	for i := range 8 {
+		go func() {
+			n, err := p.Render(t.Context(), map[string]any{"i": i, "name": "x"})
+			if err == nil {
+				_, err = c.Render(n, demy.Grayscale)
+			}
+			errs <- err
+		}()
+	}
+	for range 8 {
+		if err := <-errs; err != nil {
+			t.Error(err)
+		}
+	}
+}

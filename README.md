@@ -20,6 +20,7 @@ A declarative rendering library for e-ink and similar displays.
 ```go
 import (
     "image/png"
+    "log"
     "os"
 
     "github.com/samuel/demy"
@@ -187,7 +188,7 @@ They are loaded into `Config.Fonts` and referenced by name like vector fonts:
 ```go
 px := demy.MustLoadBitmapFontBDF("pixel", spleenBDF) // or LoadBitmapFontBDFFile
 err := px.AddStyleBDF(spleenBoldBDF, demy.FontBold)
-cfg.Fonts["pixel"] = px
+cfg.Fonts = map[string]*demy.FontFamily{"pixel": px} // or add to an existing map
 
 demy.Text("Crisp pixels", demy.Style{Font: "pixel"})
 ```
@@ -244,7 +245,9 @@ img, err := c.Render(root, demy.TwoBit, demy.Atkinson) // dither the whole scene
 `Render` returns an `*image.RGBA` for `RGBA` and an `*image.Gray` otherwise, with quantized modes
 snapped to the palette's gray levels. Encode it with `image/png` or any other encoder.
 Translucent pixels (e.g. a translucent `Roles.Background`) are composited over white when
-converting to grayscale.
+converting to grayscale. `Render` is safe to call from multiple goroutines, and fonts can be
+shared between canvases. `New` rejects pixel dimensions outside 1–16384, non-positive physical
+dimensions, and a negative `Scale`.
 
 A typical dashboard renders in about 10 ms on TRMNL Original and 40 ms on TRMNL X
 (`go test -bench RenderDashboard`, Apple M-series).
@@ -388,5 +391,6 @@ Globals:
 go run ./cmd/demy-tutorial/
 ```
 
-Serves an interactive tutorial at http://127.0.0.1:8081. Use `-addr` to change the listen
+Serves an interactive tutorial at http://127.0.0.1:8081. Lessons are XML scenes edited and
+rendered live in the browser. Use `-addr` to change the listen
 address.

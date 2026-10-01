@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"math"
 	"os"
+	"sync"
 
 	cv "github.com/tdewolff/canvas"
 )
@@ -68,11 +69,24 @@ func (s FontStyle) cvStyle() cv.FontStyle {
 // FontFamily holds the weight/style variants of one font family. A family is
 // either a vector family (TTF/OTF) or a bitmap family (BDF); the two cannot be
 // mixed. Text references a family by its key in Config.Fonts.
+//
+// A FontFamily may be shared by concurrent renders.
 type FontFamily struct {
 	name   string
 	family *cv.FontFamily // nil for bitmap families
 	// bitmap holds one font per style; non-nil marks a bitmap family.
 	bitmap map[FontStyle]*bitmapFont
+
+	// shapeMu serializes text shaping, whose glyph caches in go-text aren't
+	// safe for concurrent use.
+	shapeMu sync.Mutex
+}
+
+// shape runs fn, which lays out text in this family, holding the shaping lock.
+func (ff *FontFamily) shape(fn func() *cv.Text) *cv.Text {
+	ff.shapeMu.Lock()
+	defer ff.shapeMu.Unlock()
+	return fn()
 }
 
 // isBitmap reports whether this is a bitmap (pixel) font family.

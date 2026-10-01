@@ -720,7 +720,7 @@ func (n *textNode) measureUncached(mctx *measureCtx) nodeSize {
 		clr = Black
 	}
 	face := ff.family.Face(n.style.Size, clr, n.style.Weight.cvStyle())
-	tb := n.textBox(face, mctx.availW/mctx.dpmm)
+	tb := ff.shape(func() *cv.Text { return n.textBox(face, mctx.availW/mctx.dpmm) })
 	return nodeSize{w: tb.Width * mctx.dpmm, h: tb.Height * mctx.dpmm}
 }
 
@@ -785,7 +785,7 @@ func (n *textNode) draw(dctx *drawCtx) {
 	face := ff.family.Face(n.style.Size, clr, n.style.Weight.cvStyle())
 	// The laid-out width is often exactly the measured width; the epsilon
 	// absorbs the float round trip so lines don't break differently than measured.
-	tb := n.textBox(face, n.bounds.w/dctx.dpmm+1e-6)
+	tb := ff.shape(func() *cv.Text { return n.textBox(face, n.bounds.w/dctx.dpmm+1e-6) })
 	xMM := n.bounds.x / dctx.dpmm
 	yMM := n.bounds.y / dctx.dpmm
 	dctx.ctx.DrawText(xMM, yMM, tb)

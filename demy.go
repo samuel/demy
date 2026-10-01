@@ -623,7 +623,8 @@ const (
 )
 
 // BarcodeNode renders a barcode. The Barcode constructor defaults to
-// BarcodeTypeQR with ECLevelMedium.
+// BarcodeTypeQR with ECLevelMedium. Rendering fails if the barcode's space is
+// too small for one physical pixel per module.
 type BarcodeNode struct {
 	Content string
 	Type    BarcodeType
@@ -753,14 +754,14 @@ type gapOpt float64
 func (gapOpt) demyOption() {}
 
 // Gap sets the spacing between children of a stack or grid, in logical pixels.
-func Gap(px float64) gapOpt { return gapOpt(px) }
+func Gap(px float64) Option { return gapOpt(px) }
 
 type paddingOpt float64
 
 func (paddingOpt) demyOption() {}
 
 // Padding sets the inset of a stack, box, or grid, in logical pixels.
-func Padding(px float64) paddingOpt { return paddingOpt(px) }
+func Padding(px float64) Option { return paddingOpt(px) }
 
 type borderOpt struct {
 	width float64
@@ -770,28 +771,28 @@ type borderOpt struct {
 func (borderOpt) demyOption() {}
 
 // Border sets a Box border.
-func Border(width float64, c color.Color) borderOpt { return borderOpt{width, c} }
+func Border(width float64, c color.Color) Option { return borderOpt{width, c} }
 
 type backgroundOpt struct{ color color.Color }
 
 func (backgroundOpt) demyOption() {}
 
 // Background sets a Box fill color.
-func Background(c color.Color) backgroundOpt { return backgroundOpt{c} }
+func Background(c color.Color) Option { return backgroundOpt{c} }
 
 type cornerRadiusOpt float64
 
 func (cornerRadiusOpt) demyOption() {}
 
 // CornerRadius sets a Box corner radius, in logical pixels.
-func CornerRadius(px float64) cornerRadiusOpt { return cornerRadiusOpt(px) }
+func CornerRadius(px float64) Option { return cornerRadiusOpt(px) }
 
 type clipOpt struct{}
 
 func (clipOpt) demyOption() {}
 
 // Clip clips a Box's children to its bounds.
-var Clip = clipOpt{} //nolint:gochecknoglobals
+var Clip Option = clipOpt{} //nolint:gochecknoglobals
 
 type columnsOpt []GridTrack
 
@@ -810,16 +811,16 @@ type colGapOpt float64
 func (colGapOpt) demyOption() {}
 
 // Columns sets the column tracks of a Grid.
-func Columns(tracks ...GridTrack) columnsOpt { return columnsOpt(tracks) }
+func Columns(tracks ...GridTrack) Option { return columnsOpt(tracks) }
 
 // Rows sets the row tracks of a Grid.
-func Rows(tracks ...GridTrack) rowsOpt { return rowsOpt(tracks) }
+func Rows(tracks ...GridTrack) Option { return rowsOpt(tracks) }
 
 // RowGap sets the spacing between Grid rows, in logical pixels.
-func RowGap(px float64) rowGapOpt { return rowGapOpt(px) }
+func RowGap(px float64) Option { return rowGapOpt(px) }
 
 // ColGap sets the spacing between Grid columns, in logical pixels.
-func ColGap(px float64) colGapOpt { return colGapOpt(px) }
+func ColGap(px float64) Option { return colGapOpt(px) }
 
 type childrenOpt []Node
 
@@ -832,7 +833,7 @@ func (childrenOpt) demyOption() {}
 // Nil children, including typed nil pointers such as a nil *TextNode, are
 // skipped when the tree is rendered, in every container. In a Grid a skipped
 // child takes no cell, so later children move up one cell.
-func Children(nodes ...Node) childrenOpt { return childrenOpt(nodes) }
+func Children(nodes ...Node) Option { return childrenOpt(nodes) }
 
 // appendChildren appends opts that are Node or childrenOpt values to dst.
 func appendChildren(dst []Node, opts []Option) []Node {

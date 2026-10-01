@@ -223,6 +223,24 @@ func TestNowHook(t *testing.T) {
 	}
 }
 
+func TestTimeFormatArgs(t *testing.T) {
+	tests := map[string]string{
+		"keyword":      `now().format(layout="2006")`,
+		"extra kwarg":  `now().format("2006", x=1)`,
+		"no args":      `now().format()`,
+		"two args":     `now().format("2006", "01")`,
+		"not a string": `now().format(2006)`,
+	}
+	for name, expr := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := run(t, &starlarkplugin.Environment{}, testCfg(), "def render(d): return Text("+expr+")", nil)
+			if err == nil || !strings.Contains(err.Error(), "format: ") {
+				t.Fatalf("err = %v, want an error prefixed with format:", err)
+			}
+		})
+	}
+}
+
 func TestImageKeyAndBarcode(t *testing.T) {
 	src := `def render(d): return VStack(
     ImageKey("logo", ImageFill, Atkinson),

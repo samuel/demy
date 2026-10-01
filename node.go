@@ -1169,7 +1169,10 @@ func (n *barcodeNode) draw(dctx *drawCtx) {
 		int(math.Round((n.bounds.x+n.bounds.w)*dctx.scale)),
 		int(math.Round((n.bounds.y+n.bounds.h)*dctx.scale)),
 	)
+	// A barcode that can't be drawn fails the render rather than being
+	// skipped, since a missing code breaks the display as much as a bad one.
 	if px.Empty() {
+		dctx.setErr(fmt.Errorf("demy: barcode has no space (%dx%d pixels)", px.Dx(), px.Dy()))
 		return
 	}
 	scaled, err := barcode.Scale(n.code, px.Dx(), px.Dy())

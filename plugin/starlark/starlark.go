@@ -408,8 +408,8 @@ func newEnv(cfg demy.Config, loc *time.Location, now func() time.Time) sl.String
 		// Grid layout options
 		"Columns": positional("Columns", tracksOpt(demy.Columns)),
 		"Rows":    positional("Rows", tracksOpt(demy.Rows)),
-		"RowGap":  positional("RowGap", numberOpt(func(v float64) demy.Option { return demy.RowGap(v) })),
-		"ColGap":  positional("ColGap", numberOpt(func(v float64) demy.Option { return demy.ColGap(v) })),
+		"RowGap":  positional("RowGap", numberOpt(demy.RowGap)),
+		"ColGap":  positional("ColGap", numberOpt(demy.ColGap)),
 		// Widget constructors
 		"Text":     positional("Text", builtinText),
 		"Class":    positional("Class", builtinClass),
@@ -424,9 +424,9 @@ func newEnv(cfg demy.Config, loc *time.Location, now func() time.Time) sl.String
 			return v, nil
 		}),
 		// Option constructors
-		"Gap":          positional("Gap", numberOpt(func(v float64) demy.Option { return demy.Gap(v) })),
-		"Padding":      positional("Padding", numberOpt(func(v float64) demy.Option { return demy.Padding(v) })),
-		"CornerRadius": positional("CornerRadius", numberOpt(func(v float64) demy.Option { return demy.CornerRadius(v) })),
+		"Gap":          positional("Gap", numberOpt(demy.Gap)),
+		"Padding":      positional("Padding", numberOpt(demy.Padding)),
+		"CornerRadius": positional("CornerRadius", numberOpt(demy.CornerRadius)),
 		"Background":   positional("Background", builtinBackground),
 		"Border":       positional("Border", builtinBorder),
 		"Children":     positional("Children", builtinChildren),
@@ -549,7 +549,7 @@ func trackOf(ctor func(float64) demy.GridTrack, what string) func(sl.Tuple) (sl.
 	}
 }
 
-func tracksOpt[O demy.Option](ctor func(...demy.GridTrack) O) func(sl.Tuple) (sl.Value, error) {
+func tracksOpt(ctor func(...demy.GridTrack) demy.Option) func(sl.Tuple) (sl.Value, error) {
 	return func(args sl.Tuple) (sl.Value, error) {
 		tracks, err := parseTracks(args)
 		if err != nil {
@@ -972,16 +972,16 @@ func (v *timeValue) Attr(name string) (sl.Value, error) {
 	case "timezone":
 		return sl.String(v.t.Location().String()), nil
 	case "format":
-		tv := v
-		return sl.NewBuiltin("format", func(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
+		t := v.t
+		return positional("format", func(args sl.Tuple) (sl.Value, error) {
 			if len(args) != 1 {
-				return nil, errors.New("format: expected 1 argument")
+				return nil, fmt.Errorf("expected 1 argument (layout), got %d", len(args))
 			}
-			layout, ok := args[0].(sl.String)
-			if !ok {
-				return nil, fmt.Errorf("format: layout must be a string, got %s", args[0].Type())
+			layout, err := toString("layout", args[0])
+			if err != nil {
+				return nil, err
 			}
-			return sl.String(tv.t.Format(string(layout))), nil
+			return sl.String(t.Format(layout)), nil
 		}), nil
 	}
 	return nil, nil

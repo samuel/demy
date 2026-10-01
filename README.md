@@ -243,7 +243,9 @@ demy.Frame(200, 200,
 
 A barcode fills its allocated space, scaled by a whole number of physical pixels per module and
 centered, so modules stay sharp at any display scale. Content that can't be encoded, or a space
-too small for one pixel per module, is a render error. `BarcodeTypeQR` is the only (and default) type. Error
+too small for one pixel per module (including no space at all), is a render error rather than a
+silently missing code. A barcode inside a `Frame` or clipped `Box` that is clipped away
+entirely isn't drawn, like any other clipped content. `BarcodeTypeQR` is the only (and default) type. Error
 correction levels: `ECLevelLow` (~7%), `ECLevelMedium` (~15%, default), `ECLevelQuartile` (~25%),
 `ECLevelHigh` (~30%).
 

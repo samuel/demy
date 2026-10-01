@@ -238,9 +238,32 @@ func TestBarcodeCrispAtScale2(t *testing.T) {
 }
 
 func TestBarcodeTooSmall(t *testing.T) {
-	err := renderErr(demy.Frame(10, 10, demy.Barcode("demy")))
-	if err == nil || !strings.Contains(err.Error(), "barcode") {
-		t.Fatalf("err = %v, want barcode size error", err)
+	tests := map[string]demy.Node{
+		"too small":  demy.Frame(10, 10, demy.Barcode("demy")),
+		"under 1 px": demy.HStack(demy.Frame(39.8, 40), demy.Barcode("demy")),
+		"no space":   demy.HStack(demy.Frame(40, 40), demy.Barcode("demy")),
+	}
+	for name, n := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := renderErr(n); err == nil || !strings.Contains(err.Error(), "barcode") {
+				t.Fatalf("err = %v, want barcode size error", err)
+			}
+		})
+	}
+}
+
+func TestOptionsAreOptions(t *testing.T) {
+	// Option constructors return Option, so callers can build option lists.
+	opts := []demy.Option{
+		demy.Gap(2), demy.Padding(1), demy.Border(1, demy.Black), demy.Background(demy.White),
+		demy.CornerRadius(2), demy.Clip, demy.Children(demy.Spacer()),
+	}
+	if err := renderErr(demy.Box(opts...)); err != nil {
+		t.Fatal(err)
+	}
+	gridOpts := []demy.Option{demy.Columns(demy.GridFr(1)), demy.Rows(demy.GridAuto()), demy.RowGap(1), demy.ColGap(1)}
+	if err := renderErr(demy.Grid(gridOpts...)); err != nil {
+		t.Fatal(err)
 	}
 }
 

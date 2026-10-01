@@ -228,7 +228,7 @@ func TestRoundTrip(t *testing.T) {
 			&demy.ZStackNode{
 				Align: demy.BottomTrailing,
 				Children: []demy.Node{
-					&demy.ImageNode{Key: "bg", Scale: demy.ImageFill, Clip: true},
+					&demy.ImageNode{Key: "bg", Scale: demy.ImageFill},
 					&demy.TextNode{Text: "Overlay"},
 				},
 			},

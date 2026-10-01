@@ -1,4 +1,4 @@
-package scene_test
+package jsonscene_test
 
 import (
 	"image/color"
@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/samuel/demy"
-	scene "github.com/samuel/demy/scene/jsonscene"
+	"github.com/samuel/demy/scene/jsonscene"
 )
 
 func TestMarshalScene(t *testing.T) {
@@ -22,13 +22,13 @@ func TestMarshalScene(t *testing.T) {
 		"body": {Font: "sans", Size: 12},
 	}
 
-	data, err := scene.MarshalScene(root, styles)
+	data, err := jsonscene.MarshalScene(root, styles)
 	if err != nil {
 		t.Fatalf("MarshalScene: %v", err)
 	}
 	t.Logf("JSON:\n%s", data)
 
-	gotNode, gotStyles, err := scene.UnmarshalScene(data)
+	gotNode, gotStyles, err := jsonscene.UnmarshalScene(data)
 	if err != nil {
 		t.Fatalf("UnmarshalScene: %v", err)
 	}
@@ -43,11 +43,11 @@ func TestMarshalScene(t *testing.T) {
 
 func TestMarshalSceneNoStyles(t *testing.T) {
 	root := &demy.TextNode{Text: "hi"}
-	data, err := scene.MarshalScene(root, nil)
+	data, err := jsonscene.MarshalScene(root, nil)
 	if err != nil {
 		t.Fatalf("MarshalScene: %v", err)
 	}
-	gotNode, gotStyles, err := scene.UnmarshalScene(data)
+	gotNode, gotStyles, err := jsonscene.UnmarshalScene(data)
 	if err != nil {
 		t.Fatalf("UnmarshalScene: %v", err)
 	}
@@ -72,12 +72,12 @@ func TestMarshalGridRoundTrip(t *testing.T) {
 			&demy.TextNode{Text: "c"},
 		},
 	}
-	data, err := scene.Marshal(root)
+	data, err := jsonscene.Marshal(root)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
 	t.Logf("JSON:\n%s", data)
-	got, err := scene.Unmarshal(data)
+	got, err := jsonscene.Unmarshal(data)
 	if err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -92,11 +92,11 @@ func TestMarshalGridNoRows(t *testing.T) {
 		Columns:  []demy.GridTrack{demy.GridFr(1), demy.GridFr(2)},
 		Children: []demy.Node{&demy.TextNode{Text: "x"}, &demy.TextNode{Text: "y"}},
 	}
-	data, err := scene.Marshal(root)
+	data, err := jsonscene.Marshal(root)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	got, err := scene.Unmarshal(data)
+	got, err := jsonscene.Unmarshal(data)
 	if err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -121,11 +121,11 @@ func TestMarshalGridRowRoundTrip(t *testing.T) {
 			}},
 		},
 	}
-	data, err := scene.Marshal(root)
+	data, err := jsonscene.Marshal(root)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	got, err := scene.Unmarshal(data)
+	got, err := jsonscene.Unmarshal(data)
 	if err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -139,11 +139,11 @@ func TestMarshalSceneColorStyle(t *testing.T) {
 		"muted-label": {Font: "sans", Size: 10, Color: demy.RoleColor{Name: "muted"}},
 		"colored":     {Font: "sans", Size: 12, Color: color.RGBA{R: 0x55, G: 0x55, B: 0x55, A: 0xff}},
 	}
-	data, err := scene.MarshalScene(&demy.SpacerNode{}, styles)
+	data, err := jsonscene.MarshalScene(&demy.SpacerNode{}, styles)
 	if err != nil {
 		t.Fatalf("MarshalScene: %v", err)
 	}
-	_, gotStyles, err := scene.UnmarshalScene(data)
+	_, gotStyles, err := jsonscene.UnmarshalScene(data)
 	if err != nil {
 		t.Fatalf("UnmarshalScene: %v", err)
 	}

@@ -3,6 +3,7 @@ package demy
 import (
 	"image"
 	"image/color"
+	"image/draw"
 	"math"
 	"strings"
 
@@ -183,9 +184,8 @@ func (n *hstackNode) measure(mctx *measureCtx) nodeSize {
 		})
 	}
 
-	// Pass 2: if variable-width children collectively overflow the available
-	// space (after reserving gaps and fixed-width children like frameNode),
-	// shrink them proportionally and re-measure so heights are correct.
+	// Pass 2: if variable-width children overflow the space left after gaps and
+	// frameNodes, shrink them proportionally and re-measure so heights are correct.
 	totalGaps := math.Max(0, float64(len(n.children)-1)) * n.gap
 	var fixedSizeW, variableSizeW float64
 	for i, child := range n.children {
@@ -215,7 +215,6 @@ func (n *hstackNode) measure(mctx *measureCtx) nodeSize {
 		}
 	}
 
-	// Accumulate totals from (possibly updated) measured sizes.
 	var totalW, maxH float64
 	for i, child := range n.children {
 		s := n.measuredSizes[i]
@@ -441,6 +440,10 @@ func (n *boxNode) draw(dctx *drawCtx) {
 		dctx.ctx.SetStrokeWidth(1)
 	}
 
+	if n.clip {
+		drawClipped(dctx, n.bounds, n.children)
+		return
+	}
 	for _, child := range n.children {
 		child.draw(dctx)
 	}
@@ -474,33 +477,39 @@ func (n *frameNode) layout(bounds nodeRect) {
 }
 
 func (n *frameNode) draw(dctx *drawCtx) {
+	drawClipped(dctx, nodeRect{x: n.bounds.x, y: n.bounds.y, w: n.w, h: n.h}, n.children)
+}
+
+// drawClipped draws children onto a sub-canvas the size of r and composites it
+// onto dctx, confining their vector content to r.
+func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 	dpmm := dctx.dpmm
-	wPx := int(math.Round(n.w))
-	hPx := int(math.Round(n.h))
+	wPx := int(math.Round(r.w))
+	hPx := int(math.Round(r.h))
 	if wPx <= 0 || hPx <= 0 {
 		return
 	}
-	wMM := n.w / dpmm
-	hMM := n.h / dpmm
-	xMM := n.bounds.x / dpmm
-	yMM := n.bounds.y / dpmm
+	wMM := r.w / dpmm
+	hMM := r.h / dpmm
+	xMM := r.x / dpmm
+	yMM := r.y / dpmm
 
 	subCvs := cv.New(wMM, hMM)
 	subCtx := cv.NewContext(subCvs)
 	subCtx.SetCoordSystem(cv.CartesianIV)
 	subCtx.Translate(-xMM, -yMM)
 
-	// Bitmap glyphs are stamped onto the root image after quantization, so they
-	// must be clipped to the frame's physical-pixel bounds rather than relying on
-	// the sub-canvas crop that confines vector content.
-	frameClip := image.Rect(
-		int(math.Round(n.bounds.x*dctx.scale)),
-		int(math.Round(n.bounds.y*dctx.scale)),
-		int(math.Round((n.bounds.x+n.w)*dctx.scale)),
-		int(math.Round((n.bounds.y+n.h)*dctx.scale)),
+	// Bitmap glyphs and dither regions apply to the root image after
+	// quantization, so they are clipped to r's physical-pixel bounds rather
+	// than relying on the sub-canvas crop that confines vector content.
+	clip := image.Rect(
+		int(math.Round(r.x*dctx.scale)),
+		int(math.Round(r.y*dctx.scale)),
+		int(math.Round((r.x+r.w)*dctx.scale)),
+		int(math.Round((r.y+r.h)*dctx.scale)),
 	)
 	if !dctx.clip.Empty() {
-		frameClip = frameClip.Intersect(dctx.clip)
+		clip = clip.Intersect(dctx.clip)
 	}
 	subDctx := &drawCtx{
 		ctx:   subCtx,
@@ -508,14 +517,18 @@ func (n *frameNode) draw(dctx *drawCtx) {
 		scale: dctx.scale,
 		roles: dctx.roles,
 		fonts: dctx.fonts,
-		clip:  frameClip,
+		clip:  clip,
 	}
-	for _, child := range n.children {
+	for _, child := range children {
 		child.draw(subDctx)
 	}
-	// Bubble collected glyph blits up to the root draw context (the frame's own
-	// sub-canvas is composited as a vector image and never contains bitmap text).
 	dctx.textBlits = append(dctx.textBlits, subDctx.textBlits...)
+	for _, dr := range subDctx.ditherRegions {
+		dr.bounds = dr.bounds.Intersect(clip)
+		if !dr.bounds.Empty() {
+			dctx.ditherRegions = append(dctx.ditherRegions, dr)
+		}
+	}
 
 	subImg := image.NewRGBA(image.Rect(0, 0, wPx, hPx))
 	subRas := newVectorRenderer(subImg, dpmm)
@@ -542,7 +555,7 @@ func (n *spacerNode) draw(_ *drawCtx) {}
 type weightedNode struct {
 	weight float64
 	child  node
-	// retained from measure for re-measuring the child with actual allocated dims.
+	// retained from measure to re-measure the child with its allocated bounds
 	fonts  map[string]*FontFamily
 	dpmm   float64
 	bounds nodeRect
@@ -716,9 +729,8 @@ func textOptions(s Style) *cv.TextOptions {
 
 // --- bitmap text ---
 
-// measureBitmap measures a text node rendered with a bitmap font. Sizes are
-// returned in logical pixels (native font pixels map 1:1 to logical pixels; the
-// on-screen size is scaled by the integer display Scale at draw time).
+// measureBitmap measures text in a bitmap font. One font pixel is one logical
+// pixel; the integer display scale is applied at draw time.
 func (n *textNode) measureBitmap(mctx *measureCtx, ff *FontFamily) nodeSize {
 	bf := ff.bitmapVariant(n.style.Weight)
 	if bf == nil {
@@ -734,8 +746,8 @@ func (n *textNode) measureBitmap(mctx *measureCtx, ff *FontFamily) nodeSize {
 	return nodeSize{w: float64(maxW), h: float64(len(lines)) * bitmapLineHeight(bf, n.style)}
 }
 
-// drawBitmap collects glyph blits for a bitmap-font text node. Blits are applied
-// after quantization, so the text stays crisp (no antialiasing, pure palette color).
+// drawBitmap collects glyph blits for text in a bitmap font. Blits are applied
+// after quantization so the text is never antialiased or dithered.
 func (n *textNode) drawBitmap(dctx *drawCtx, ff *FontFamily) {
 	bf := ff.bitmapVariant(n.style.Weight)
 	if bf == nil {
@@ -797,9 +809,8 @@ func bitmapLineHeight(bf *bitmapFont, s Style) float64 {
 	return float64(bf.lineHeight) * stretch
 }
 
-// layoutBitmapText splits text into rendered lines, greedily word-wrapping to
-// maxW logical pixels (when maxW is a finite positive width) and honoring hard
-// '\n' breaks, MaxLines, and ellipsis overflow.
+// layoutBitmapText splits text into lines, honoring '\n' breaks, MaxLines, and
+// ellipsis overflow. Words wrap greedily when maxW is a finite positive width.
 func layoutBitmapText(bf *bitmapFont, text string, maxW float64, style Style) [][]rune {
 	wrap := maxW > 0 && maxW < 1e8
 	var lines [][]rune
@@ -847,8 +858,8 @@ func appendEllipsis(bf *bitmapFont, line []rune) []rune {
 	return append(line, '.', '.', '.')
 }
 
-// bmpRuneAdvance returns the x-advance for a rune, falling back to the font's
-// space advance for glyphs that are entirely absent.
+// bmpRuneAdvance returns the x-advance for a rune, or the space advance when
+// the font has no glyph for it.
 func bmpRuneAdvance(bf *bitmapFont, r rune) int {
 	if g, ok := bf.glyph(r); ok {
 		return g.advance
@@ -865,8 +876,7 @@ func bmpLineWidth(bf *bitmapFont, runes []rune) int {
 	return w
 }
 
-// snapBitmapColor reduces a color to a pure palette extreme (black or white) by
-// luminance, since pixel fonts assume full contrast.
+// snapBitmapColor snaps a color to black or white by luminance.
 func snapBitmapColor(c color.Color) color.Gray {
 	gy := color.GrayModel.Convert(c).(color.Gray)
 	if gy.Y < 128 {
@@ -880,7 +890,6 @@ func snapBitmapColor(c color.Color) color.Gray {
 type imageNode struct {
 	img    image.Image
 	scale  ImageScale
-	clip   bool
 	dither Dither
 	bounds nodeRect
 }
@@ -934,16 +943,25 @@ func (n *imageNode) draw(dctx *drawCtx) {
 		X1: (n.bounds.x + bw) / dpmm,
 		Y1: (n.bounds.y + bh) / dpmm,
 	}
+	img := n.img
 	var fit cv.ImageFit
 	switch n.scale {
 	case ImageFill:
 		fit = cv.ImageCover
+		// The canvas crops cover images with SubImage and panics without it.
+		if _, ok := img.(interface {
+			SubImage(image.Rectangle) image.Image
+		}); !ok {
+			rgba := image.NewRGBA(img.Bounds())
+			draw.Draw(rgba, rgba.Bounds(), img, img.Bounds().Min, draw.Src)
+			img = rgba
+		}
 	case ImageStretch:
 		fit = cv.ImageFill
 	default: // ImageFit
 		fit = cv.ImageContain
 	}
-	dctx.ctx.FitImage(n.img, rect, fit)
+	dctx.ctx.FitImage(img, rect, fit)
 	if n.dither != NoDithering {
 		px := image.Rect(
 			int(math.Round(n.bounds.x*dctx.scale)),
@@ -1048,10 +1066,10 @@ func (n *gridNode) measure(mctx *measureCtx) nodeSize {
 	totalColGaps := math.Max(0, float64(n.numCols-1)) * n.colGap
 	availForCols := math.Max(0, innerW-totalColGaps)
 
-	// Phase 1: compute rough column widths for first-pass child measurement.
+	// Step 1: estimate column widths for the first measure pass.
 	roughColWidths := n.computeColWidths(availForCols, nil)
 
-	// Phase 2: measure all children with rough column widths.
+	// Step 2: measure all children with the estimated widths.
 	total := n.numRows * n.numCols
 	n.cellSizes = make([]nodeSize, total)
 	for i, child := range n.children {
@@ -1067,11 +1085,11 @@ func (n *gridNode) measure(mctx *measureCtx) nodeSize {
 		})
 	}
 
-	// Phase 3: finalize column widths using measured content for auto tracks.
+	// Step 3: size auto columns from measured content.
 	n.colWidths = n.computeColWidths(availForCols, n.cellSizes)
 
-	// Phase 4: re-measure children whose column width changed noticeably,
-	// so row heights reflect the final layout (e.g. text re-wrapping).
+	// Step 4: re-measure children whose column width changed so row heights
+	// reflect re-wrapped content.
 	for i, child := range n.children {
 		if i >= total {
 			break
@@ -1087,7 +1105,8 @@ func (n *gridNode) measure(mctx *measureCtx) nodeSize {
 		}
 	}
 
-	// Phase 5: compute row heights (Fr rows contribute 0 here; finalized in layout).
+	// Step 5: compute row heights. Fr rows are recomputed in layout with the
+	// actual bounds.
 	totalRowGaps := math.Max(0, float64(n.numRows-1)) * n.rowGap
 	availForRows := math.Max(0, innerH-totalRowGaps)
 	n.rowHeights = n.computeRowHeights(availForRows, n.cellSizes)
@@ -1112,16 +1131,15 @@ func (n *gridNode) layout(bounds nodeRect) {
 	availForCols := math.Max(0, innerW-totalColGaps)
 	availForRows := math.Max(0, innerH-totalRowGaps)
 
-	// Re-derive column widths with actual bounds (parent may have given us a
-	// different width than what measure was called with).
+	// The parent may assign a different width than measure was given.
 	n.colWidths = n.computeColWidths(availForCols, n.cellSizes)
 
-	// Finalize Fr row heights using actual available height.
+	// Distribute Fr rows using the actual available height.
 	n.rowHeights = n.finalizeRowHeights(availForRows, n.cellSizes)
 
 	total := n.numRows * n.numCols
 
-	// Re-measure children in Fr rows — they now have a definite height.
+	// Re-measure children in Fr rows with their definite height.
 	for row := range n.numRows {
 		rowTrack := n.rowTrack(row)
 		if rowTrack.kind != gridTrackFr {
@@ -1141,7 +1159,6 @@ func (n *gridNode) layout(bounds nodeRect) {
 		}
 	}
 
-	// Compute cumulative column and row offsets.
 	colOffsets := make([]float64, n.numCols)
 	x := 0.0
 	for col := range n.numCols {
@@ -1155,7 +1172,6 @@ func (n *gridNode) layout(bounds nodeRect) {
 		y += n.rowHeights[row] + n.rowGap
 	}
 
-	// Lay out children in their cells.
 	originX := bounds.x + n.padding
 	originY := bounds.y + n.padding
 	for i, child := range n.children {
@@ -1191,11 +1207,11 @@ func (n *gridNode) rowTrack(row int) GridTrack {
 }
 
 // computeColWidths calculates column widths for the given available width.
-// If cellSizes is nil, auto columns are estimated by splitting remaining space evenly.
+// Auto columns use the widest cell in cellSizes; if cellSizes is nil, they get
+// an even share of the space left after fixed columns.
 func (n *gridNode) computeColWidths(availForCols float64, cellSizes []nodeSize) []float64 {
 	widths := make([]float64, n.numCols)
 
-	// Sum fixed widths and count non-fixed tracks.
 	var fixedW float64
 	var nonFixedCount int
 	var totalFrWeight float64
@@ -1211,21 +1227,18 @@ func (n *gridNode) computeColWidths(availForCols float64, cellSizes []nodeSize) 
 		}
 	}
 
-	// Pass 1: assign fixed tracks.
 	for c, col := range n.columns {
 		if col.kind == gridTrackFixed {
 			widths[c] = col.size
 		}
 	}
 
-	// Pass 2: auto tracks — use measured content max if available, else split evenly.
-	var autoFixedW float64 // fixed + final-auto contribution
+	var autoFixedW float64 // total width of auto columns
 	for c, col := range n.columns {
 		if col.kind != gridTrackAuto {
 			continue
 		}
 		if cellSizes == nil {
-			// Rough estimate: split remaining evenly among non-fixed tracks.
 			remaining := math.Max(0, availForCols-fixedW)
 			if nonFixedCount > 0 {
 				widths[c] = remaining / float64(nonFixedCount)
@@ -1246,7 +1259,7 @@ func (n *gridNode) computeColWidths(availForCols float64, cellSizes []nodeSize) 
 	}
 	fixedTotal := fixedW + autoFixedW
 
-	// Pass 3: distribute remaining width to Fr tracks.
+	// Fr columns share the remaining width.
 	if totalFrWeight > 0 {
 		remaining := math.Max(0, availForCols-fixedTotal)
 		for c, col := range n.columns {
@@ -1258,8 +1271,8 @@ func (n *gridNode) computeColWidths(availForCols float64, cellSizes []nodeSize) 
 	return widths
 }
 
-// computeRowHeights calculates row heights from measured cell sizes.
-// Fr rows return 0 (deferred to finalizeRowHeights with actual bounds).
+// computeRowHeights calculates row heights from measured cell sizes. Fr rows
+// share the height left after fixed and auto rows.
 func (n *gridNode) computeRowHeights(availForRows float64, cellSizes []nodeSize) []float64 {
 	heights := make([]float64, n.numRows)
 	var fixedAutoH float64
@@ -1297,8 +1310,7 @@ func (n *gridNode) computeRowHeights(availForRows float64, cellSizes []nodeSize)
 	return heights
 }
 
-// finalizeRowHeights is like computeRowHeights but always distributes Fr rows
-// using the actual available height from layout bounds.
+// finalizeRowHeights computes row heights for the final layout bounds.
 func (n *gridNode) finalizeRowHeights(availForRows float64, cellSizes []nodeSize) []float64 {
 	return n.computeRowHeights(availForRows, cellSizes)
 }
@@ -1390,7 +1402,11 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 		}
 		return &weightedNode{weight: w, child: child}, nil
 	case *DividerNode:
-		return &dividerNode{isHorizontal: parentDir == dirVertical, color: v.Color, size: v.Size}, nil
+		clr := v.Color
+		if cfg != nil {
+			clr = resolveColor(clr, cfg.Roles)
+		}
+		return &dividerNode{isHorizontal: parentDir == dirVertical, color: clr, size: v.Size}, nil
 	case *TextNode:
 		var style Style
 		if cfg != nil {
@@ -1416,7 +1432,7 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir) (node, error) {
 				return nil, imageKeyError(v.Key)
 			}
 		}
-		return &imageNode{img: img, scale: v.Scale, clip: v.Clip, dither: v.Dither}, nil
+		return &imageNode{img: img, scale: v.Scale, dither: v.Dither}, nil
 	case *BarcodeNode:
 		return &barcodeNode{content: v.Content, btype: v.Type, ecLevel: v.ECLevel}, nil
 	case *GridNode:
@@ -1461,7 +1477,7 @@ func buildNodes(nodes []Node, cfg *Config, parentDir layoutDir) ([]node, error) 
 	return result, nil
 }
 
-// imageKeyError is a named error constructor to avoid fmt import in this file.
+// imageKeyError reports an ImageNode key missing from Config.Images.
 type imageKeyError string
 
 func (e imageKeyError) Error() string {

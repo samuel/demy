@@ -8,8 +8,7 @@ import (
 	"github.com/samuel/demy"
 )
 
-// renderGrid exercises the full measure/layout/draw pipeline for a GridNode
-// at the given canvas size. Returns without error on success.
+// renderGridCfg renders g on a w×h canvas, failing the test on error.
 func renderGridCfg(t *testing.T, g *demy.GridNode, w, h int, cfg demy.Config) {
 	t.Helper()
 	cfg.PixelWidth = w

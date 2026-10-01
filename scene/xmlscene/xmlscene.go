@@ -1,8 +1,8 @@
 // Package xmlscene provides XML serialization and template rendering for demy Node trees.
 //
-// The format maps element tag names to node types, attributes to layout/style
-// properties, and child elements to child nodes — no "type" discriminator field,
-// no "children" wrapper. This makes it suitable for Go's text/template:
+// Element names map to node types, attributes to layout and style properties, and
+// child elements to child nodes, which makes the format convenient to generate with
+// text/template (see Execute):
 //
 //	<vstack gap="4" padding="8">
 //	  <text size="{{.TitleSize}}" color="foreground">{{.Title}}</text>
@@ -15,21 +15,21 @@
 //	  {{end}}
 //	</vstack>
 //
-// Color encoding matches the scene package: role names ("foreground", "background",
-// "accent", "muted") are stored as-is and resolved at render time via demy.RoleColor;
-// other colors are "#rrggbb" or "#rrggbbaa" hex strings.
+// Colors are role names ("foreground", "background", "accent", "muted"), which
+// resolve against Config.Roles at render time, or "#rgb", "#rrggbb", or "#rrggbbaa"
+// hex strings.
 //
-// # Physical unit support
+// # Physical units
 //
 // Dimension attributes (width, height, padding, gap, size, etc.) accept an optional
-// unit suffix when a demy.Config with physical dimensions is supplied:
+// unit suffix:
 //
-//   - Bare number or "px" suffix → pixels (e.g. "240" or "240px")
-//   - "mm" suffix → millimeters × DPMM (e.g. "50mm")
-//   - "pt" suffix → typographic points × DPMM (e.g. "12pt")
+//   - Bare number or "px" → logical pixels (e.g. "240" or "240px")
+//   - "mm" → millimeters (e.g. "50mm")
+//   - "pt" → points, 1/72 inch (e.g. "12pt")
 //
-// Marshal always outputs bare pixel values; physical units are resolved at parse time
-// and are not round-tripped.
+// "mm" and "pt" are converted using Config.DPMM and require Config.PhysicalWidthMM
+// to be set; otherwise they resolve to 0. Marshal always writes bare pixel values.
 package xmlscene
 
 import (
@@ -86,8 +86,9 @@ func Unmarshal(data []byte, cfg demy.Config) (demy.Node, error) {
 	}
 }
 
-// Execute renders a text/template that produces XML and unmarshals the result.
-// Pass a demy.Config with physical dimensions set to enable "mm" and "pt" unit suffixes.
+// Execute executes a text/template that produces XML and unmarshals the result
+// with Unmarshal. Template output is not XML-escaped; data containing "<" or "&"
+// must be escaped by the template (e.g. with the html function).
 func Execute(tmplSrc []byte, data any, cfg demy.Config) (demy.Node, error) {
 	t, err := template.New("scene").Parse(string(tmplSrc))
 	if err != nil {
@@ -101,8 +102,7 @@ func Execute(tmplSrc []byte, data any, cfg demy.Config) (demy.Node, error) {
 }
 
 // MarshalScene serializes a Node tree and named style definitions to an indented
-// XML Scene envelope. Callers that consume the output should call UnmarshalScene
-// and merge the returned styles into Config.Styles before rendering.
+// <scene> envelope:
 //
 //	<scene>
 //	  <styles>
@@ -167,9 +167,9 @@ func MarshalScene(n demy.Node, styles map[string]demy.Style) ([]byte, error) {
 
 // UnmarshalScene deserializes XML to a Node tree and style definitions.
 // The document may be a bare node element or a <scene> wrapper containing
-// <styles> and a root element. Merge returned styles into Config.Styles before
-// rendering so that class references resolve correctly.
-// Pass a demy.Config with physical dimensions set to enable "mm" and "pt" unit suffixes.
+// <styles> and a root element. Merge the returned styles into Config.Styles before
+// rendering so that class references resolve. Pass a demy.Config with physical
+// dimensions set to enable "mm" and "pt" unit suffixes.
 func UnmarshalScene(data []byte, cfg demy.Config) (demy.Node, map[string]demy.Style, error) {
 	uctx := newUnmarshalCtx(cfg)
 	dec := xml.NewDecoder(bytes.NewReader(data))
@@ -191,9 +191,8 @@ func UnmarshalScene(data []byte, cfg demy.Config) (demy.Node, map[string]demy.St
 	}
 }
 
-// ExecuteScene renders a text/template that produces XML and unmarshals the result,
-// returning the root Node and any style definitions embedded in the document.
-// Pass a demy.Config with physical dimensions set to enable "mm" and "pt" unit suffixes.
+// ExecuteScene executes a text/template that produces XML and unmarshals the result
+// with UnmarshalScene.
 func ExecuteScene(tmplSrc []byte, data any, cfg demy.Config) (demy.Node, map[string]demy.Style, error) {
 	t, err := template.New("scene").Parse(string(tmplSrc))
 	if err != nil {
@@ -287,7 +286,6 @@ func marshalNode(enc *xml.Encoder, n demy.Node) error {
 		start := xml.StartElement{Name: xml.Name{Local: "image"}}
 		appendStr(&start, "key", v.Key)
 		appendStr(&start, "scale", scaleStr(v.Scale))
-		appendBool(&start, "clip", v.Clip)
 		appendStr(&start, "dither", ditherStr(v.Dither))
 		if err := enc.EncodeToken(start); err != nil {
 			return err
@@ -425,13 +423,12 @@ func appendStyleAttrs(start *xml.StartElement, s demy.Style) {
 
 // --- unmarshal context ---
 
-// unmarshalCtx carries per-parse state (DPMM) for resolving physical unit suffixes.
+// unmarshalCtx carries per-parse state for resolving physical unit suffixes.
+// dpmm is 0 when the Config lacks physical dimensions.
 type unmarshalCtx struct {
 	dpmm float64
 }
 
-// newUnmarshalCtx creates an unmarshalCtx from a Config. Returns zero dpmm when
-// the Config lacks physical dimensions, which disables mm/pt unit resolution.
 func newUnmarshalCtx(cfg demy.Config) unmarshalCtx {
 	if cfg.PhysicalWidthMM == 0 {
 		return unmarshalCtx{}
@@ -439,14 +436,12 @@ func newUnmarshalCtx(cfg demy.Config) unmarshalCtx {
 	return unmarshalCtx{dpmm: cfg.DPMM()}
 }
 
-// dim parses a dimension attribute value, resolving any physical unit suffix.
 func (uctx unmarshalCtx) dim(attrs map[string]string, name string) float64 {
 	return parseDim(attrs[name], uctx.dpmm)
 }
 
-// parseDim converts a dimension string to pixels.
-// Supported suffixes: "mm", "pt", "px". A bare number is treated as pixels.
-// Returns 0 when dpmm is 0 and a physical unit suffix is used.
+// parseDim converts a dimension string with an optional "mm", "pt", or "px"
+// suffix to pixels.
 func parseDim(s string, dpmm float64) float64 {
 	if s == "" {
 		return 0
@@ -579,7 +574,6 @@ func unmarshalElement(dec *xml.Decoder, start xml.StartElement, uctx unmarshalCt
 		return &demy.ImageNode{
 			Key:    attrs["key"],
 			Scale:  parseScale(attrs["scale"]),
-			Clip:   boolAttr(attrs, "clip"),
 			Dither: parseDither(attrs["dither"]),
 		}, nil
 	case "barcode":
@@ -858,7 +852,7 @@ func parseColor(s string) (color.Color, error) {
 			rv, _ := strconv.ParseUint(hex[0:1], 16, 8)
 			gv, _ := strconv.ParseUint(hex[1:2], 16, 8)
 			bv, _ := strconv.ParseUint(hex[2:3], 16, 8)
-			return color.RGBA{R: uint8(rv<<8 | rv), G: uint8(gv<<8 | gv), B: uint8(bv<<8 | bv), A: 255}, nil
+			return color.RGBA{R: uint8(rv<<4 | rv), G: uint8(gv<<4 | gv), B: uint8(bv<<4 | bv), A: 255}, nil
 		case 6:
 			rv, _ := strconv.ParseUint(hex[0:2], 16, 8)
 			gv, _ := strconv.ParseUint(hex[2:4], 16, 8)
@@ -1055,7 +1049,7 @@ func parseWeight(s string) demy.FontStyle {
 	return w
 }
 
-// --- image scale / dither helpers ---
+// --- image helpers ---
 
 func ditherStr(d demy.Dither) string {
 	switch d {

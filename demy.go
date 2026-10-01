@@ -1,6 +1,5 @@
-// Package demy provides a composable rendering context for e-ink and
-// other more static displays, built on tdewolff/canvas with a
-// SwiftUI-inspired layout model.
+// Package demy is a declarative rendering library for e-ink and other
+// low-refresh displays, with a SwiftUI-inspired layout model.
 package demy
 
 import (
@@ -49,16 +48,13 @@ const (
 	FontItalic FontStyle = 1 << 8 // OR with a weight constant
 )
 
-// FontFamily holds the font variants for one family. A family is either a
-// vector family (TTF/OTF outlines via tdewolff/canvas) or a bitmap family
-// (BDF pixel fonts); the two are never mixed. Callers reference a family by
-// its key in Config.Fonts and never use the underlying types directly.
+// FontFamily holds the weight/style variants of one font family. A family is
+// either a vector family (TTF/OTF) or a bitmap family (BDF); the two cannot be
+// mixed. Text references a family by its key in Config.Fonts.
 type FontFamily struct {
-	name string
-	// family is set for vector families; nil for bitmap families.
-	family *cv.FontFamily
-	// bitmap holds one parsed pixel font per weight/style variant; nil for
-	// vector families. A non-nil map marks this as a bitmap family.
+	name   string
+	family *cv.FontFamily // nil for bitmap families
+	// bitmap holds one font per style; non-nil marks a bitmap family.
 	bitmap map[FontStyle]*bitmapFont
 }
 
@@ -80,8 +76,7 @@ func (ff *FontFamily) bitmapVariant(style FontStyle) *bitmapFont {
 	return nil
 }
 
-// LoadFontFile loads a TTF or OTF font file as the Regular style of a new family.
-// name identifies the family within demy (used as the key in Config.Fonts).
+// LoadFontFile loads a TTF or OTF file as the Regular style of a new family.
 func LoadFontFile(name, path string) (*FontFamily, error) {
 	ff := cv.NewFontFamily(name)
 	if err := ff.LoadFontFile(path, cv.FontRegular); err != nil {
@@ -99,10 +94,8 @@ func MustLoadFontFile(name, path string) *FontFamily {
 	return f
 }
 
-// LoadFontBytes loads a font from raw TrueType or OpenType bytes as the Regular
-// style of a new family. Use index 0 for single-font files.
-// This accepts data from golang.org/x/image/font/gofont packages directly,
-// e.g. LoadFontBytes("go", goregular.TTF).
+// LoadFontBytes loads TrueType or OpenType bytes as the Regular style of a new
+// family, e.g. LoadFontBytes("go", goregular.TTF).
 func LoadFontBytes(name string, data []byte) (*FontFamily, error) {
 	ff := cv.NewFontFamily(name)
 	if err := ff.LoadFont(data, 0, cv.FontRegular); err != nil {
@@ -120,9 +113,8 @@ func MustLoadFontBytes(name string, data []byte) *FontFamily {
 	return f
 }
 
-// AddStyle loads an additional weight/style variant (e.g. FontBold, FontItalic,
-// FontBold|FontItalic) into an existing FontFamily from raw font bytes.
-// Use index 0 for single-font files.
+// AddStyle adds a weight/style variant (e.g. FontBold, FontBold|FontItalic)
+// from TTF/OTF bytes. It returns an error for a bitmap family.
 func (ff *FontFamily) AddStyle(data []byte, style FontStyle) error {
 	if ff.isBitmap() {
 		return errors.New("demy: cannot add a vector style to a bitmap font family")
@@ -130,13 +122,12 @@ func (ff *FontFamily) AddStyle(data []byte, style FontStyle) error {
 	return ff.family.LoadFont(data, 0, cv.FontStyle(style))
 }
 
-// LoadBitmapFontBDF parses a BDF (Adobe Bitmap Distribution Format) pixel font
-// as the Regular style of a new bitmap family. Bitmap fonts render with no
-// antialiasing, staying crisp on low-grayscale e-ink displays. name identifies
-// the family within demy (used as the key in Config.Fonts).
+// LoadBitmapFontBDF parses a BDF (Adobe Bitmap Distribution Format) font as
+// the Regular style of a new bitmap family.
 //
-// Bitmap fonts render at their native pixel size multiplied by the integer
-// display Scale; Style.Size is ignored for bitmap families.
+// Bitmap fonts render without antialiasing at their native pixel size times
+// the integer display scale; Style.Size is ignored. Bitmap text is composited
+// after quantization, so it always draws on top of other content.
 func LoadBitmapFontBDF(name string, data []byte) (*FontFamily, error) {
 	bf, err := parseBDF(data)
 	if err != nil {
@@ -172,8 +163,8 @@ func MustLoadBitmapFontBDFFile(name, path string) *FontFamily {
 	return f
 }
 
-// AddStyleBDF loads an additional weight/style variant (e.g. FontBold) into an
-// existing bitmap family from BDF bytes. It errors if called on a vector family.
+// AddStyleBDF adds a weight/style variant (e.g. FontBold) from BDF bytes.
+// It returns an error for a vector family.
 func (ff *FontFamily) AddStyleBDF(data []byte, style FontStyle) error {
 	if !ff.isBitmap() {
 		return errors.New("demy: cannot add a bitmap style to a vector font family")
@@ -186,28 +177,28 @@ func (ff *FontFamily) AddStyleBDF(data []byte, style FontStyle) error {
 	return nil
 }
 
-// Config defines a display's pixel dimensions, physical dimensions, color palette,
-// semantic color roles, pre-loaded fonts, and named styles.
+// Config describes a display and the resources available when rendering to it.
 type Config struct {
 	PixelWidth       int
 	PixelHeight      int
 	PhysicalWidthMM  float64
 	PhysicalHeightMM float64
-	// Scale is the display scale factor (logical pixels to physical pixels).
-	// 0 auto-computes from DPMM (1 for ~125 PPI displays, 2 for ~250 PPI).
-	// Set to 1 for pixel-accurate layout.
-	Scale            float64
+	// Scale maps logical pixels to physical pixels. 0 auto-computes it from
+	// the pixel density (1 for ~125 PPI displays, 2 for ~250 PPI).
+	Scale float64
+	// Palette lists the display's colors. Render quantizes using the
+	// palette implied by ColorMode, not this field.
 	Palette          []color.Color
 	Roles            Roles
-	ColorMode        ColorMode
-	Fonts            map[string]*FontFamily
-	Images           map[string]image.Image // pre-loaded images by key, for plugin contexts
-	DefaultTextStyle Style                  // fallback when Text() receives no style opts
-	Styles           map[string]Style       // named typographic scale (body, caption, h1, …)
+	ColorMode        ColorMode              // default mode when Render is called with Unset
+	Fonts            map[string]*FontFamily // keyed by Style.Font
+	Images           map[string]image.Image // referenced by ImageKey
+	DefaultTextStyle Style                  // base style that Text styles are merged over
+	Styles           map[string]Style       // named styles referenced by Class
 }
 
-// PhysicalDPMM returns physical dots per millimetre for this Config.
-// This is the raw display pixel density. For layout calculations use DPMM().
+// PhysicalDPMM returns the display's physical pixels per millimeter.
+// For layout, use DPMM.
 func (cfg Config) PhysicalDPMM() float64 {
 	if cfg.PhysicalWidthMM == 0 {
 		return 0
@@ -215,12 +206,10 @@ func (cfg Config) PhysicalDPMM() float64 {
 	return float64(cfg.PixelWidth) / cfg.PhysicalWidthMM
 }
 
-// DPMM returns logical dots per millimetre (PhysicalDPMM / EffectiveScale).
-// Use this to convert physical units (mm, pt) to logical pixels for layout.
+// DPMM returns logical pixels per millimeter (PhysicalDPMM / EffectiveScale).
 func (cfg Config) DPMM() float64 { return cfg.PhysicalDPMM() / cfg.EffectiveScale() }
 
-// EffectiveScale returns the resolved display scale factor.
-// When Config.Scale is 0, it auto-computes as max(1, round(PhysicalDPMM/5)).
+// EffectiveScale returns Scale, or max(1, round(PhysicalDPMM/5)) when Scale is 0.
 func (cfg Config) EffectiveScale() float64 {
 	if cfg.Scale != 0 {
 		return cfg.Scale
@@ -228,10 +217,10 @@ func (cfg Config) EffectiveScale() float64 {
 	return math.Max(1, math.Round(cfg.PhysicalDPMM()/5.0))
 }
 
-// Pt converts n points to logical pixels based on the display scale and PPI.
+// Pt converts n points to logical pixels.
 func (cfg Config) Pt(n float64) float64 { return n * cfg.DPMM() * 25.4 / 72 }
 
-// MM converts n millimetres to logical pixels based on the display scale and PPI.
+// MM converts n millimeters to logical pixels.
 func (cfg Config) MM(n float64) float64 { return n * cfg.DPMM() }
 
 // TextAlign controls horizontal text alignment within a text box.
@@ -252,11 +241,12 @@ const (
 	TextOverflowEllipsis
 )
 
-// Style defines text rendering properties.
+// Style defines text rendering properties. Zero-valued fields inherit from
+// Config.DefaultTextStyle and any StyleClass.
 type Style struct {
 	Font       string
-	Size       float64   // in points
-	Weight     FontStyle // 0 defaults to FontRegular
+	Size       float64   // in points; ignored for bitmap fonts
+	Weight     FontStyle // 0 is FontRegular
 	Color      color.Color
 	Align      TextAlign
 	LineHeight float64 // line height multiplier; 0 defaults to 1.0
@@ -295,13 +285,13 @@ func mergeStyle(base, override Style) Style {
 	return base
 }
 
-// StyleClass references a named entry in Config.Styles.
-// It is resolved at render time and merged under any inline Style fields.
+// StyleClass references a named entry in Config.Styles. It is merged over
+// Config.DefaultTextStyle and under any inline Style fields.
 type StyleClass string
 
 func (StyleClass) demyTextOption() {}
 
-// Class returns a StyleClass TextOption referencing the named style in Config.Styles.
+// Class returns a StyleClass referencing the named style in Config.Styles.
 func Class(name string) StyleClass { return StyleClass(name) }
 
 // ImageScale controls how images scale to fit their container.
@@ -343,20 +333,21 @@ const (
 
 func (ZAlignment) demyOption() {}
 
-// ColorMode controls the bit depth and palette of the output PNG.
+// ColorMode controls the bit depth and palette of the rendered image.
 type ColorMode int
 
 const (
-	Unset     ColorMode = iota // used to signify the color mode from the config should be used
+	Unset     ColorMode = iota // use Config.ColorMode
 	RGBA                       // 32-bit RGBA
 	Grayscale                  // 8-bit grayscale
-	OneBit                     // 1-bit black/white
-	TwoBit                     // 2-bit 4-shade (black/dark/light/white)
-	FourBit                    // 4-bit 16-shade grayscale (TRMNL X)
-	BWRed                      // black+white+red two-layer encoder
+	OneBit                     // black/white
+	TwoBit                     // 4 gray levels
+	FourBit                    // 16 gray levels
+	BWRed                      // black/white/red; not yet implemented, renders as Grayscale
 )
 
-// Dither selects the dithering algorithm used in OneBit and TwoBit modes.
+// Dither selects the dithering algorithm used when quantizing to OneBit,
+// TwoBit, or FourBit.
 type Dither int
 
 const (
@@ -369,35 +360,34 @@ func (Dither) demyOption() {}
 
 // --- Interfaces ---
 
-// Node is a composable, serializable widget. All layout and widget constructors
-// return a Node. The interface is sealed — implementations are provided by this
-// package only.
+// Node is an element of a render tree. All node constructors return a Node.
+// The interface is sealed to this package.
 type Node interface {
 	demyNode()
 }
 
 // Option is implemented by layout options (Gap, Padding, Alignment, …) and by
-// Node itself, allowing children to be passed inline to layout constructors.
+// every node type, so children can be passed inline to container constructors.
 // The interface is sealed to this package.
 type Option interface {
 	demyOption()
 }
 
-// TextOption is implemented by Style and future per-property text overrides.
-// It does NOT implement Option, preventing text-only options from being
-// accidentally passed to layout containers.
+// TextOption is implemented by Style and StyleClass. It is distinct from
+// Option so text styles cannot be passed to layout containers.
 type TextOption interface {
 	demyTextOption()
 }
 
-// RoleColor is a color.Color that references a semantic role from Config.Roles.
-// Used in deserialized scene trees (scene.Unmarshal) where colors are specified
-// by role name. Resolved to a concrete color during the build pass.
+// RoleColor is a color.Color that refers to a role in Config.Roles by name.
+// It is resolved to the concrete role color at render time. Scene decoders
+// produce it for colors given by role name.
 type RoleColor struct {
 	Name string // "foreground", "background", "accent", or "muted"
 }
 
-// RGBA implements color.Color. Returns black; actual value resolved in buildNode.
+// RGBA implements color.Color. It returns opaque black; the real color comes
+// from Config.Roles at render time.
 func (r RoleColor) RGBA() (uint32, uint32, uint32, uint32) { return 0, 0, 0, 0xffff }
 
 // resolveColor replaces a RoleColor with the matching concrete color from roles.
@@ -428,7 +418,7 @@ func resolveColor(c color.Color, roles Roles) color.Color {
 type VStackNode struct {
 	Gap      float64
 	Padding  float64
-	Align    Alignment // default AlignStart
+	Align    Alignment
 	Children []Node
 }
 
@@ -439,7 +429,7 @@ func (*VStackNode) demyOption() {}
 type HStackNode struct {
 	Gap      float64
 	Padding  float64
-	Align    Alignment // default AlignStart
+	Align    Alignment
 	Children []Node
 }
 
@@ -448,7 +438,7 @@ func (*HStackNode) demyOption() {}
 
 // ZStackNode layers children on top of each other.
 type ZStackNode struct {
-	Align    ZAlignment // default TopLeading
+	Align    ZAlignment
 	Children []Node
 }
 
@@ -456,6 +446,8 @@ func (*ZStackNode) demyNode()   {}
 func (*ZStackNode) demyOption() {}
 
 // BoxNode is a container with optional background, border, corner radius, and padding.
+// When Clip is set, children are clipped to the box's rectangular bounds; corner
+// radius does not affect clipping.
 type BoxNode struct {
 	Padding      float64
 	BorderWidth  float64
@@ -469,7 +461,8 @@ type BoxNode struct {
 func (*BoxNode) demyNode()   {}
 func (*BoxNode) demyOption() {}
 
-// FrameNode constrains its children to exactly Width×Height pixels.
+// FrameNode sizes its children to exactly Width×Height logical pixels and clips
+// them to that area.
 type FrameNode struct {
 	Width    float64
 	Height   float64
@@ -479,7 +472,7 @@ type FrameNode struct {
 func (*FrameNode) demyNode()   {}
 func (*FrameNode) demyOption() {}
 
-// SpacerNode fills remaining space in a stack. Weight defaults to 1.
+// SpacerNode fills remaining space in a stack. A Weight of 0 is treated as 1.
 type SpacerNode struct {
 	Weight float64
 }
@@ -487,10 +480,9 @@ type SpacerNode struct {
 func (*SpacerNode) demyNode()   {}
 func (*SpacerNode) demyOption() {}
 
-// WeightedNode wraps a child and allocates it a proportional share of the
-// parent stack's remaining space. It particidemys in the same weight pool as
-// SpacerNode: non-weighted children are measured at their natural size first,
-// and weighted/spacer nodes divide the remainder proportionally.
+// WeightedNode gives its child a share of the enclosing stack's remaining space
+// in proportion to Weight (0 is treated as 1). Weighted nodes and spacers share
+// the space left after other children take their natural size.
 //
 // Example — three columns at 25 / 25 / 50 %:
 //
@@ -507,9 +499,9 @@ type WeightedNode struct {
 func (*WeightedNode) demyNode()   {}
 func (*WeightedNode) demyOption() {}
 
-// DividerNode draws a rule. Orientation is inferred from the enclosing stack.
-// Size is the line thickness in logical pixels (0 defaults to 1). Color overrides the
-// default muted-role color.
+// DividerNode draws a rule, horizontal in a VStack and vertical in an HStack.
+// Size is the thickness in logical pixels (0 means 1). A nil Color uses the
+// muted role color.
 type DividerNode struct {
 	Color color.Color
 	Size  float64
@@ -518,8 +510,8 @@ type DividerNode struct {
 func (*DividerNode) demyNode()   {}
 func (*DividerNode) demyOption() {}
 
-// TextNode renders a string. Style defaults to Config.DefaultTextStyle when Font is empty.
-// If Class is set, the named style from Config.Styles is merged as a base before inline Style fields.
+// TextNode renders a string. The effective style is Config.DefaultTextStyle,
+// overlaid by the Class style, then by the non-zero fields of Style.
 type TextNode struct {
 	Text  string
 	Class StyleClass
@@ -529,14 +521,13 @@ type TextNode struct {
 func (*TextNode) demyNode()   {}
 func (*TextNode) demyOption() {}
 
-// ImageNode renders an image. Set Image directly or use Key to reference
-// a pre-loaded image in Config.Images (required for serialized contexts).
+// ImageNode renders an image. Set Image directly, or Key to reference an image
+// in Config.Images (required when the tree is serialized).
 type ImageNode struct {
 	Image  image.Image
 	Key    string
 	Scale  ImageScale
-	Clip   bool
-	Dither Dither // per-region dithering algorithm applied during quantization; NoDithering = no per-region dithering
+	Dither Dither // if set, overrides the Render dithering algorithm within this image
 }
 
 func (*ImageNode) demyNode()   {}
@@ -558,14 +549,14 @@ type ECLevel int
 func (ECLevel) demyOption() {}
 
 const (
-	ECLevelLow      ECLevel = iota // ~7% correction capacity
-	ECLevelMedium                  // ~15% correction capacity
-	ECLevelQuartile                // ~25% correction capacity
-	ECLevelHigh                    // ~30% correction capacity
+	ECLevelLow      ECLevel = iota // ~7% recovery
+	ECLevelMedium                  // ~15% recovery
+	ECLevelQuartile                // ~25% recovery
+	ECLevelHigh                    // ~30% recovery
 )
 
-// BarcodeNode renders a barcode or QR code.
-// Pass BarcodeType and ECLevel as options; defaults are BarcodeTypeQR and ECLevelMedium.
+// BarcodeNode renders a barcode. The Barcode constructor defaults to
+// BarcodeTypeQR with ECLevelMedium.
 type BarcodeNode struct {
 	Content string
 	Type    BarcodeType
@@ -575,53 +566,53 @@ type BarcodeNode struct {
 func (*BarcodeNode) demyNode()   {}
 func (*BarcodeNode) demyOption() {}
 
-// gridTrackKind distinguishes the three sizing modes for a grid track.
 type gridTrackKind uint8
 
 const (
-	gridTrackAuto  gridTrackKind = iota // size to content (max child size in that track)
-	gridTrackFixed                      // exact pixel size
-	gridTrackFr                         // fractional share of remaining space
+	gridTrackAuto gridTrackKind = iota
+	gridTrackFixed
+	gridTrackFr
 )
 
-// GridTrack defines the sizing of a single column or row in a GridNode.
-// Construct with GridAuto(), GridFixed(), or GridFr() — the fields are unexported.
+// GridTrack defines the size of one column or row in a GridNode.
+// Construct it with GridAuto, GridFixed, or GridFr.
 type GridTrack struct {
 	kind   gridTrackKind
-	size   float64 // gridTrackFixed: exact pixels
-	weight float64 // gridTrackFr: fractional weight
+	size   float64 // gridTrackFixed only
+	weight float64 // gridTrackFr only
 }
 
 // IsAuto reports whether the track sizes to content.
 func (t GridTrack) IsAuto() bool { return t.kind == gridTrackAuto }
 
-// IsFixed reports whether the track has an exact pixel size.
+// IsFixed reports whether the track has a fixed size.
 func (t GridTrack) IsFixed() bool { return t.kind == gridTrackFixed }
 
-// IsFr reports whether the track is a fractional-unit track.
+// IsFr reports whether the track takes a proportional share of remaining space.
 func (t GridTrack) IsFr() bool { return t.kind == gridTrackFr }
 
-// Size returns the pixel size for a GridFixed track; 0 for other kinds.
+// Size returns the size of a GridFixed track; 0 for other kinds.
 func (t GridTrack) Size() float64 { return t.size }
 
 // Weight returns the fractional weight for a GridFr track; 0 for other kinds.
 func (t GridTrack) Weight() float64 { return t.weight }
 
-// GridAuto returns a track that sizes to the widest/tallest child in it.
+// GridAuto returns a track sized to the widest (or tallest) cell in it.
 func GridAuto() GridTrack { return GridTrack{kind: gridTrackAuto} }
 
-// GridFixed returns a track with an exact pixel size.
+// GridFixed returns a track of exactly px logical pixels.
 func GridFixed(px float64) GridTrack { return GridTrack{kind: gridTrackFixed, size: px} }
 
-// GridFr returns a track that receives a proportional share of the remaining
-// space after fixed and auto tracks are sized. A weight of 1 is the default.
+// GridFr returns a track that takes a share of the space left after fixed and
+// auto tracks, proportional to weight (like CSS fr units).
 func GridFr(weight float64) GridTrack { return GridTrack{kind: gridTrackFr, weight: weight} }
 
-// GridNode lays children out in a 2D grid. Columns are required; rows default to
-// GridAuto() when not specified. Children fill cells row-by-row, left-to-right.
+// GridNode lays children out in a 2D grid, filling cells row by row, left to
+// right. Columns are required. When Rows is empty every row is GridAuto;
+// otherwise the grid has at most len(Rows) rows and excess children are dropped.
 type GridNode struct {
-	Columns  []GridTrack // required — length defines number of columns
-	Rows     []GridTrack // optional — missing rows are treated as GridAuto()
+	Columns  []GridTrack // number of columns is len(Columns)
+	Rows     []GridTrack
 	RowGap   float64
 	ColGap   float64
 	Padding  float64
@@ -631,10 +622,9 @@ type GridNode struct {
 func (*GridNode) demyNode()   {}
 func (*GridNode) demyOption() {}
 
-// GridRowNode groups the cells of one row in a GridNode.
-// It is a purely structural container: Grid flattens its children into the
-// cell list during the build pass. Bare cells and GridRow children may be
-// mixed freely in the same Grid.
+// GridRowNode groups cells for readability within a GridNode. Its children are
+// spliced into the grid's cell list in place, so it does not force a row
+// break. Bare cells and GridRow children may be mixed.
 type GridRowNode struct {
 	Children []Node
 }
@@ -642,9 +632,8 @@ type GridRowNode struct {
 func (*GridRowNode) demyNode()   {}
 func (*GridRowNode) demyOption() {}
 
-// Grid lays children in a 2D grid. Options: Columns (required), Rows, Gap,
-// RowGap, ColGap, Padding, child Nodes, Children.
-// Gap() sets both RowGap and ColGap; RowGap/ColGap override the individual axis.
+// Grid creates a grid. Options: Columns (required), Rows, Gap, RowGap, ColGap,
+// Padding, child Nodes, Children. Gap sets both gaps; RowGap and ColGap set one.
 func Grid(opts ...Option) *GridNode {
 	n := &GridNode{}
 	for _, opt := range opts {
@@ -668,14 +657,13 @@ func Grid(opts ...Option) *GridNode {
 	return n
 }
 
-// GridRow groups cell nodes for one row of a Grid. Children fill that row's
-// cells left-to-right. GridRow nodes are flattened by Grid at build time;
-// they have no layout effect when used outside a Grid.
+// GridRow groups cells within a Grid. See GridRowNode.
 func GridRow(children ...Node) *GridRowNode {
 	return &GridRowNode{Children: children}
 }
 
-// Barcode renders content as a barcode. Options: BarcodeType, ECLevel.
+// Barcode renders content as a barcode. Options: BarcodeType (default
+// BarcodeTypeQR), ECLevel (default ECLevelMedium).
 func Barcode(content string, opts ...Option) *BarcodeNode {
 	n := &BarcodeNode{Content: content, ECLevel: ECLevelMedium}
 	for _, opt := range opts {
@@ -691,23 +679,20 @@ func Barcode(content string, opts ...Option) *BarcodeNode {
 
 // --- Layout option types ---
 
-// gapOpt sets spacing between stack children (pixels).
 type gapOpt float64
 
 func (gapOpt) demyOption() {}
 
-// Gap returns a gap option for stack layouts.
+// Gap sets the spacing between children of a stack or grid, in logical pixels.
 func Gap(px float64) gapOpt { return gapOpt(px) }
 
-// paddingOpt sets padding inside a container (pixels).
 type paddingOpt float64
 
 func (paddingOpt) demyOption() {}
 
-// Padding returns a padding option for stack and box layouts.
+// Padding sets the inset of a stack, box, or grid, in logical pixels.
 func Padding(px float64) paddingOpt { return paddingOpt(px) }
 
-// borderOpt draws a border inside a box.
 type borderOpt struct {
 	width float64
 	color color.Color
@@ -715,71 +700,63 @@ type borderOpt struct {
 
 func (borderOpt) demyOption() {}
 
-// Border returns a border option for Box.
+// Border sets a Box border.
 func Border(width float64, c color.Color) borderOpt { return borderOpt{width, c} }
 
-// backgroundOpt sets a box fill color.
 type backgroundOpt struct{ color color.Color }
 
 func (backgroundOpt) demyOption() {}
 
-// Background returns a background color option for Box.
+// Background sets a Box fill color.
 func Background(c color.Color) backgroundOpt { return backgroundOpt{c} }
 
-// cornerRadiusOpt sets rounded corners (pixels).
 type cornerRadiusOpt float64
 
 func (cornerRadiusOpt) demyOption() {}
 
-// CornerRadius returns a corner-radius option for Box.
+// CornerRadius sets a Box corner radius, in logical pixels.
 func CornerRadius(px float64) cornerRadiusOpt { return cornerRadiusOpt(px) }
 
-// clipOpt enables clipping children to a container's bounds.
 type clipOpt struct{}
 
 func (clipOpt) demyOption() {}
 
-// Clip enables clipping when passed as a Box or Image option.
+// Clip clips a Box's children to its bounds.
 var Clip = clipOpt{} //nolint:gochecknoglobals
 
-// columnsOpt sets column track definitions on a GridNode.
 type columnsOpt []GridTrack
 
 func (columnsOpt) demyOption() {}
 
-// rowsOpt sets explicit row track definitions on a GridNode.
 type rowsOpt []GridTrack
 
 func (rowsOpt) demyOption() {}
 
-// rowGapOpt sets the gap between grid rows (pixels).
 type rowGapOpt float64
 
 func (rowGapOpt) demyOption() {}
 
-// colGapOpt sets the gap between grid columns (pixels).
 type colGapOpt float64
 
 func (colGapOpt) demyOption() {}
 
-// Columns returns a grid option that defines column track sizes.
+// Columns sets the column tracks of a Grid.
 func Columns(tracks ...GridTrack) columnsOpt { return columnsOpt(tracks) }
 
-// Rows returns a grid option that defines explicit row track sizes.
+// Rows sets the row tracks of a Grid.
 func Rows(tracks ...GridTrack) rowsOpt { return rowsOpt(tracks) }
 
-// RowGap returns an option that sets the gap between rows in a Grid (pixels).
+// RowGap sets the spacing between Grid rows, in logical pixels.
 func RowGap(px float64) rowGapOpt { return rowGapOpt(px) }
 
-// ColGap returns an option that sets the gap between columns in a Grid (pixels).
+// ColGap sets the spacing between Grid columns, in logical pixels.
 func ColGap(px float64) colGapOpt { return colGapOpt(px) }
 
-// childrenOpt wraps a slice of Nodes as a single Option for variadic expansion.
 type childrenOpt []Node
 
 func (childrenOpt) demyOption() {}
 
-// Children wraps nodes as an Option, enabling slice expansion into layout constructors:
+// Children passes a slice of nodes as a single option:
 //
 //	demy.VStack(demy.Gap(4), demy.Children(rows...))
 func Children(nodes ...Node) childrenOpt { return childrenOpt(nodes) }
@@ -868,14 +845,14 @@ func Box(opts ...Option) *BoxNode {
 	return n
 }
 
-// Frame constrains its children to exactly w×h pixels.
+// Frame sizes its children to exactly w×h logical pixels and clips them.
 func Frame(w, h float64, opts ...Option) *FrameNode {
 	n := &FrameNode{Width: w, Height: h}
 	n.Children = appendChildren(n.Children, opts)
 	return n
 }
 
-// Spacer fills remaining space in a stack. Optional weight defaults to 1.
+// Spacer fills remaining space in a stack. The optional weight defaults to 1.
 func Spacer(weight ...float64) *SpacerNode {
 	w := 1.0
 	if len(weight) > 0 {
@@ -884,20 +861,18 @@ func Spacer(weight ...float64) *SpacerNode {
 	return &SpacerNode{Weight: w}
 }
 
-// Weighted wraps child and allocates it a proportional share of the enclosing
-// stack's remaining space. Weight 0 is treated as 1. Multiple weighted children
-// share the remaining space in proportion to their weights.
+// Weighted gives child a share of the enclosing stack's remaining space. See
+// WeightedNode.
 func Weighted(weight float64, child Node) *WeightedNode {
 	return &WeightedNode{Weight: weight, Child: child}
 }
 
-// Divider draws a rule. Orientation is inferred from the enclosing stack at
-// render time: horizontal in a VStack, vertical in an HStack. Size defaults to
-// 1px; Color defaults to the muted role color.
+// Divider draws a 1px rule in the muted role color, horizontal in a VStack and
+// vertical in an HStack.
 func Divider() *DividerNode { return &DividerNode{} }
 
-// Text renders s with the given style options. When no TextOption is provided,
-// Config.DefaultTextStyle is used at render time.
+// Text renders s. Options: Style, StyleClass. See TextNode for how styles
+// combine.
 func Text(s string, opts ...TextOption) *TextNode {
 	n := &TextNode{Text: s}
 	for _, opt := range opts {
@@ -911,15 +886,13 @@ func Text(s string, opts ...TextOption) *TextNode {
 	return n
 }
 
-// Image renders img. Options: ImageScale (ImageFit, ImageFill, ImageStretch), Clip, Dither.
+// Image renders img. Options: ImageScale (ImageFit, ImageFill, ImageStretch), Dither.
 func Image(img image.Image, opts ...Option) *ImageNode {
 	n := &ImageNode{Image: img}
 	for _, opt := range opts {
 		switch v := opt.(type) {
 		case ImageScale:
 			n.Scale = v
-		case clipOpt:
-			n.Clip = true
 		case Dither:
 			n.Dither = v
 		}
@@ -927,16 +900,14 @@ func Image(img image.Image, opts ...Option) *ImageNode {
 	return n
 }
 
-// ImageKey renders the image registered under key in Config.Images.
-// Used in serialized plugin contexts where image.Image cannot be transmitted.
+// ImageKey renders the image stored under key in Config.Images. Use it for
+// trees that are serialized. Options are the same as Image.
 func ImageKey(key string, opts ...Option) *ImageNode {
 	n := &ImageNode{Key: key}
 	for _, opt := range opts {
 		switch v := opt.(type) {
 		case ImageScale:
 			n.Scale = v
-		case clipOpt:
-			n.Clip = true
 		case Dither:
 			n.Dither = v
 		}

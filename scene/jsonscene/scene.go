@@ -1,16 +1,14 @@
-// Package scene provides JSON serialization for demy Node trees.
-// Used to pass scene descriptions across process boundaries (e.g. WASM plugins).
+// Package jsonscene provides JSON serialization for demy Node trees, for passing
+// scenes across process boundaries (e.g. WASM plugins).
 //
-// Color encoding:
-//   - Role names ("foreground", "background", "accent", "muted") are stored as-is
-//     and resolved against Config.Roles at render time via demy.RoleColor.
-//   - All other colors are encoded as "#rrggbb" or "#rrggbbaa" hex strings and
-//     parsed into color.RGBA at unmarshal time.
+// Colors are encoded as role names ("foreground", "background", "accent", "muted"),
+// which unmarshal to demy.RoleColor and resolve against Config.Roles at render time,
+// or as "#rgb", "#rrggbb", or "#rrggbbaa" hex strings.
 //
-// Two serialization formats are supported:
-//   - Bare node: {"type":"vstack",...} — used by Marshal/Unmarshal
-//   - Scene envelope: {"styles":{...},"root":{...}} — used by MarshalScene/UnmarshalScene
-package scene
+// Two formats are supported:
+//   - Bare node: {"type":"vstack",...} — Marshal/Unmarshal
+//   - Scene envelope: {"styles":{...},"root":{...}} — MarshalScene/UnmarshalScene
+package jsonscene
 
 import (
 	"encoding/json"
@@ -25,10 +23,12 @@ import (
 // GridTrackDef serializes a single GridTrack.
 type GridTrackDef struct {
 	Kind   string  `json:"kind"`             // "auto", "fixed", or "fr"
-	Size   float64 `json:"size,omitempty"`   // gridTrackFixed only
-	Weight float64 `json:"weight,omitempty"` // gridTrackFr only
+	Size   float64 `json:"size,omitempty"`   // "fixed" only
+	Weight float64 `json:"weight,omitempty"` // "fr" only
 }
 
+// Node is the JSON form of a demy.Node. Type selects the node kind; only the
+// fields relevant to that kind are set.
 type Node struct {
 	Type         string         `json:"type"`
 	Gap          float64        `json:"gap,omitempty"`
@@ -60,6 +60,7 @@ type Node struct {
 	Children     []Node         `json:"children,omitempty"`
 }
 
+// Style is the JSON form of demy.Style.
 type Style struct {
 	Font       string  `json:"font,omitempty"`
 	Size       float64 `json:"size,omitempty"`
@@ -86,9 +87,8 @@ func Marshal(n demy.Node) ([]byte, error) {
 	return json.Marshal(sn)
 }
 
-// Unmarshal deserializes bare-node JSON to a Node tree. Role-name colors ("muted", etc.)
-// are stored as demy.RoleColor and resolved against Config.Roles at render time.
-// Image keys are resolved against Config.Images during the build pass.
+// Unmarshal deserializes bare-node JSON to a Node tree. Image keys are resolved
+// against Config.Images at render time.
 func Unmarshal(data []byte) (demy.Node, error) {
 	var sn Node
 	if err := json.Unmarshal(data, &sn); err != nil {
@@ -98,8 +98,7 @@ func Unmarshal(data []byte) (demy.Node, error) {
 }
 
 // MarshalScene serializes a Node tree and named style definitions to a JSON Scene
-// envelope. Callers that consume the returned data should call UnmarshalScene and
-// merge the returned styles into Config.Styles before rendering.
+// envelope.
 func MarshalScene(n demy.Node, styles map[string]demy.Style) ([]byte, error) {
 	root, err := nodeToScene(n)
 	if err != nil {
@@ -259,7 +258,6 @@ func nodeToScene(n demy.Node) (Node, error) {
 			Type:     "image",
 			ImageKey: v.Key,
 			Scale:    scaleStr(v.Scale),
-			Clip:     v.Clip,
 			Dither:   ditherStr(v.Dither),
 		}, nil
 	case *demy.BarcodeNode:
@@ -422,7 +420,6 @@ func sceneToNode(sn Node) (demy.Node, error) {
 		return &demy.ImageNode{
 			Key:    sn.ImageKey,
 			Scale:  parseScale(sn.Scale),
-			Clip:   sn.Clip,
 			Dither: parseDither(sn.Dither),
 		}, nil
 	case "barcode":
@@ -552,7 +549,7 @@ func parseColor(s string) (color.Color, error) {
 			rv, _ := strconv.ParseUint(hex[0:1], 16, 8)
 			gv, _ := strconv.ParseUint(hex[1:2], 16, 8)
 			bv, _ := strconv.ParseUint(hex[2:3], 16, 8)
-			return color.RGBA{R: uint8(rv<<8 | rv), G: uint8(gv<<8 | gv), B: uint8(bv<<8 | bv), A: 255}, nil
+			return color.RGBA{R: uint8(rv<<4 | rv), G: uint8(gv<<4 | gv), B: uint8(bv<<4 | bv), A: 255}, nil
 		case 6:
 			rv, _ := strconv.ParseUint(hex[0:2], 16, 8)
 			gv, _ := strconv.ParseUint(hex[2:4], 16, 8)
@@ -749,7 +746,7 @@ func parseWeight(s string) demy.FontStyle {
 	return w
 }
 
-// --- image scale helpers ---
+// --- image helpers ---
 
 func ditherStr(d demy.Dither) string {
 	switch d {

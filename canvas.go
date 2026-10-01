@@ -9,28 +9,25 @@ import (
 	cv "github.com/tdewolff/canvas"
 )
 
-// imageDitherRegion records a pixel region and its requested dithering algorithm,
-// collected during the draw pass from ImageNodes that have a non-NoDithering Dither field.
+// imageDitherRegion is a physical-pixel region of an image that requested its
+// own dithering algorithm.
 type imageDitherRegion struct {
 	bounds image.Rectangle
 	algo   Dither
 }
 
-// textBlit records one bitmap glyph to composite onto the final image, in
-// physical pixel coordinates. Bitmap text must bypass the antialiasing
-// rasterizer and dithering to stay crisp, so blits are collected during the
-// draw pass (like imageDitherRegion) and stamped on last.
+// textBlit is one bitmap glyph to stamp onto the final image after
+// quantization, bypassing antialiasing and dithering.
 type textBlit struct {
 	glyph        bitmapGlyph
 	destX, destY int             // physical-pixel top-left of the glyph mask
-	scale        int             // integer nearest-neighbor upscale (>= 1)
-	color        color.Gray      // palette extreme (0 or 255)
-	clip         image.Rectangle // physical-pixel clip; empty means unclipped
+	scale        int             // nearest-neighbor upscale factor
+	color        color.Gray      // 0 or 255
+	clip         image.Rectangle // physical pixels; empty means unclipped
 }
 
-// blitGlyph stamps a bitmap glyph onto dst, expanding each set mask pixel into a
-// scale×scale block. No antialiasing or blending: set pixels are written in the
-// glyph's solid color, the rest show through.
+// blitGlyph writes each set mask pixel of the glyph as a solid scale×scale
+// block, leaving unset pixels untouched.
 func blitGlyph(dst draw.Image, b textBlit) {
 	g := b.glyph
 	if g.width == 0 || g.height == 0 || len(g.bits) == 0 || b.scale < 1 {
@@ -67,22 +64,21 @@ func applyBlits(dst draw.Image, blits []textBlit) {
 	}
 }
 
-// Canvas is the demy rendering context. Build a Node tree using the constructor
-// functions (VStack, HStack, Text, …), then call Render or EncodePNG.
+// Canvas renders Node trees for a display Config. It holds no per-render state.
 //
-// Layout dimensions are in logical pixels; font sizes are in points.
-// The scale factor (Config.Scale) maps logical pixels to physical pixels.
-// The origin is top-left (0,0); Y increases downward.
+// Layout dimensions are in logical pixels and font sizes in points; the scale
+// factor maps logical to physical pixels. The origin is the top-left corner
+// and Y increases downward.
 type Canvas struct {
 	cfg          Config
-	physicalDPMM float64 // raw display pixel density; used only by rasterizer
-	dpmm         float64 // logical DPMM (physical / scale); used for all layout
+	physicalDPMM float64 // used only by the rasterizer
+	dpmm         float64 // logical; used for layout
 	scale        float64
 	Roles        Roles
 }
 
-// New creates a Canvas from the given Config.
-// Returns an error if the Config has zero physical or pixel dimensions.
+// New creates a Canvas for cfg. It returns an error if cfg has zero physical or
+// pixel dimensions.
 func New(cfg Config) (*Canvas, error) {
 	if cfg.PhysicalWidthMM == 0 || cfg.PhysicalHeightMM == 0 {
 		return nil, errors.New("demy: Config must have non-zero physical dimensions")
@@ -103,10 +99,10 @@ func New(cfg Config) (*Canvas, error) {
 // Scale returns the display scale factor (logical pixels to physical pixels).
 func (c *Canvas) Scale() float64 { return c.scale }
 
-// LogicalWidth returns the canvas width in logical pixels (physical pixels / Scale).
+// LogicalWidth returns the canvas width in logical pixels.
 func (c *Canvas) LogicalWidth() float64 { return float64(c.cfg.PixelWidth) / c.scale }
 
-// LogicalHeight returns the canvas height in logical pixels (physical pixels / Scale).
+// LogicalHeight returns the canvas height in logical pixels.
 func (c *Canvas) LogicalHeight() float64 { return float64(c.cfg.PixelHeight) / c.scale }
 
 // MustNew creates a Canvas and panics on error.
@@ -118,9 +114,8 @@ func MustNew(cfg Config) *Canvas {
 	return c
 }
 
-// draw builds the internal node tree from root, runs the three-pass layout, and
-// returns a rendered cv.Canvas plus any per-region dither requests and bitmap
-// glyph blits collected during drawing.
+// draw builds, measures, lays out, and draws root, returning the vector canvas
+// plus the dither regions and bitmap glyphs to apply after rasterization.
 func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, []textBlit, error) {
 	cvs := cv.New(c.cfg.PhysicalWidthMM, c.cfg.PhysicalHeightMM)
 	ctx := cv.NewContext(cvs)
@@ -172,10 +167,11 @@ func (c *Canvas) rasterize(cvs *cv.Canvas) *image.RGBA {
 	return img
 }
 
-// Render lays out and rasterizes root with the given color mode and optional
-// dithering algorithm (default NoDithering). ImageNodes with a non-NoDithering
-// Dither field will have their pixel region re-dithered after global quantization,
-// allowing selective dithering of images while keeping text crisp.
+// Render lays out and rasterizes root. Unset mode uses Config.ColorMode, and
+// RGBA is used if that is also Unset. algo selects the dithering applied when
+// quantizing (default NoDithering); an ImageNode with its own Dither is
+// dithered with that algorithm instead, so images can be dithered while text
+// stays crisp.
 func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image, error) {
 	if mode == Unset {
 		mode = c.cfg.ColorMode
@@ -210,7 +206,7 @@ func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image,
 			pal[i] = color.Gray{Y: uint8(i * 17)}
 		}
 	case BWRed:
-		// TODO: two-pass black+red encoder
+		// TODO: black+red two-layer encoder
 		applyBlits(gray, blits)
 		return gray, nil
 	case Grayscale:
@@ -223,15 +219,13 @@ func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image,
 
 	out = applyDither(gray, pal, algorithm)
 
-	// Re-dither image regions that requested a specific algorithm, starting from
-	// the original 8-bit grayscale so error diffusion has the full tonal range.
+	// Dither from the unquantized grayscale so error diffusion has the full range.
 	for _, r := range regions {
 		sub := subGray(gray, r.bounds)
 		ditheredSub := applyDither(sub, pal, r.algo)
 		copyGrayRegion(out, ditheredSub, r.bounds.Min)
 	}
 
-	// Stamp crisp bitmap text last so it is never antialiased or re-dithered.
 	applyBlits(out, blits)
 
 	return out, nil
@@ -249,7 +243,7 @@ func applyDither(src *image.Gray, pal []color.Gray, algo Dither) *image.Gray {
 	}
 }
 
-// subGray returns a copy of the sub-region of src defined by r.
+// subGray returns a copy of the region r of src, with origin (0,0).
 func subGray(src *image.Gray, r image.Rectangle) *image.Gray {
 	r = r.Intersect(src.Bounds())
 	dst := image.NewGray(image.Rect(0, 0, r.Dx(), r.Dy()))
@@ -261,7 +255,7 @@ func subGray(src *image.Gray, r image.Rectangle) *image.Gray {
 	return dst
 }
 
-// copyGrayRegion copies src into dst starting at offset pt.
+// copyGrayRegion copies src into dst with src's origin at pt.
 func copyGrayRegion(dst, src *image.Gray, pt image.Point) {
 	for y := range src.Bounds().Dy() {
 		for x := range src.Bounds().Dx() {

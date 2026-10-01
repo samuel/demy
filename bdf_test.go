@@ -104,8 +104,8 @@ func TestParseBDFDescenderOffset(t *testing.T) {
 	if g.height != 8 || g.yOffset != -2 {
 		t.Errorf("glyph g = h%d y%d, want h8 y-2", g.height, g.yOffset)
 	}
-	// This is the drawBitmap vertical-placement formula: top of the bitmap,
-	// measured down from the line top, is ascent - height - yOffset.
+	// Bitmap text places the glyph top at ascent - height - yOffset below the
+	// line top.
 	top := f.ascent - g.height - g.yOffset
 	if top != 0 {
 		t.Errorf("descender top = %d, want 0", top)

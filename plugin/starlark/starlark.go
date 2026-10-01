@@ -1,9 +1,9 @@
-// Package starlarkplugin exposes demy layout constructors as Starlark builtins.
-// A plugin script must define render(data) returning a demy Node tree.
+// Package starlarkplugin runs Starlark scripts that build demy Node trees.
+// A script must define render(data), which receives the map passed to
+// Plugin.Render as a dict and returns a node.
 //
-// Scripts may optionally declare a module-level "styles" dict to define named styles.
-// The host retrieves these via Plugin.Styles() and merges them into Config.Styles
-// before rendering:
+// Scripts may declare a module-level "styles" dict of named styles. The host
+// retrieves it with Plugin.Styles and merges it into Config.Styles before rendering:
 //
 //	styles = {
 //	    "h1":   Style(font="sans", size=24),
@@ -13,8 +13,8 @@
 //	def render(data):
 //	    return VStack(Text(data["title"], styles["h1"]))
 //
-// To inject custom Go functions into the script environment, create an Environment
-// and call Add* methods before loading the script:
+// To expose custom Go functions to scripts, register them on an Environment
+// before loading the script:
 //
 //	env := &starlarkplugin.Environment{}
 //	env.AddModule("svc", map[string]starlarkplugin.BuiltinFunc{
@@ -23,32 +23,40 @@
 //	        // ... use ctx to call a remote service ...
 //	    },
 //	})
-//	p, err := env.Load("display.star", cfg)
+//	p, err := env.Load("display.star", cfg, time.Local)
 //	node, err := p.Render(r.Context(), data)
 //
 // Exposed globals:
 //
-//	Constructors: VStack, HStack, ZStack, Box, Frame, Spacer, Divider(size=, color=), Grid, GridRow, Text, ImageKey, Barcode
-//	Style:        Style(font=, size=, weight=, color=, align=, line_height=, max_lines=, overflow=)
-//	              font= may name a bitmap (BDF) family loaded into Config.Fonts by the
-//	              host, in which case size= is ignored (bitmap fonts render at their
-//	              native pixel size times the display Scale).
-//	Options:      Gap, Padding, Background, Border, CornerRadius, Children, Clip,
-//	              Columns, Rows, RowGap, ColGap
+//	Containers:   VStack(...), HStack(...), ZStack(...), Box(...), Grid(...),
+//	              Frame(w, h, ...), GridRow(nodes...)
+//	Nodes:        Text(s, style...), ImageKey(key, ...), Barcode(content, ...),
+//	              Spacer(weight?), Divider(size=, color=)
+//	Style:        Style(class=, font=, size=, weight=, color=, align=, line_height=,
+//	              max_lines=, overflow=)
+//	              class= starts from a named style in Config.Styles; other fields
+//	              override it. weight is "thin" … "black", optionally suffixed with
+//	              "-italic"; align is "left", "center", or "right"; overflow is
+//	              "wrap", "clip", or "ellipsis". size= is ignored for bitmap fonts.
+//	Options:      Gap(px), Padding(px), Background(color), Border(width, color),
+//	              CornerRadius(px), Children(nodes or list), Clip,
+//	              Columns(tracks or list), Rows(tracks or list), RowGap(px), ColGap(px)
 //	Grid tracks:  GridFixed(px), GridAuto(), GridFr(weight)
 //	Alignment:    AlignStart, AlignCenter, AlignEnd
 //	ZAlignment:   TopLeading, Top, TopTrailing, Leading, Center, Trailing,
 //	              BottomLeading, Bottom, BottomTrailing
 //	ImageScale:   ImageFit, ImageFill, ImageStretch
-//	Dither:       FloydSteinberg, Atkinson (pass as option to ImageKey for per-region dithering)
+//	Dither:       FloydSteinberg, Atkinson (options to ImageKey)
 //	BarcodeType:  BarcodeTypeQR
 //	ECLevel:      ECLevelLow, ECLevelMedium, ECLevelQuartile, ECLevelHigh
-//	Colors:       Foreground, Accent, Muted (role strings), Black, DarkGray, LightGray,
+//	Colors:       Foreground, Accent, Muted (role names), Black, DarkGray, LightGray,
 //	              White, Red, Yellow (hex strings)
 //	Time:         now() → time value with .year .month .day .hour .minute .second
-//	              .weekday (0=Sun) .weekday_name .timezone .unix and .format(layout) method
+//	              .weekday (0=Sun) .weekday_name .timezone .unix and .format(layout)
 //
-// Named styles from Config.Styles are injected as capitalized globals (e.g. "h1" → H1).
+// Color arguments accept role names ("foreground", "background", "accent", "muted")
+// or "#rrggbb"/"#rrggbbaa" hex strings. Named styles from Config.Styles are also
+// exposed as capitalized globals (e.g. "h1" → H1).
 package starlarkplugin
 
 import (
@@ -103,7 +111,7 @@ func (e *Environment) AddValue(name string, v sl.Value) *Environment {
 }
 
 // AddModule registers a group of functions as a named Starlark module, accessible
-// in scripts as module.fn(args). Uses starlarkstruct.Module internally.
+// in scripts as name.fn(args).
 func (e *Environment) AddModule(name string, fns map[string]BuiltinFunc) *Environment {
 	e.initExtras()
 	members := make(sl.StringDict, len(fns))
@@ -128,7 +136,7 @@ func (e *Environment) LoadBytes(filename string, src []byte, cfg demy.Config, lo
 	return execFile(filename, src, cfg, loc, e.extras)
 }
 
-// contextKey is the thread-local key used to propagate context.Context through Render.
+// contextKey is the thread-local key holding the context.Context passed to Render.
 const contextKey = "demy/ctx"
 
 // ContextFromThread retrieves the context.Context set by Render.
@@ -206,9 +214,9 @@ func execFile(filename string, src any, cfg demy.Config, loc *time.Location, ext
 	return p, nil
 }
 
-// Styles returns named style definitions declared in the script's module-level
-// "styles" dict. Merge these into Config.Styles before calling Canvas.Render so
-// that Class("h1") references in the returned node tree resolve correctly.
+// Styles returns the named styles declared in the script's module-level "styles"
+// dict, or nil if there are none. Merge these into Config.Styles before rendering
+// so that class references in the returned node tree resolve.
 func (p *Plugin) Styles() map[string]demy.Style {
 	return p.scriptStyles
 }
@@ -328,7 +336,7 @@ func newEnv(cfg demy.Config, loc *time.Location) sl.StringDict {
 		"ImageFit":     &optValue{demy.ImageFit},
 		"ImageFill":    &optValue{demy.ImageFill},
 		"ImageStretch": &optValue{demy.ImageStretch},
-		// Image dither algorithms (passed as option to ImageKey)
+		// Image dither algorithms
 		"FloydSteinberg": &optValue{demy.FloydSteinberg},
 		"Atkinson":       &optValue{demy.Atkinson},
 		// Barcode type
@@ -354,8 +362,7 @@ func newEnv(cfg demy.Config, loc *time.Location) sl.StringDict {
 			return builtinNow(loc)
 		}),
 	}
-	// Named styles from cfg.Styles are injected as capitalized globals.
-	// "h1" → H1, "body" → Body, "caption" → Caption, etc.
+	// Named styles are exposed as capitalized globals ("h1" → H1).
 	for k, v := range cfg.Styles {
 		d[capitalizeFirst(k)] = &styleValue{v}
 	}
@@ -604,7 +611,7 @@ func builtinPadding(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (s
 	return &optValue{demy.Padding(px)}, nil
 }
 
-// Background(color_string) — accepts role names ("muted", "foreground", …) or "#rrggbb" hex.
+// Background(color)
 func builtinBackground(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
 	if len(args) != 1 {
 		return nil, errors.New("background: expected 1 argument")
@@ -620,7 +627,7 @@ func builtinBackground(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple)
 	return &optValue{demy.Background(c)}, nil
 }
 
-// Border(width, color_string) — color accepts role names or "#rrggbb" hex.
+// Border(width, color)
 func builtinBorder(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl.Value, error) {
 	if len(args) != 2 {
 		return nil, errors.New("border: expected 2 arguments (width, color)")
@@ -700,7 +707,7 @@ func builtinGridFr(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (sl
 	return &trackValue{demy.GridFr(w)}, nil
 }
 
-// parseTracks converts variadic Starlark args (trackValue or *sl.List of trackValue) to []demy.GridTrack.
+// parseTracks accepts tracks or lists of tracks.
 func parseTracks(args sl.Tuple) ([]demy.GridTrack, error) {
 	var tracks []demy.GridTrack
 	for _, arg := range args {
@@ -786,8 +793,7 @@ func builtinChildren(_ *sl.Thread, _ *sl.Builtin, args sl.Tuple, _ []sl.Tuple) (
 
 // --- Helpers ---
 
-// argsToOptions converts Starlark args to demy.Option values.
-// Accepts *nodeValue (all node types implement Option) and *optValue.
+// argsToOptions converts node and option arguments to demy.Option values.
 func argsToOptions(args sl.Tuple) ([]demy.Option, error) {
 	opts := make([]demy.Option, 0, len(args))
 	for _, arg := range args {

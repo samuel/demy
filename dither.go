@@ -11,14 +11,13 @@ func clamp(v, lo, hi float64) float64 {
 	return math.Max(lo, math.Min(hi, v))
 }
 
-// toGray converts an RGBA image to 8-bit grayscale using luminance weights.
+// toGray converts an RGBA image to 8-bit grayscale using BT.601 luminance.
 func toGray(rgba *image.RGBA) *image.Gray {
 	bounds := rgba.Bounds()
 	gray := image.NewGray(bounds)
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			c := rgba.RGBAAt(x, y)
-			// ITU-R BT.601 luminance
 			lum := (19595*uint32(c.R) + 38470*uint32(c.G) + 7471*uint32(c.B) + 1<<15) >> 16
 			gray.SetGray(x, y, color.Gray{Y: uint8(lum)})
 		}
@@ -41,6 +40,7 @@ func nearestPalette(val float64, palette []color.Gray) int {
 	return nearest
 }
 
+// ditherNone maps each pixel of src to its nearest palette entry.
 func ditherNone(src *image.Gray, palette []color.Gray) *image.Gray {
 	bounds := src.Bounds()
 	w := bounds.Dx()
@@ -93,7 +93,6 @@ func ditherFloydSteinberg(src *image.Gray, palette []color.Gray) *image.Gray {
 }
 
 // ditherAtkinson applies Atkinson error diffusion to src using palette.
-// Atkinson retains more white space, often looking sharper at 800×480.
 func ditherAtkinson(src *image.Gray, palette []color.Gray) *image.Gray {
 	bounds := src.Bounds()
 	w := bounds.Dx()

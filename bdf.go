@@ -37,10 +37,10 @@ func (g bitmapGlyph) pixelSet(col, row int) bool {
 // bitmapFont is a parsed BDF font at one native pixel size.
 type bitmapFont struct {
 	pixelSize    int
-	ascent       int  // baseline to top
-	descent      int  // baseline to bottom (positive)
-	lineHeight   int  // ascent + descent
-	spaceAdvance int  // advance used for missing glyphs with no default
+	ascent       int // baseline to top
+	descent      int // baseline to bottom (positive)
+	lineHeight   int
+	spaceAdvance int  // advance for runes with no glyph and no default glyph
 	defaultChar  rune // -1 if absent
 	glyphs       map[rune]bitmapGlyph
 }

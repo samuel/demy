@@ -9,9 +9,9 @@ import (
 	"golang.org/x/image/vector"
 )
 
-// vectorRenderer implements cv.Renderer using golang.org/x/image/vector instead of
-// srwiley/scanx. The scanx rasterizer has a platform-specific infinite-loop bug
-// triggered by certain path geometries on Linux.
+// vectorRenderer implements cv.Renderer using golang.org/x/image/vector. The
+// default srwiley/scanx rasterizer can loop forever on some path geometries
+// on Linux.
 type vectorRenderer struct {
 	img           *image.RGBA
 	resolution    cv.Resolution
@@ -58,7 +58,7 @@ func (r *vectorRenderer) RenderPath(path *cv.Path, style cv.Style, m cv.Matrix) 
 }
 
 func (r *vectorRenderer) RenderText(text *cv.Text, m cv.Matrix) {
-	text.RenderAsPath(r, m, r.resolution)
+	text.RenderTo(r, m, r.resolution)
 }
 
 func (r *vectorRenderer) RenderImage(img image.Image, m cv.Matrix) {

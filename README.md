@@ -83,23 +83,24 @@ demy.VStack(demy.Gap(4), demy.Children(rows...))
 |-------------|---------|
 | `VStack(opts...)` / `HStack(opts...)` | `Gap`, `Padding`, `AlignStart`/`AlignCenter`/`AlignEnd`, children |
 | `ZStack(opts...)` | `TopLeading` (default), `Top`, …, `BottomTrailing`, children |
-| `Box(opts...)` | `Padding`, `Background(color)`, `Border(width, color)`, `CornerRadius`, `Clip` (rectangular, ignores corner radius), children |
+| `Box(opts...)` | `Padding`, `Background(color)`, `Border(width, color)` (insets children by its width), `CornerRadius`, `Clip` (rectangular, ignores corner radius), children |
 | `Frame(w, h, children...)` | constrains children to exactly w×h and clips to its bounds |
 | `Spacer()` / `Spacer(weight)` | fills remaining stack space |
-| `Weighted(weight, child)` | gives child a proportional share of remaining stack space |
-| `Divider()` | 1px rule in the muted color; orientation follows the enclosing stack |
+| `Weighted(weight, child)` | gives child a proportional share of remaining stack space; its cross-axis size counts toward the stack's |
+| `Divider()` | 1px rule in the muted color; orientation follows the enclosing stack, and a vertical divider spans the `HStack`'s height |
 | `Grid(opts...)` | `Columns(...)` (required), `Rows(...)`, `Gap`, `RowGap`, `ColGap`, `Padding`, children |
 | `GridRow(children...)` | optional grouping of one row's cells; flattened by `Grid` |
 
 ### Grid
 
-Cells fill row by row, left to right. Rows default to `GridAuto()`.
+Cells fill row by row, left to right. Rows default to `GridAuto()`. When `Rows` is given it
+sets the row count: empty rows keep their size and children beyond the last row are dropped.
 
 | Track | Meaning |
 |-------|---------|
 | `GridFixed(px)` | exact size |
 | `GridAuto()` | max content size in that column/row |
-| `GridFr(w)` | proportional share of remaining space (like CSS `fr`) |
+| `GridFr(w)` | proportional share of remaining space (like CSS `fr`); Fr rows size to content when the grid's height is unbounded, such as inside a `VStack` |
 
 ```go
 demy.Grid(
@@ -142,6 +143,9 @@ demy.Style{
     Overflow:   demy.TextOverflowEllipsis, // TextOverflowWrap, TextOverflowClip, TextOverflowEllipsis
 }
 ```
+
+`MaxLines` truncates text to that many lines; with `TextOverflowEllipsis` the last line is
+shortened to fit an ellipsis. A `Font` name missing from `Config.Fonts` is a render error.
 
 `Text` with no style uses `Config.DefaultTextStyle`. Named styles in `Config.Styles` are
 referenced with `Class`, and inline `Style` fields override the class:
@@ -207,6 +211,9 @@ demy.Image(img, demy.ImageFill) // ImageFit (default), ImageFill, ImageStretch
 demy.ImageKey("logo")           // looks up Config.Images["logo"]
 ```
 
+`ImageFit` scales the image to fit the available space, preserving aspect ratio. Along an
+unbounded axis (height inside a `VStack`) it scales to the other axis.
+
 ## Barcodes
 
 ```go
@@ -215,7 +222,9 @@ demy.Frame(200, 200,
 )
 ```
 
-A barcode fills its allocated space. `BarcodeTypeQR` is the only (and default) type. Error
+A barcode fills its allocated space, scaled by a whole number of physical pixels per module and
+centered, so modules stay sharp at any display scale. Content that can't be encoded, or a space
+too small for one pixel per module, is a render error. `BarcodeTypeQR` is the only (and default) type. Error
 correction levels: `ECLevelLow` (~7%), `ECLevelMedium` (~15%, default), `ECLevelQuartile` (~25%),
 `ECLevelHigh` (~30%).
 

@@ -32,8 +32,23 @@ type nodeRect struct{ x, y, w, h float64 }
 type measureCtx struct {
 	fonts  map[string]*FontFamily
 	dpmm   float64
+	scale  float64
 	availW float64
 	availH float64
+}
+
+// unbounded is the available size on an axis with no constraint.
+const unbounded = math.MaxFloat32
+
+// isUnbounded reports whether an available size is effectively unconstrained.
+func isUnbounded(v float64) bool { return v > 1e9 }
+
+// with returns a copy of mctx with the given available size.
+func (mctx *measureCtx) with(availW, availH float64) *measureCtx {
+	c := *mctx
+	c.availW = availW
+	c.availH = availH
+	return &c
 }
 
 // drawCtx carries context for the draw pass.
@@ -46,6 +61,14 @@ type drawCtx struct {
 	ditherRegions []imageDitherRegion
 	textBlits     []textBlit
 	clip          image.Rectangle // physical-pixel clip for bitmap text and clipped sub-canvases
+	err           error           // first error encountered while drawing
+}
+
+// setErr records err if no earlier draw error has been recorded.
+func (dctx *drawCtx) setErr(err error) {
+	if dctx.err == nil {
+		dctx.err = err
+	}
 }
 
 // node is the interface all layout and widget nodes implement.
@@ -71,12 +94,7 @@ func (n *vstackNode) measure(mctx *measureCtx) nodeSize {
 	n.measuredSizes = make([]nodeSize, len(n.children))
 	var totalH, maxW float64
 	for i, child := range n.children {
-		s := child.measure(&measureCtx{
-			fonts:  mctx.fonts,
-			dpmm:   mctx.dpmm,
-			availW: innerW,
-			availH: math.MaxFloat32,
-		})
+		s := child.measure(mctx.with(innerW, unbounded))
 		n.measuredSizes[i] = s
 		if i > 0 {
 			totalH += n.gap
@@ -97,8 +115,8 @@ func (n *vstackNode) layout(bounds nodeRect) {
 	n.bounds = bounds
 	innerX := bounds.x + n.padding
 	innerY := bounds.y + n.padding
-	innerW := bounds.w - 2*n.padding
-	innerH := bounds.h - 2*n.padding
+	innerW := math.Max(0, bounds.w-2*n.padding)
+	innerH := math.Max(0, bounds.h-2*n.padding)
 
 	// Compute fixed height and total weight (spacers + weighted nodes share one pool).
 	fixedH := -n.gap // account for no gap before first child
@@ -179,12 +197,7 @@ func (n *hstackNode) measure(mctx *measureCtx) nodeSize {
 
 	// Pass 1: measure all children at full available width.
 	for i, child := range n.children {
-		n.measuredSizes[i] = child.measure(&measureCtx{
-			fonts:  mctx.fonts,
-			dpmm:   mctx.dpmm,
-			availW: innerW,
-			availH: innerH,
-		})
+		n.measuredSizes[i] = child.measure(mctx.with(innerW, innerH))
 	}
 
 	// Pass 2: if variable-width children overflow the space left after gaps and
@@ -208,12 +221,29 @@ func (n *hstackNode) measure(mctx *measureCtx) nodeSize {
 			case *spacerNode, *weightedNode, *frameNode:
 			default:
 				newW := n.measuredSizes[i].w * shrinkScale
-				n.measuredSizes[i] = child.measure(&measureCtx{
-					fonts:  mctx.fonts,
-					dpmm:   mctx.dpmm,
-					availW: newW,
-					availH: innerH,
-				})
+				n.measuredSizes[i] = child.measure(mctx.with(newW, innerH))
+			}
+		}
+	}
+
+	// Pass 3: measure weighted children at their share of the remaining width so
+	// their heights count toward the stack's height.
+	var usedW, totalWeight float64
+	for i, child := range n.children {
+		switch v := child.(type) {
+		case *spacerNode:
+			totalWeight += v.weight
+		case *weightedNode:
+			totalWeight += v.weight
+		default:
+			usedW += n.measuredSizes[i].w
+		}
+	}
+	if totalWeight > 0 {
+		unitW := math.Max(0, innerW-totalGaps-usedW) / totalWeight
+		for i, child := range n.children {
+			if v, ok := child.(*weightedNode); ok {
+				n.measuredSizes[i] = child.measure(mctx.with(unitW*v.weight, innerH))
 			}
 		}
 	}
@@ -240,8 +270,8 @@ func (n *hstackNode) layout(bounds nodeRect) {
 	n.bounds = bounds
 	innerX := bounds.x + n.padding
 	innerY := bounds.y + n.padding
-	innerW := bounds.w - 2*n.padding
-	innerH := bounds.h - 2*n.padding
+	innerW := math.Max(0, bounds.w-2*n.padding)
+	innerH := math.Max(0, bounds.h-2*n.padding)
 
 	fixedW := -n.gap
 	totalWeight := 0.0
@@ -274,6 +304,9 @@ func (n *hstackNode) layout(bounds nodeRect) {
 			fillCrossAxis = true
 		case *weightedNode:
 			childW = unitW * v.weight
+			fillCrossAxis = true
+		case *dividerNode:
+			childW = n.measuredSizes[i].w
 			fillCrossAxis = true
 		default:
 			childW = n.measuredSizes[i].w
@@ -376,18 +409,21 @@ type boxNode struct {
 	bounds        nodeRect
 }
 
+// inset returns the distance from the box edge to its content.
+func (n *boxNode) inset() float64 {
+	if n.borderColor == nil {
+		return n.padding
+	}
+	return n.padding + n.borderWidth
+}
+
 func (n *boxNode) measure(mctx *measureCtx) nodeSize {
-	innerW := math.Max(0, mctx.availW-2*n.padding)
-	innerH := math.Max(0, mctx.availH-2*n.padding)
+	innerW := math.Max(0, mctx.availW-2*n.inset())
+	innerH := math.Max(0, mctx.availH-2*n.inset())
 	n.measuredSizes = make([]nodeSize, len(n.children))
 	var maxW, maxH float64
 	for i, child := range n.children {
-		s := child.measure(&measureCtx{
-			fonts:  mctx.fonts,
-			dpmm:   mctx.dpmm,
-			availW: innerW,
-			availH: innerH,
-		})
+		s := child.measure(mctx.with(innerW, innerH))
 		n.measuredSizes[i] = s
 		if s.w > maxW {
 			maxW = s.w
@@ -396,15 +432,15 @@ func (n *boxNode) measure(mctx *measureCtx) nodeSize {
 			maxH = s.h
 		}
 	}
-	return nodeSize{w: maxW + 2*n.padding, h: maxH + 2*n.padding}
+	return nodeSize{w: maxW + 2*n.inset(), h: maxH + 2*n.inset()}
 }
 
 func (n *boxNode) layout(bounds nodeRect) {
 	n.bounds = bounds
-	innerX := bounds.x + n.padding
-	innerY := bounds.y + n.padding
-	innerW := bounds.w - 2*n.padding
-	innerH := bounds.h - 2*n.padding
+	innerX := bounds.x + n.inset()
+	innerY := bounds.y + n.inset()
+	innerW := math.Max(0, bounds.w-2*n.inset())
+	innerH := math.Max(0, bounds.h-2*n.inset())
 	for _, child := range n.children {
 		child.layout(nodeRect{x: innerX, y: innerY, w: innerW, h: innerH})
 	}
@@ -462,12 +498,7 @@ type frameNode struct {
 
 func (n *frameNode) measure(mctx *measureCtx) nodeSize {
 	for _, child := range n.children {
-		child.measure(&measureCtx{
-			fonts:  mctx.fonts,
-			dpmm:   mctx.dpmm,
-			availW: n.w,
-			availH: n.h,
-		})
+		child.measure(mctx.with(n.w, n.h))
 	}
 	return nodeSize{w: n.w, h: n.h}
 }
@@ -483,12 +514,15 @@ func (n *frameNode) draw(dctx *drawCtx) {
 	drawClipped(dctx, nodeRect{x: n.bounds.x, y: n.bounds.y, w: n.w, h: n.h}, n.children)
 }
 
-// drawClipped draws children onto a sub-canvas the size of r and composites it
-// onto dctx, confining their vector content to r.
+// drawClipped draws children onto a sub-canvas covering r and composites it
+// onto dctx, confining their content to r. The sub-canvas is rasterized at
+// physical resolution on whole physical pixels, so clipped content is as sharp
+// as unclipped content.
 func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 	// Bitmap glyphs and dither regions apply to the root image after
-	// quantization, so they are clipped to r's physical-pixel bounds rather
-	// than relying on the sub-canvas crop that confines vector content.
+	// quantization, so they are clipped to the same physical-pixel bounds.
+	// Limiting the sub-canvas to the visible region bounds its allocation by
+	// the root canvas regardless of the node's own size.
 	clip := image.Rect(
 		int(math.Round(r.x*dctx.scale)),
 		int(math.Round(r.y*dctx.scale)),
@@ -498,33 +532,19 @@ func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 	if clip.Empty() {
 		return
 	}
-	// Shrink r to the visible region so the sub-canvas allocation is bounded
-	// by the root canvas regardless of the node's own size.
-	x0 := math.Max(r.x, float64(clip.Min.X)/dctx.scale)
-	y0 := math.Max(r.y, float64(clip.Min.Y)/dctx.scale)
-	x1 := math.Min(r.x+r.w, float64(clip.Max.X)/dctx.scale)
-	y1 := math.Min(r.y+r.h, float64(clip.Max.Y)/dctx.scale)
-	r = nodeRect{x: x0, y: y0, w: x1 - x0, h: y1 - y0}
 
-	dpmm := dctx.dpmm
-	wPx := int(math.Round(r.w))
-	hPx := int(math.Round(r.h))
-	if wPx <= 0 || hPx <= 0 {
-		return
-	}
-	wMM := r.w / dpmm
-	hMM := r.h / dpmm
-	xMM := r.x / dpmm
-	yMM := r.y / dpmm
+	physDPMM := dctx.dpmm * dctx.scale
+	xMM := float64(clip.Min.X) / physDPMM
+	yMM := float64(clip.Min.Y) / physDPMM
 
-	subCvs := cv.New(wMM, hMM)
+	subCvs := cv.New(float64(clip.Dx())/physDPMM, float64(clip.Dy())/physDPMM)
 	subCtx := cv.NewContext(subCvs)
 	subCtx.SetCoordSystem(cv.CartesianIV)
 	subCtx.Translate(-xMM, -yMM)
 
 	subDctx := &drawCtx{
 		ctx:   subCtx,
-		dpmm:  dpmm,
+		dpmm:  dctx.dpmm,
 		scale: dctx.scale,
 		roles: dctx.roles,
 		fonts: dctx.fonts,
@@ -532,6 +552,9 @@ func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 	}
 	for _, child := range children {
 		child.draw(subDctx)
+	}
+	if subDctx.err != nil {
+		dctx.setErr(subDctx.err)
 	}
 	dctx.textBlits = append(dctx.textBlits, subDctx.textBlits...)
 	for _, dr := range subDctx.ditherRegions {
@@ -541,11 +564,9 @@ func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 		}
 	}
 
-	subImg := image.NewRGBA(image.Rect(0, 0, wPx, hPx))
-	subRas := newVectorRenderer(subImg, dpmm)
-	subCvs.RenderTo(subRas)
-
-	dctx.ctx.DrawImage(xMM, yMM, subImg, cv.DPMM(dpmm))
+	subImg := image.NewRGBA(image.Rect(0, 0, clip.Dx(), clip.Dy()))
+	subCvs.RenderTo(newVectorRenderer(subImg, physDPMM))
+	dctx.ctx.DrawImage(xMM, yMM, subImg, cv.DPMM(physDPMM))
 }
 
 // --- spacerNode ---
@@ -566,27 +587,20 @@ func (n *spacerNode) draw(_ *drawCtx) {}
 type weightedNode struct {
 	weight float64
 	child  node
-	// retained from measure to re-measure the child with its allocated bounds
-	fonts  map[string]*FontFamily
-	dpmm   float64
+	mctx   *measureCtx // retained from measure to re-measure the child with its allocated bounds
 	bounds nodeRect
 }
 
+// measure returns the child's size. Stacks ignore the main-axis component and
+// use the cross-axis one.
 func (n *weightedNode) measure(mctx *measureCtx) nodeSize {
-	n.fonts = mctx.fonts
-	n.dpmm = mctx.dpmm
-	n.child.measure(mctx)
-	return nodeSize{}
+	n.mctx = mctx
+	return n.child.measure(mctx)
 }
 
 func (n *weightedNode) layout(bounds nodeRect) {
 	n.bounds = bounds
-	n.child.measure(&measureCtx{
-		fonts:  n.fonts,
-		dpmm:   n.dpmm,
-		availW: bounds.w,
-		availH: bounds.h,
-	})
+	n.child.measure(n.mctx.with(bounds.w, bounds.h))
 	n.child.layout(bounds)
 }
 
@@ -609,7 +623,9 @@ func (n *dividerNode) measure(mctx *measureCtx) nodeSize {
 	if n.isHorizontal {
 		return nodeSize{w: mctx.availW, h: sz}
 	}
-	return nodeSize{w: sz, h: mctx.availH}
+	// A vertical divider stretches to the stack's height in layout, so it
+	// contributes no height of its own.
+	return nodeSize{w: sz}
 }
 
 func (n *dividerNode) layout(bounds nodeRect) { n.bounds = bounds }
@@ -666,19 +682,45 @@ func (n *textNode) measure(mctx *measureCtx) nodeSize {
 		clr = Black
 	}
 	face := ff.family.Face(n.style.Size, clr, cv.FontStyle(n.style.Weight))
-	wMM := mctx.availW / mctx.dpmm
+	tb := n.textBox(face, mctx.availW/mctx.dpmm)
+	return nodeSize{w: tb.Width * mctx.dpmm, h: tb.Height * mctx.dpmm}
+}
+
+// textBox lays out the text in a box wMM millimeters wide, limited to MaxLines.
+// With TextOverflowEllipsis, text that doesn't fit is shortened to the longest
+// prefix that fits with an ellipsis appended.
+func (n *textNode) textBox(face *cv.FontFace, wMM float64) *cv.Text {
 	var heightMM float64
 	if n.style.MaxLines > 0 {
-		lh := face.LineHeight()
 		lineStretch := n.style.LineHeight
 		if lineStretch == 0 {
 			lineStretch = 1.0
 		}
-		heightMM = lh * float64(n.style.MaxLines) * lineStretch
+		heightMM = face.LineHeight() * float64(n.style.MaxLines) * lineStretch
 	}
 	opts := textOptions(n.style)
-	tb := cv.NewTextBox(face, n.text, wMM, heightMM, cvHAlign(n.style.Align), cv.Top, opts)
-	return nodeSize{w: tb.Width * mctx.dpmm, h: tb.Height * mctx.dpmm}
+	box := func(text string) *cv.Text {
+		return cv.NewTextBox(face, text, wMM, heightMM, cvHAlign(n.style.Align), cv.Top, opts)
+	}
+	tb := box(n.text)
+	if heightMM == 0 || n.style.Overflow != TextOverflowEllipsis || !tb.OverflowsY {
+		return tb
+	}
+	// Binary search for the longest rune prefix that fits with the ellipsis.
+	runes := []rune(n.text)
+	lo, hi := 0, len(runes)
+	best := box("…")
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		cand := box(strings.TrimRight(string(runes[:mid]), " ") + "…")
+		if cand.OverflowsY {
+			hi = mid - 1
+		} else {
+			lo = mid
+			best = cand
+		}
+	}
+	return best
 }
 
 func (n *textNode) layout(bounds nodeRect) { n.bounds = bounds }
@@ -703,18 +745,9 @@ func (n *textNode) draw(dctx *drawCtx) {
 		clr = Black
 	}
 	face := ff.family.Face(n.style.Size, clr, cv.FontStyle(n.style.Weight))
-	wMM := n.bounds.w / dctx.dpmm
-	var heightMM float64
-	if n.style.MaxLines > 0 {
-		lh := face.LineHeight()
-		lineStretch := n.style.LineHeight
-		if lineStretch == 0 {
-			lineStretch = 1.0
-		}
-		heightMM = lh * float64(n.style.MaxLines) * lineStretch
-	}
-	opts := textOptions(n.style)
-	tb := cv.NewTextBox(face, n.text, wMM, heightMM, cvHAlign(n.style.Align), cv.Top, opts)
+	// The laid-out width is often exactly the measured width; the epsilon
+	// absorbs the float round trip so lines don't break differently than measured.
+	tb := n.textBox(face, n.bounds.w/dctx.dpmm+1e-6)
 	xMM := n.bounds.x / dctx.dpmm
 	yMM := n.bounds.y / dctx.dpmm
 	dctx.ctx.DrawText(xMM, yMM, tb)
@@ -740,21 +773,41 @@ func textOptions(s Style) *cv.TextOptions {
 
 // --- bitmap text ---
 
-// measureBitmap measures text in a bitmap font. One font pixel is one logical
-// pixel; the integer display scale is applied at draw time.
+// bitmapIntScale returns the whole-number upscale applied to bitmap glyphs.
+func bitmapIntScale(scale float64) int { return max(int(math.Round(scale)), 1) }
+
+// bitmapUnit returns the logical size of one font pixel. Glyphs are drawn at a
+// whole-number physical scale, so with a fractional display scale a font pixel
+// is not exactly one logical pixel.
+func bitmapUnit(scale float64) float64 {
+	if scale <= 0 {
+		return 1
+	}
+	return float64(bitmapIntScale(scale)) / scale
+}
+
+// measureBitmap measures text in a bitmap font.
 func (n *textNode) measureBitmap(mctx *measureCtx, ff *FontFamily) nodeSize {
 	bf := ff.bitmapVariant(n.style.Weight)
 	if bf == nil {
 		return nodeSize{}
 	}
-	lines := layoutBitmapText(bf, n.text, mctx.availW, n.style)
-	maxW := 0
+	unit := bitmapUnit(mctx.scale)
+	maxW := mctx.availW
+	if !isUnbounded(maxW) {
+		maxW /= unit
+	}
+	lines := layoutBitmapText(bf, n.text, maxW, n.style)
+	widest := 0
 	for _, runes := range lines {
-		if w := bmpLineWidth(bf, runes); w > maxW {
-			maxW = w
+		if w := bmpLineWidth(bf, runes); w > widest {
+			widest = w
 		}
 	}
-	return nodeSize{w: float64(maxW), h: float64(len(lines)) * bitmapLineHeight(bf, n.style)}
+	return nodeSize{
+		w: float64(widest) * unit,
+		h: float64(len(lines)) * bitmapLineHeight(bf, n.style) * unit,
+	}
 }
 
 // drawBitmap collects glyph blits for text in a bitmap font. Blits are applied
@@ -773,9 +826,9 @@ func (n *textNode) drawBitmap(dctx *drawCtx, ff *FontFamily) {
 	}
 	col := snapBitmapColor(clr)
 
-	lines := layoutBitmapText(bf, n.text, n.bounds.w, n.style)
+	iscale := bitmapIntScale(dctx.scale)
+	lines := layoutBitmapText(bf, n.text, n.bounds.w/bitmapUnit(dctx.scale), n.style)
 
-	iscale := max(int(math.Round(dctx.scale)), 1)
 	baseXp := n.bounds.x * dctx.scale
 	baseYp := n.bounds.y * dctx.scale
 	boundsWp := n.bounds.w * dctx.scale
@@ -810,7 +863,7 @@ func (n *textNode) drawBitmap(dctx *drawCtx, ff *FontFamily) {
 	}
 }
 
-// bitmapLineHeight returns the line height in logical pixels, applying the
+// bitmapLineHeight returns the line height in font pixels, applying the
 // style's line-height multiplier (default 1.0).
 func bitmapLineHeight(bf *bitmapFont, s Style) float64 {
 	stretch := s.LineHeight
@@ -820,10 +873,14 @@ func bitmapLineHeight(bf *bitmapFont, s Style) float64 {
 	return float64(bf.lineHeight) * stretch
 }
 
-// layoutBitmapText splits text into lines, honoring '\n' breaks, MaxLines, and
-// ellipsis overflow. Words wrap greedily when maxW is a finite positive width.
+// layoutBitmapText splits text into lines, honoring line breaks, MaxLines, and
+// ellipsis overflow. When maxW (in font pixels) is a finite positive width,
+// words wrap greedily and words wider than maxW are broken between runes.
 func layoutBitmapText(bf *bitmapFont, text string, maxW float64, style Style) [][]rune {
-	wrap := maxW > 0 && maxW < 1e8
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	wrap := maxW > 0 && !isUnbounded(maxW)
+	limit := int(math.Floor(maxW))
 	var lines [][]rune
 	for para := range strings.SplitSeq(text, "\n") {
 		if !wrap {
@@ -836,7 +893,7 @@ func layoutBitmapText(bf *bitmapFont, text string, maxW float64, style Style) []
 		for word := range strings.SplitSeq(para, " ") {
 			wr := []rune(word)
 			ww := bmpLineWidth(bf, wr)
-			if len(cur) > 0 && float64(curW+space+ww) > maxW {
+			if len(cur) > 0 && curW+space+ww > limit {
 				lines = append(lines, cur)
 				cur = nil
 				curW = 0
@@ -845,28 +902,44 @@ func layoutBitmapText(bf *bitmapFont, text string, maxW float64, style Style) []
 				cur = append(cur, ' ')
 				curW += space
 			}
-			cur = append(cur, wr...)
-			curW += ww
+			for _, r := range wr {
+				adv := bmpRuneAdvance(bf, r)
+				if len(cur) > 0 && curW+adv > limit {
+					lines = append(lines, cur)
+					cur = nil
+					curW = 0
+				}
+				cur = append(cur, r)
+				curW += adv
+			}
 		}
 		lines = append(lines, cur)
 	}
 	if style.MaxLines > 0 && len(lines) > style.MaxLines {
 		lines = lines[:style.MaxLines]
-		if style.Overflow == TextOverflowEllipsis && len(lines) > 0 {
+		if style.Overflow == TextOverflowEllipsis {
 			i := len(lines) - 1
-			lines[i] = appendEllipsis(bf, lines[i])
+			lines[i] = appendEllipsis(bf, lines[i], limit, wrap)
 		}
 	}
 	return lines
 }
 
 // appendEllipsis appends an ellipsis marker to a line, using '…' when the font
-// has that glyph and "..." otherwise.
-func appendEllipsis(bf *bitmapFont, line []rune) []rune {
+// has that glyph and "..." otherwise. When fit is set, runes are removed from
+// the end of the line until the marker fits within maxW font pixels.
+func appendEllipsis(bf *bitmapFont, line []rune, maxW int, fit bool) []rune {
+	marker := []rune("...")
 	if _, ok := bf.glyphs['…']; ok {
-		return append(line, '…')
+		marker = []rune{'…'}
 	}
-	return append(line, '.', '.', '.')
+	if fit {
+		mw := bmpLineWidth(bf, marker)
+		for len(line) > 0 && bmpLineWidth(bf, line)+mw > maxW {
+			line = line[:len(line)-1]
+		}
+	}
+	return append(line, marker...)
 }
 
 // bmpRuneAdvance returns the x-advance for a rune, or the space advance when
@@ -920,18 +993,27 @@ func (n *imageNode) measure(mctx *measureCtx) nodeSize {
 	case ImageFill, ImageStretch:
 		w := availW
 		h := availH
-		if h > 1e9 {
+		if isUnbounded(h) {
 			h = ih
 		}
-		if w > 1e9 {
+		if isUnbounded(w) {
 			w = iw
 		}
 		return nodeSize{w: w, h: h}
 	default: // ImageFit
-		if availH > 1e9 {
-			availH = ih
+		// An unbounded axis doesn't constrain the fit, so the image scales to
+		// the other axis, as it does when both are bounded.
+		var scale float64
+		switch {
+		case isUnbounded(availW) && isUnbounded(availH):
+			scale = 1
+		case isUnbounded(availH):
+			scale = availW / iw
+		case isUnbounded(availW):
+			scale = availH / ih
+		default:
+			scale = math.Min(availW/iw, availH/ih)
 		}
-		scale := math.Min(availW/iw, availH/ih)
 		return nodeSize{w: iw * scale, h: ih * scale}
 	}
 }
@@ -972,13 +1054,15 @@ func (n *imageNode) draw(dctx *drawCtx) {
 	default: // ImageFit
 		fit = cv.ImageContain
 	}
-	dctx.ctx.FitImage(img, rect, fit)
+	drawn := dctx.ctx.FitImage(img, rect, fit)
 	if n.dither != NoDithering {
+		// Dither only the area the image covers, not letterboxing around it.
+		physDPMM := dpmm * dctx.scale
 		px := image.Rect(
-			int(math.Round(n.bounds.x*dctx.scale)),
-			int(math.Round(n.bounds.y*dctx.scale)),
-			int(math.Round((n.bounds.x+bw)*dctx.scale)),
-			int(math.Round((n.bounds.y+bh)*dctx.scale)),
+			int(math.Round(drawn.X0*physDPMM)),
+			int(math.Round(drawn.Y0*physDPMM)),
+			int(math.Round(drawn.X1*physDPMM)),
+			int(math.Round(drawn.Y1*physDPMM)),
 		)
 		dctx.ditherRegions = append(dctx.ditherRegions, imageDitherRegion{bounds: px, algo: n.dither})
 	}
@@ -987,19 +1071,28 @@ func (n *imageNode) draw(dctx *drawCtx) {
 // --- barcodeNode ---
 
 type barcodeNode struct {
-	content string
-	btype   BarcodeType
-	ecLevel ECLevel
-	bounds  nodeRect
+	code   barcode.Barcode // encoded at build time
+	bounds nodeRect
+}
+
+func encodeBarcode(v *BarcodeNode) (barcode.Barcode, error) {
+	switch v.Type {
+	default: // BarcodeTypeQR
+		bc, err := qr.Encode(v.Content, qr.ErrorCorrectionLevel(v.ECLevel), qr.Auto)
+		if err != nil {
+			return nil, fmt.Errorf("demy: encoding QR code: %w", err)
+		}
+		return bc, nil
+	}
 }
 
 func (n *barcodeNode) measure(mctx *measureCtx) nodeSize {
 	w := mctx.availW
 	h := mctx.availH
-	if h > 1e9 {
+	if isUnbounded(h) {
 		h = w
 	}
-	if w > 1e9 {
+	if isUnbounded(w) {
 		w = h
 	}
 	return nodeSize{w: w, h: h}
@@ -1007,29 +1100,25 @@ func (n *barcodeNode) measure(mctx *measureCtx) nodeSize {
 
 func (n *barcodeNode) layout(bounds nodeRect) { n.bounds = bounds }
 
+// draw scales the code by a whole number of physical pixels per module and
+// places it on whole physical pixels, so modules stay sharp at any display scale.
 func (n *barcodeNode) draw(dctx *drawCtx) {
-	w := int(math.Round(n.bounds.w))
-	h := int(math.Round(n.bounds.h))
-	if w <= 0 || h <= 0 {
-		return
-	}
-	var (
-		bc  barcode.Barcode
-		err error
+	px := image.Rect(
+		int(math.Round(n.bounds.x*dctx.scale)),
+		int(math.Round(n.bounds.y*dctx.scale)),
+		int(math.Round((n.bounds.x+n.bounds.w)*dctx.scale)),
+		int(math.Round((n.bounds.y+n.bounds.h)*dctx.scale)),
 	)
-	switch n.btype {
-	default: // BarcodeTypeQR
-		bc, err = qr.Encode(n.content, qr.ErrorCorrectionLevel(n.ecLevel), qr.Auto)
-	}
-	if err != nil {
+	if px.Empty() {
 		return
 	}
-	scaled, err := barcode.Scale(bc, w, h)
+	scaled, err := barcode.Scale(n.code, px.Dx(), px.Dy())
 	if err != nil {
+		dctx.setErr(fmt.Errorf("demy: barcode does not fit %dx%d pixels: %w", px.Dx(), px.Dy(), err))
 		return
 	}
-	dpmm := dctx.dpmm
-	dctx.ctx.DrawImage(n.bounds.x/dpmm, n.bounds.y/dpmm, scaled, cv.DPMM(dpmm))
+	physDPMM := dctx.dpmm * dctx.scale
+	dctx.ctx.DrawImage(float64(px.Min.X)/physDPMM, float64(px.Min.Y)/physDPMM, scaled, cv.DPMM(physDPMM))
 }
 
 // --- gridNode ---
@@ -1050,30 +1139,32 @@ type gridNode struct {
 	cellSizes  []nodeSize // len == numRows*numCols; zero for empty slots
 	bounds     nodeRect
 
-	// retained from measure for deferred re-measure of children in Fr rows
-	measureFonts map[string]*FontFamily
-	measureDPMM  float64
+	mctx *measureCtx // retained from measure for deferred re-measure of children in Fr rows
+	// frRowsAuto is set when measured with unbounded height; Fr rows then size
+	// to content like Auto rows.
+	frRowsAuto bool
 }
 
 func (n *gridNode) measure(mctx *measureCtx) nodeSize {
 	if len(n.columns) == 0 {
 		return nodeSize{}
 	}
-	n.measureFonts = mctx.fonts
-	n.measureDPMM = mctx.dpmm
+	n.mctx = mctx
 	n.numCols = len(n.columns)
 	numChildren := len(n.children)
+	// Explicit row definitions fix the row count; children beyond the last
+	// row are dropped.
 	n.numRows = (numChildren + n.numCols - 1) / n.numCols
+	if len(n.rows) > 0 {
+		n.numRows = len(n.rows)
+	}
 	if n.numRows == 0 {
 		return nodeSize{}
-	}
-	// Cap numRows to explicit row definitions when provided.
-	if len(n.rows) > 0 && len(n.rows) < n.numRows {
-		n.numRows = len(n.rows)
 	}
 
 	innerW := math.Max(0, mctx.availW-2*n.padding)
 	innerH := math.Max(0, mctx.availH-2*n.padding)
+	n.frRowsAuto = isUnbounded(mctx.availH)
 	totalColGaps := math.Max(0, float64(n.numCols-1)) * n.colGap
 	availForCols := math.Max(0, innerW-totalColGaps)
 
@@ -1088,12 +1179,7 @@ func (n *gridNode) measure(mctx *measureCtx) nodeSize {
 			break
 		}
 		col := i % n.numCols
-		n.cellSizes[i] = child.measure(&measureCtx{
-			fonts:  mctx.fonts,
-			dpmm:   mctx.dpmm,
-			availW: roughColWidths[col],
-			availH: math.MaxFloat32,
-		})
+		n.cellSizes[i] = child.measure(mctx.with(roughColWidths[col], unbounded))
 	}
 
 	// Step 3: size auto columns from measured content.
@@ -1107,12 +1193,7 @@ func (n *gridNode) measure(mctx *measureCtx) nodeSize {
 		}
 		col := i % n.numCols
 		if math.Abs(n.colWidths[col]-roughColWidths[col]) > 0.5 {
-			n.cellSizes[i] = child.measure(&measureCtx{
-				fonts:  mctx.fonts,
-				dpmm:   mctx.dpmm,
-				availW: n.colWidths[col],
-				availH: math.MaxFloat32,
-			})
+			n.cellSizes[i] = child.measure(mctx.with(n.colWidths[col], unbounded))
 		}
 	}
 
@@ -1161,12 +1242,7 @@ func (n *gridNode) layout(bounds nodeRect) {
 			if idx >= len(n.children) || idx >= total {
 				break
 			}
-			n.cellSizes[idx] = n.children[idx].measure(&measureCtx{
-				fonts:  n.measureFonts,
-				dpmm:   n.measureDPMM,
-				availW: n.colWidths[col],
-				availH: n.rowHeights[row],
-			})
+			n.cellSizes[idx] = n.children[idx].measure(n.mctx.with(n.colWidths[col], n.rowHeights[row]))
 		}
 	}
 
@@ -1210,8 +1286,9 @@ func (n *gridNode) draw(dctx *drawCtx) {
 }
 
 // rowTrack returns the GridTrack for the given row, defaulting to gridTrackAuto.
+// Fr rows are reported as Auto when the grid's height is unbounded.
 func (n *gridNode) rowTrack(row int) GridTrack {
-	if row < len(n.rows) {
+	if row < len(n.rows) && (n.rows[row].kind != gridTrackFr || !n.frRowsAuto) {
 		return n.rows[row]
 	}
 	return GridTrack{kind: gridTrackAuto}
@@ -1464,6 +1541,9 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		if style.MaxLines < 0 {
 			return nil, fmt.Errorf("demy: Text max lines %d must not be negative", style.MaxLines)
 		}
+		if style.Font != "" && cfg != nil && cfg.Fonts[style.Font] == nil {
+			return nil, fmt.Errorf("demy: font %q not found in Config.Fonts", style.Font)
+		}
 		if cfg != nil {
 			style.Color = resolveColor(style.Color, cfg.Roles)
 		}
@@ -1480,7 +1560,11 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		}
 		return &imageNode{img: img, scale: v.Scale, dither: v.Dither}, nil
 	case *BarcodeNode:
-		return &barcodeNode{content: v.Content, btype: v.Type, ecLevel: v.ECLevel}, nil
+		bc, err := encodeBarcode(v)
+		if err != nil {
+			return nil, err
+		}
+		return &barcodeNode{code: bc}, nil
 	case *GridNode:
 		if err := checkDims("Grid",
 			dim{"row gap", v.RowGap},

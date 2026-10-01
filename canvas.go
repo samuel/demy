@@ -74,7 +74,6 @@ type Canvas struct {
 	physicalDPMM float64 // used only by the rasterizer
 	dpmm         float64 // logical; used for layout
 	scale        float64
-	Roles        Roles
 }
 
 // New creates a Canvas for cfg. It returns an error if cfg has zero physical or
@@ -92,7 +91,6 @@ func New(cfg Config) (*Canvas, error) {
 		physicalDPMM: cfg.PhysicalDPMM(),
 		dpmm:         cfg.DPMM(),
 		scale:        scale,
-		Roles:        cfg.Roles,
 	}, nil
 }
 
@@ -117,7 +115,11 @@ func MustNew(cfg Config) *Canvas {
 // draw builds, measures, lays out, and draws root, returning the vector canvas
 // plus the dither regions and bitmap glyphs to apply after rasterization.
 func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, []textBlit, error) {
-	cvs := cv.New(c.cfg.PhysicalWidthMM, c.cfg.PhysicalHeightMM)
+	// Size the canvas from the pixel dimensions so millimeters map exactly onto
+	// whole pixels; PhysicalHeightMM need not match the width-derived density.
+	wMM := float64(c.cfg.PixelWidth) / c.physicalDPMM
+	hMM := float64(c.cfg.PixelHeight) / c.physicalDPMM
+	cvs := cv.New(wMM, hMM)
 	ctx := cv.NewContext(cvs)
 	ctx.SetCoordSystem(cv.CartesianIV)
 
@@ -132,6 +134,7 @@ func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, []textBlit, e
 	mctx := &measureCtx{
 		fonts:  c.cfg.Fonts,
 		dpmm:   c.dpmm,
+		scale:  c.scale,
 		availW: wLogical,
 		availH: hLogical,
 	}
@@ -146,17 +149,20 @@ func (c *Canvas) draw(root Node) (*cv.Canvas, []imageDitherRegion, []textBlit, e
 	}
 	ctx.SetFillColor(bg)
 	ctx.SetStrokeColor(color.Transparent)
-	ctx.DrawPath(0, 0, cv.Rectangle(c.cfg.PhysicalWidthMM, c.cfg.PhysicalHeightMM))
+	ctx.DrawPath(0, 0, cv.Rectangle(wMM, hMM))
 
 	dctx := &drawCtx{
 		ctx:   ctx,
 		dpmm:  c.dpmm,
 		scale: c.scale,
-		roles: c.Roles,
+		roles: c.cfg.Roles,
 		fonts: c.cfg.Fonts,
 		clip:  image.Rect(0, 0, c.cfg.PixelWidth, c.cfg.PixelHeight),
 	}
 	internal.draw(dctx)
+	if dctx.err != nil {
+		return nil, nil, nil, dctx.err
+	}
 	return cvs, dctx.ditherRegions, dctx.textBlits, nil
 }
 
@@ -222,9 +228,12 @@ func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image,
 
 	// Dither from the unquantized grayscale so error diffusion has the full range.
 	for _, r := range regions {
-		sub := subGray(gray, r.bounds)
-		ditheredSub := applyDither(sub, pal, r.algo)
-		copyGrayRegion(out, ditheredSub, r.bounds.Min)
+		b := r.bounds.Intersect(gray.Bounds())
+		if b.Empty() {
+			continue
+		}
+		ditheredSub := applyDither(subGray(gray, b), pal, r.algo)
+		copyGrayRegion(out, ditheredSub, b.Min)
 	}
 
 	applyBlits(out, blits)
@@ -244,9 +253,9 @@ func applyDither(src *image.Gray, pal []color.Gray, algo Dither) *image.Gray {
 	}
 }
 
-// subGray returns a copy of the region r of src, with origin (0,0).
+// subGray returns a copy of the region r of src, with origin (0,0). r must lie
+// within src's bounds.
 func subGray(src *image.Gray, r image.Rectangle) *image.Gray {
-	r = r.Intersect(src.Bounds())
 	dst := image.NewGray(image.Rect(0, 0, r.Dx(), r.Dy()))
 	for y := range r.Dy() {
 		for x := range r.Dx() {

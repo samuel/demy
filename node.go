@@ -699,16 +699,12 @@ type textNode struct {
 
 func (n *textNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
 
+// measureUncached measures the text. buildNode guarantees a loaded font and,
+// for vector fonts, a non-zero size.
 func (n *textNode) measureUncached(mctx *measureCtx) nodeSize {
 	ff := mctx.fonts[n.style.Font]
-	if ff == nil {
-		return nodeSize{}
-	}
 	if ff.isBitmap() {
 		return n.measureBitmap(mctx, ff)
-	}
-	if n.style.Size == 0 {
-		return nodeSize{}
 	}
 	clr := n.style.Color
 	if clr == nil {
@@ -760,14 +756,8 @@ func (n *textNode) layout(bounds nodeRect) { n.bounds = bounds }
 
 func (n *textNode) draw(dctx *drawCtx) {
 	ff := dctx.fonts[n.style.Font]
-	if ff == nil {
-		return
-	}
 	if ff.isBitmap() {
 		n.drawBitmap(dctx, ff)
-		return
-	}
-	if n.style.Size == 0 {
 		return
 	}
 	clr := n.style.Color
@@ -1596,8 +1586,8 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		case style.MaxLines < 0:
 			return nil, fmt.Errorf("demy: Text max lines %d must not be negative", style.MaxLines)
 		}
-		if style.Font != "" && cfg != nil && cfg.Fonts[style.Font] == nil {
-			return nil, fmt.Errorf("demy: font %q not found in Config.Fonts", style.Font)
+		if err := checkTextFont(style, cfg); err != nil {
+			return nil, err
 		}
 		if cfg != nil {
 			style.Color = resolveColor(style.Color, cfg.Roles)
@@ -1669,6 +1659,28 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 	default:
 		return nil, fmt.Errorf("demy: unknown node type %T", n)
 	}
+}
+
+// checkTextFont reports an error unless style names a loaded font in
+// cfg.Fonts and, for a vector font, a non-zero size.
+func checkTextFont(style Style, cfg *Config) error {
+	if style.Font == "" {
+		return errors.New("demy: Text has no font; set Style.Font or Config.DefaultTextStyle.Font")
+	}
+	var ff *FontFamily
+	if cfg != nil {
+		ff = cfg.Fonts[style.Font]
+	}
+	if ff == nil {
+		return fmt.Errorf("demy: font %q not found in Config.Fonts", style.Font)
+	}
+	if !ff.isLoaded() {
+		return fmt.Errorf("font %q: %w", style.Font, errFontNotLoaded)
+	}
+	if !ff.isBitmap() && style.Size == 0 {
+		return fmt.Errorf("demy: Text in font %q has no size; set Style.Size or Config.DefaultTextStyle.Size", style.Font)
+	}
+	return nil
 }
 
 // maxDimension bounds every size, gap, and weight in a node tree so untrusted

@@ -3,14 +3,27 @@ package demy_test
 import (
 	"math"
 	"strings"
+	"sync"
 	"testing"
+
+	"golang.org/x/image/font/gofont/goregular"
 
 	"github.com/samuel/demy"
 )
 
+var sansFont = sync.OnceValue(func() *demy.FontFamily { return demy.MustLoadFontBytes("sans", goregular.TTF) })
+
+// textConfig returns a w×h config whose default text style is 12pt "sans".
+func textConfig(w, h int) demy.Config {
+	return demy.Config{
+		PixelWidth: w, PixelHeight: h, PhysicalWidthMM: float64(w), PhysicalHeightMM: float64(h),
+		Fonts:            map[string]*demy.FontFamily{"sans": sansFont()},
+		DefaultTextStyle: demy.Style{Font: "sans", Size: 12},
+	}
+}
+
 func renderErr(n demy.Node) error {
-	cfg := demy.Config{PixelWidth: 40, PixelHeight: 40, PhysicalWidthMM: 40, PhysicalHeightMM: 40}
-	_, err := demy.MustNew(cfg).Render(n, demy.RGBA)
+	_, err := demy.MustNew(textConfig(40, 40)).Render(n, demy.RGBA)
 	return err
 }
 

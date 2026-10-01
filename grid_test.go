@@ -24,17 +24,7 @@ func renderGridCfg(t *testing.T, g *demy.GridNode, w, h int, cfg demy.Config) {
 
 func renderGrid(t *testing.T, g *demy.GridNode, w, h int) {
 	t.Helper()
-	cfg := demy.Config{
-		PixelWidth:       w,
-		PixelHeight:      h,
-		PhysicalWidthMM:  float64(w),
-		PhysicalHeightMM: float64(h),
-	}
-	c := demy.MustNew(cfg)
-	_, err := c.Render(g, demy.RGBA)
-	if err != nil {
-		t.Fatalf("Render: %v", err)
-	}
+	renderGridCfg(t, g, w, h, textConfig(w, h))
 }
 
 func TestGridBuildRoundTrip(t *testing.T) {
@@ -162,11 +152,8 @@ func TestGridExplicitRowsCap(t *testing.T) {
 
 func TestGridOverflowNotDrawn(t *testing.T) {
 	// Children beyond Rows×Columns get no cell and must not be drawn.
-	cfg := demy.Config{
-		PixelWidth: 100, PixelHeight: 100, PhysicalWidthMM: 100, PhysicalHeightMM: 100,
-		Fonts:            map[string]*demy.FontFamily{"sans": demy.MustLoadFontBytes("sans", goregular.TTF)},
-		DefaultTextStyle: demy.Style{Font: "sans", Size: 20},
-	}
+	cfg := textConfig(100, 100)
+	cfg.DefaultTextStyle.Size = 20
 	g := demy.Grid(
 		demy.Columns(demy.GridFr(1), demy.GridFr(1)),
 		demy.Rows(demy.GridFixed(10)),

@@ -1,11 +1,19 @@
 package demy
 
-import "testing"
+import (
+	"testing"
+
+	"golang.org/x/image/font/gofont/goregular"
+)
 
 func TestStyleOverridesBackToDefaults(t *testing.T) {
-	cfg := &Config{Styles: map[string]Style{
-		"h": {Weight: FontBold, Align: TextAlignCenter, MaxLines: 2, Overflow: TextOverflowEllipsis},
-	}}
+	cfg := &Config{
+		Fonts:            map[string]*FontFamily{"sans": MustLoadFontBytes("sans", goregular.TTF)},
+		DefaultTextStyle: Style{Font: "sans", Size: 12},
+		Styles: map[string]Style{
+			"h": {Weight: FontBold, Align: TextAlignCenter, MaxLines: 2, Overflow: TextOverflowEllipsis},
+		},
+	}
 	n, err := buildNode(Text("x", Class("h"), Style{
 		Weight:   FontRegular,
 		Align:    TextAlignLeft,

@@ -154,7 +154,12 @@ Zero-valued fields inherit (`FontInherit`, `TextAlignInherit`, `TextOverflowInhe
 `demy.Style{Weight: demy.FontRegular, Align: demy.TextAlignLeft, MaxLines: demy.MaxLinesUnlimited}`.
 
 `MaxLines` truncates text to that many lines; with `TextOverflowEllipsis` the last line is
-shortened to fit an ellipsis. A `Font` name missing from `Config.Fonts` is a render error.
+shortened to fit an ellipsis.
+
+After merging, every `Text` must have a `Font` naming a loaded family in `Config.Fonts`, and
+vector text must have a non-zero `Size` (bitmap fonts ignore it). Otherwise rendering returns
+an error rather than drawing nothing. A `FontFamily` must come from a `Load…` function; a
+zero value is an error.
 
 `Text` with no style uses `Config.DefaultTextStyle`. A `Class` name missing from
 `Config.Styles` is a render error. Named styles in `Config.Styles` are

@@ -70,7 +70,8 @@ func (s FontStyle) cvStyle() cv.FontStyle {
 // either a vector family (TTF/OTF) or a bitmap family (BDF); the two cannot be
 // mixed. Text references a family by its key in Config.Fonts.
 //
-// A FontFamily may be shared by concurrent renders.
+// A FontFamily may be shared by concurrent renders. Create one with a Load
+// function; a zero value is not usable and rendering text with it is an error.
 type FontFamily struct {
 	name   string
 	family *cv.FontFamily // nil for bitmap families
@@ -91,6 +92,13 @@ func (ff *FontFamily) shape(fn func() *cv.Text) *cv.Text {
 
 // isBitmap reports whether this is a bitmap (pixel) font family.
 func (ff *FontFamily) isBitmap() bool { return ff.bitmap != nil }
+
+// errFontNotLoaded is returned for a FontFamily not created by one of the Load
+// functions, such as a zero value.
+var errFontNotLoaded = errors.New("demy: font family is not loaded; create it with LoadFontBytes, LoadFontFile, or LoadBitmapFontBDF")
+
+// isLoaded reports whether the family was created by one of the Load functions.
+func (ff *FontFamily) isLoaded() bool { return ff.family != nil || ff.bitmap != nil }
 
 // bitmapVariant returns the bitmap font for the requested style, falling back
 // to the Regular variant (then any variant) when the exact style is missing.
@@ -147,6 +155,9 @@ func MustLoadFontBytes(name string, data []byte) *FontFamily {
 // AddStyle adds a weight/style variant (e.g. FontBold, FontBold|FontItalic)
 // from TTF/OTF bytes. It returns an error for a bitmap family.
 func (ff *FontFamily) AddStyle(data []byte, style FontStyle) error {
+	if !ff.isLoaded() {
+		return errFontNotLoaded
+	}
 	if ff.isBitmap() {
 		return errors.New("demy: cannot add a vector style to a bitmap font family")
 	}
@@ -197,6 +208,9 @@ func MustLoadBitmapFontBDFFile(name, path string) *FontFamily {
 // AddStyleBDF adds a weight/style variant (e.g. FontBold) from BDF bytes.
 // It returns an error for a vector family.
 func (ff *FontFamily) AddStyleBDF(data []byte, style FontStyle) error {
+	if !ff.isLoaded() {
+		return errFontNotLoaded
+	}
 	if !ff.isBitmap() {
 		return errors.New("demy: cannot add a bitmap style to a vector font family")
 	}
@@ -285,8 +299,8 @@ const MaxLinesUnlimited = -1
 // Config.DefaultTextStyle and any StyleClass; each field's type documents how
 // to set it explicitly back to its default.
 type Style struct {
-	Font       string
-	Size       float64   // in points; ignored for bitmap fonts
+	Font       string    // key in Config.Fonts; required after merging
+	Size       float64   // in points; required after merging for vector fonts, ignored for bitmap fonts
 	Weight     FontStyle // FontInherit (0) inherits
 	Color      color.Color
 	Align      TextAlign
@@ -552,7 +566,8 @@ func (*DividerNode) demyNode()   {}
 func (*DividerNode) demyOption() {}
 
 // TextNode renders a string. The effective style is Config.DefaultTextStyle,
-// overlaid by the Class style, then by the non-zero fields of Style.
+// overlaid by the Class style, then by the non-zero fields of Style. Rendering
+// fails if the effective style has no loaded font, or no size for a vector font.
 type TextNode struct {
 	Text  string
 	Class StyleClass

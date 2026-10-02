@@ -580,13 +580,16 @@ and text shaping, `golang.org/x/image` for rasterization and image scaling,
 
 ## Development
 
-CI (`.github/workflows/ci.yml`) runs on pushes to `main` and on pull requests:
+CI (`.github/workflows/ci.yml`) runs on pushes to `main` and on pull requests. Tests run on
+Linux (amd64) and macOS (arm64), so pixel checks catch floating-point differences between
+architectures:
 
 ```sh
 go build ./...
 go vet ./...
 go test -race ./...
 golangci-lint run ./...
+govulncheck ./...
 go test -run '^$' -fuzz '^FuzzRoundTrip$' -fuzztime 30s ./scene/jsonscene  # and each other fuzz target
 ```
 

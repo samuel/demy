@@ -3,94 +3,35 @@
 All notable changes to demy are listed here. Until v1.0.0, minor releases may include breaking
 changes; they are called out under each release.
 
-## Unreleased
+## v0.3.0 — 2026-10-01
 
-Breaking changes:
-
-- `ColorMode` is now `RGBA`, `Grayscale`, or `Paletted`. `OneBit`, `TwoBit`, `FourBit`, and
-  `BWRed` are removed; `Paletted` quantizes to `Config.Palette` and returns an
-  `*image.Paletted` whose indices follow `Config.Palette`. Use `PaletteBW`, `PaletteGray4`, or
-  `PaletteGray16` for the old gray modes; they produce the same pixels. `TRMNLOriginal` and
-  `TRMNLX` use `Paletted` with `PaletteGray4` and `PaletteGray16`.
-- `Unset` is renamed `ColorModeDefault`.
-- The BDF loaders are renamed to match `LoadFontBytes` and `LoadFontFile`:
-  `LoadBitmapFontBDF` is `LoadBDFBytes`, `LoadBitmapFontBDFFile` is `LoadBDFFile`, and the
-  `Must…` variants are `MustLoadBDFBytes` and `MustLoadBDFFile`.
-- `ZAlignment` constants have a `ZAlign` prefix (`ZAlignTopLeading`, `ZAlignCenter`, …), in Go
-  and in Starlark. Scene formats keep their names (`"top-leading"`, `"center"`, …).
-- Starlark `Style(class=…)` is `Style(base=…)`. `class` is a reserved word in Starlark, so
-  `class=` was a syntax error.
-- `New` rejects a `Config.Palette` with fewer than 2 or more than 256 colors, or with nil,
-  translucent, or role colors.
-- Bitmap text snaps to the nearest palette color instead of black or white, and keeps its color
-  in `RGBA` and its luminance in `Grayscale` renders.
-- Text wraps greedily at Unicode line break opportunities and no longer shrinks word spacing
-  to fit, so a line that only fit with tighter spacing now wraps. Glyph edges differ slightly.
-- Fonts load with go-text/typesetting: TrueType, OpenType, and the first font of a collection.
-  WOFF and WOFF2 are no longer accepted.
-
-Other changes:
-
-- Color e-paper: palette presets `PaletteBWR`, `PaletteBWY`, `PaletteBWRY`, `PaletteSpectra6`,
-  and `PaletteACeP7`, or any palette of up to 256 colors, with dithering in color.
-- `Green`, `Blue`, and `Orange` colors, also as Starlark constants.
-- Rendering no longer depends on tdewolff/canvas, which removes 23 of the 28 modules a build
-  used (X11, PDF, TeX, Markdown, and more). Text uses go-text/typesetting directly and shapes
-  the same way. Rendering is about 30% faster with far fewer allocations.
-- Concurrent renders that share a font family shape text in parallel instead of one at a
-  time. A page of text renders about twice as fast across 10 goroutines.
-- `xmlscene.ParseTemplate` parses a template once into a `*Template`, whose `Execute` and
-  `ExecuteScene` methods can run it repeatedly and concurrently without reparsing.
-
-## v0.2.0 — 2026-10-01
-
-Scenes, templates, and BDF fonts from untrusted sources can now be rendered within fixed
-limits. Untrusted Starlark scripts still need a memory limit from outside the process; see
-"Security and untrusted input" in the README.
-
-Breaking changes:
-
-- `Canvas.Render`, `xmlscene.Execute`, and `xmlscene.ExecuteScene` take a `context.Context`
-  and stop when it's done. Template output is limited to `xmlscene.MaxTemplateOutput` (4 MiB).
-- A node tree may have at most 16384 nodes, 128 clipped nodes (`Frame`, and `Box` with
-  `Clip`), and 16 barcodes, counting each use of a shared node. Larger trees fail to render.
-  XML and JSON scenes with more than 16384 nodes fail to decode.
-- A `Text` may be at most 8192 bytes of UTF-8, and all text in a tree at most 65536 bytes.
-  Longer text fails to render.
-- BDF fonts are rejected if glyph advances, offsets, or font metrics are outside ±4096 pixels,
-  or if their glyph bitmaps take more than 16 MiB. Rendering fails if bitmap glyphs cover more
-  than 16 times the canvas area.
-- An `HStack` sizes children from their natural width, limited to the stack's width, instead
-  of measuring them at the full width first. An `Image` in an `HStack` now keeps its natural
-  size rather than filling the row; wrap it in `Weighted` to fill. Children in `Grid` Auto
-  columns are sized the same way, so an image in an Auto column no longer grows to the
-  column's share of the width.
-- Starlark builtins reject numbers outside [0, 32768], and `Render` data and `ToStarlark`
-  reject cyclic data, nesting deeper than 100 levels, and more than 262144 values.
-
-Other changes:
-
-- Layout time grows linearly with nesting depth. Nested `HStack`s and `Grid`s used to measure
-  their descendants at exponentially many sizes.
-- Text is shaped once per render instead of in both measure and draw.
-- Bitmap glyphs are blitted only where visible, writing pixels directly.
-- A panic in a Starlark builtin registered with `AddBuiltin` or `AddModule` fails the call
-  instead of crashing. Script `print()` messages are truncated to 4 KiB, and output past 64 KiB
-  per `Load` or `Render` is dropped. `Load` and `Render` errors start with the script position.
-- The README and package docs describe which inputs may be untrusted and what limits apply.
-
-## v0.1.0 — 2026-10-01
-
-First release.
+First public release. demy renders declarative layouts to images for e-ink and other displays
+with few colors. Scenes, templates, and BDF fonts from untrusted sources can be rendered within
+fixed limits; untrusted Starlark scripts also need a memory limit from outside the process (see
+"Security and untrusted input" in the README). See "Limitations" in the README for known gaps.
 
 - Declarative layout: `VStack`, `HStack`, `ZStack`, `Grid`, `Box`, `Frame`, `Spacer`,
-  `Weighted`, and `Divider`, measured in logical pixels with a display `Scale`.
-- Text with vector (TTF/OTF) or bitmap (BDF) fonts, named styles, wrapping, line limits, and
-  ellipsis. Images with fit, fill, and stretch scaling. QR codes.
-- Rendering to RGBA, grayscale, and 1-, 2-, and 4-bit images, with Floyd-Steinberg or Atkinson
-  dithering for the whole scene or per image. Presets for TRMNL Original and TRMNL X.
-- Strict JSON (`scene/jsonscene`) and XML (`scene/xmlscene`) scene formats; XML scenes can be
-  `text/template` templates with escaped output.
-- Starlark plugin host (`plugin/starlark`) with step limits, cancellation, and custom builtins.
-- Invalid trees, fonts, images, and configs return errors instead of panicking. Scenes,
-  templates, scripts, and fonts must still be trusted; see the README.
+  `Weighted`, and `Divider`, measured in logical pixels with a display `Scale`. Layout time
+  grows linearly with nesting depth.
+- Text with vector (TTF/OTF, shaped with go-text/typesetting) or bitmap (BDF) fonts, named
+  styles, Unicode line breaking, line limits, and ellipsis. Bitmap text is never antialiased
+  and snaps to the nearest palette color. Concurrent renders that share a font family shape
+  text in parallel.
+- Images with fit, fill, and stretch scaling. QR codes.
+- Rendering to `RGBA`, `Grayscale`, or `Paletted` images. `Paletted` quantizes to
+  `Config.Palette`, with Floyd-Steinberg or Atkinson dithering for the whole scene or per
+  image. Gray presets (`PaletteBW`, `PaletteGray4`, `PaletteGray16`), color e-paper presets
+  (`PaletteBWR`, `PaletteBWY`, `PaletteBWRY`, `PaletteSpectra6`, `PaletteACeP7`), or any
+  palette of 2 to 256 colors. Display presets for TRMNL Original and TRMNL X.
+- Strict JSON (`scene/jsonscene`) and XML (`scene/xmlscene`) scene formats. XML scenes can be
+  `text/template` templates with escaped output; `xmlscene.ParseTemplate` parses one once for
+  repeated, concurrent execution.
+- Starlark plugin host (`plugin/starlark`) with step limits, cancellation, custom builtins and
+  modules, and errors that start with the script position. A panic in a custom builtin fails
+  the call instead of crashing.
+- `Canvas.Render` and template execution take a `context.Context` and stop when it's done.
+- Invalid trees, fonts, images, and configs return errors instead of panicking. Limits: 16384
+  nodes, 128 clipped nodes, and 16 barcodes per tree; 8192 bytes per `Text` and 65536 bytes of
+  text per tree; 4 MiB of template output; dimensions in [0, 32768]; BDF metrics within ±4096
+  pixels and glyph bitmaps within 16 MiB; Starlark `Render` data at most 100 levels deep and
+  262144 values, with no cycles.

@@ -98,6 +98,11 @@ directly. In a `Grid` a skipped child takes no cell, so later children move up o
 | `Grid(opts...)` | `Columns(...)` (required), `Rows(...)`, `Gap`, `RowGap`, `ColGap`, `Padding`, children |
 | `GridRow(children...)` | optional grouping of one row's cells; flattened by `Grid` |
 
+An `HStack` gives each child its natural width (its size with no width limit), limited to the
+stack's width. If the children don't fit, the ones that aren't `Frame`, `Spacer`, or `Weighted`
+shrink in proportion to that width. An `Image` in an `HStack` keeps its natural size (scaled to
+the stack's height when it has one); wrap it in `Weighted` to fill the remaining width.
+
 ### Grid
 
 Cells fill row by row, left to right. `Columns` is required; rendering a grid without columns
@@ -107,7 +112,7 @@ rows keep their size and children beyond the last cell are dropped (not measured
 | Track | Meaning |
 |-------|---------|
 | `GridFixed(px)` | exact size |
-| `GridAuto()` | max content size in that column/row |
+| `GridAuto()` | max content size in that column/row; an Auto column is at most an even share (with the other Auto and Fr columns) of the width left after Fixed columns |
 | `GridFr(w)` | proportional share of remaining space (like CSS `fr`); Fr rows size to content when the grid's height is unbounded, such as inside a `VStack` |
 
 ```go
@@ -450,9 +455,6 @@ Scenes, templates, Starlark scripts, and BDF fonts must come from trusted source
 validates its input and returns errors instead of panicking on malformed trees, but it does not
 yet bound the time or memory a hostile input can use:
 
-- Layout time can grow exponentially with nesting depth: stacks and grids that measure a child
-  at more than one size re-measure its whole subtree each time, so an `HStack` or auto-column
-  `Grid` nested 12 deep around text takes about 100 ms, and each further level doubles it.
 - There is no limit on the number of nodes. A Starlark script can build a tree that shares
   nodes (`x = VStack(x, x)` in a loop) whose expanded size is exponential in its source size.
 - Text length isn't capped, and every text node is shaped during both measure and draw.

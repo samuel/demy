@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -44,8 +45,15 @@ const unbounded = math.MaxFloat32
 // isUnbounded reports whether an available size is effectively unconstrained.
 func isUnbounded(v float64) bool { return v > 1e9 }
 
-// with returns a copy of mctx with the given available size.
+// with returns a copy of mctx with the given available size. Unbounded sizes
+// are normalized so they compare equal in measureMemo.
 func (mctx *measureCtx) with(availW, availH float64) *measureCtx {
+	if isUnbounded(availW) {
+		availW = unbounded
+	}
+	if isUnbounded(availH) {
+		availH = unbounded
+	}
 	c := *mctx
 	c.availW = availW
 	c.availH = availH
@@ -72,24 +80,74 @@ func (dctx *drawCtx) setErr(err error) {
 	}
 }
 
-// measureMemo remembers a node's most recent measurement. A node measured
-// again with the same available size returns the remembered result; its
-// measure-time state is still from that call, so layout stays consistent.
-// Only the most recent call is kept, since layout reads the state of the last
-// measurement.
-type measureMemo struct {
-	valid          bool
-	availW, availH float64
-	size           nodeSize
+// memoSize is the number of measurements measureMemo keeps per node.
+const memoSize = 4
+
+// measureMemo remembers a node's recent measurements along with the
+// measure-time state its layout reads (S). Measuring again at a remembered
+// available size returns the remembered result and restores that state.
+// Restoring a node doesn't restore its descendants, so containers re-measure
+// each child at its recorded size before laying it out (childSizes.layout).
+type measureMemo[S any] struct {
+	entries [memoSize]memoEntry[S]
+	n       int // valid entries
+	next    int // entry to replace next
 }
 
-func (m *measureMemo) do(mctx *measureCtx, measure func(*measureCtx) nodeSize) nodeSize {
-	if m.valid && m.availW == mctx.availW && m.availH == mctx.availH {
-		return m.size
+type memoEntry[S any] struct {
+	availW, availH float64
+	size           nodeSize
+	state          S
+}
+
+// do returns the node's size at mctx's available size, calling measure on a
+// miss. measure must store fresh values in *state rather than modifying the
+// remembered ones in place.
+func (m *measureMemo[S]) do(mctx *measureCtx, state *S, measure func(*measureCtx) nodeSize) nodeSize {
+	for i := range m.n {
+		if e := &m.entries[i]; e.availW == mctx.availW && e.availH == mctx.availH {
+			*state = e.state
+			return e.size
+		}
 	}
-	m.size = measure(mctx)
-	m.valid, m.availW, m.availH = true, mctx.availW, mctx.availH
-	return m.size
+	size := measure(mctx)
+	m.entries[m.next] = memoEntry[S]{availW: mctx.availW, availH: mctx.availH, size: size, state: *state}
+	m.next = (m.next + 1) % memoSize
+	m.n = min(m.n+1, memoSize)
+	return size
+}
+
+// childSizes records how a container measured its children: the available
+// size each child was last measured with and the result.
+type childSizes struct {
+	mctx  *measureCtx
+	avail []nodeSize
+	sizes []nodeSize
+}
+
+func newChildSizes(mctx *measureCtx, n int) childSizes {
+	return childSizes{mctx: mctx, avail: make([]nodeSize, n), sizes: make([]nodeSize, n)}
+}
+
+// measure measures child i at the given available size and records the result.
+func (c *childSizes) measure(i int, child node, availW, availH float64) nodeSize {
+	mctx := c.mctx.with(availW, availH)
+	c.avail[i] = nodeSize{w: mctx.availW, h: mctx.availH}
+	c.sizes[i] = child.measure(mctx)
+	return c.sizes[i]
+}
+
+// layout lays out child i. It first re-measures the child at its recorded size,
+// which hits the child's memo and restores the state from that measurement.
+// The child may have been measured at other sizes since.
+func (c *childSizes) layout(i int, child node, bounds nodeRect) {
+	child.measure(c.mctx.with(c.avail[i].w, c.avail[i].h))
+	child.layout(bounds)
+}
+
+// clone returns a copy that can be modified without changing remembered state.
+func (c childSizes) clone() childSizes {
+	return childSizes{mctx: c.mctx, avail: slices.Clone(c.avail), sizes: slices.Clone(c.sizes)}
 }
 
 // node is the interface all layout and widget nodes implement.
@@ -102,24 +160,25 @@ type node interface {
 // --- vstackNode ---
 
 type vstackNode struct {
-	memo          measureMemo
-	gap           float64
-	padding       float64
-	align         Alignment
-	children      []node
-	measuredSizes []nodeSize
-	bounds        nodeRect
+	memo     measureMemo[childSizes]
+	m        childSizes
+	gap      float64
+	padding  float64
+	align    Alignment
+	children []node
+	bounds   nodeRect
 }
 
-func (n *vstackNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
+func (n *vstackNode) measure(mctx *measureCtx) nodeSize {
+	return n.memo.do(mctx, &n.m, n.measureUncached)
+}
 
 func (n *vstackNode) measureUncached(mctx *measureCtx) nodeSize {
 	innerW := math.Max(0, mctx.availW-2*n.padding)
-	n.measuredSizes = make([]nodeSize, len(n.children))
+	n.m = newChildSizes(mctx, len(n.children))
 	var totalH, maxW float64
 	for i, child := range n.children {
-		s := child.measure(mctx.with(innerW, unbounded))
-		n.measuredSizes[i] = s
+		s := n.m.measure(i, child, innerW, unbounded)
 		if i > 0 {
 			totalH += n.gap
 		}
@@ -153,7 +212,7 @@ func (n *vstackNode) layout(bounds nodeRect) {
 		case *weightedNode:
 			totalWeight += v.weight
 		default:
-			fixedH += n.measuredSizes[i].h
+			fixedH += n.m.sizes[i].h
 		}
 	}
 	unitH := 0.0
@@ -176,8 +235,8 @@ func (n *vstackNode) layout(bounds nodeRect) {
 			childH = unitH * v.weight
 			fillCrossAxis = true
 		default:
-			childH = n.measuredSizes[i].h
-			childW = n.measuredSizes[i].w
+			childH = n.m.sizes[i].h
+			childW = n.m.sizes[i].w
 		}
 		childX := innerX
 		childLayoutW := innerW
@@ -192,7 +251,7 @@ func (n *vstackNode) layout(bounds nodeRect) {
 			case AlignStart:
 			}
 		}
-		child.layout(nodeRect{x: childX, y: y, w: childLayoutW, h: childH})
+		n.m.layout(i, child, nodeRect{x: childX, y: y, w: childLayoutW, h: childH})
 		y += childH
 	}
 }
@@ -206,49 +265,62 @@ func (n *vstackNode) draw(dctx *drawCtx) {
 // --- hstackNode ---
 
 type hstackNode struct {
-	memo          measureMemo
-	gap           float64
-	padding       float64
-	align         Alignment
-	children      []node
-	measuredSizes []nodeSize
-	bounds        nodeRect
+	memo     measureMemo[childSizes]
+	m        childSizes
+	gap      float64
+	padding  float64
+	align    Alignment
+	children []node
+	bounds   nodeRect
 }
 
-func (n *hstackNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
+func (n *hstackNode) measure(mctx *measureCtx) nodeSize {
+	return n.memo.do(mctx, &n.m, n.measureUncached)
+}
 
+// measureUncached measures children at their natural width first. That
+// measurement doesn't depend on the stack's own size, so it is shared by every
+// size the stack is measured at, which keeps nested stacks from measuring their
+// descendants at exponentially many sizes.
 func (n *hstackNode) measureUncached(mctx *measureCtx) nodeSize {
 	innerH := math.Max(0, mctx.availH-2*n.padding)
 	innerW := math.Max(0, mctx.availW-2*n.padding)
-	n.measuredSizes = make([]nodeSize, len(n.children))
+	n.m = newChildSizes(mctx, len(n.children))
 
-	// Pass 1: measure all children at full available width.
+	// Pass 1: measure children other than weighted ones at their natural width.
 	for i, child := range n.children {
-		n.measuredSizes[i] = child.measure(mctx.with(innerW, innerH))
-	}
-
-	// Pass 2: if variable-width children overflow the space left after gaps and
-	// frameNodes, shrink them proportionally and re-measure so heights are correct.
-	totalGaps := math.Max(0, float64(len(n.children)-1)) * n.gap
-	var fixedSizeW, variableSizeW float64
-	for i, child := range n.children {
-		switch child.(type) {
-		case *spacerNode, *weightedNode:
-		case *frameNode:
-			fixedSizeW += n.measuredSizes[i].w
-		default:
-			variableSizeW += n.measuredSizes[i].w
+		if _, ok := child.(*weightedNode); !ok {
+			n.m.measure(i, child, unbounded, innerH)
 		}
 	}
-	availForVar := innerW - totalGaps - fixedSizeW
-	if variableSizeW > availForVar && variableSizeW > 0 {
-		shrinkScale := math.Max(0, availForVar) / variableSizeW
+
+	// Pass 2: limit variable-width children to the stack's width and, if they
+	// overflow the space left after gaps and frameNodes, shrink them
+	// proportionally. Re-measure the ones whose width changed so heights are
+	// correct.
+	if !isUnbounded(innerW) {
+		totalGaps := math.Max(0, float64(len(n.children)-1)) * n.gap
+		var fixedSizeW, variableSizeW float64
+		for i, child := range n.children {
+			switch child.(type) {
+			case *spacerNode, *weightedNode:
+			case *frameNode:
+				fixedSizeW += n.m.sizes[i].w
+			default:
+				variableSizeW += math.Min(n.m.sizes[i].w, innerW)
+			}
+		}
+		shrinkScale := 1.0
+		if availForVar := innerW - totalGaps - fixedSizeW; variableSizeW > availForVar && variableSizeW > 0 {
+			shrinkScale = math.Max(0, availForVar) / variableSizeW
+		}
 		for i, child := range n.children {
 			switch child.(type) {
 			case *spacerNode, *weightedNode, *frameNode:
 			default:
-				newW := n.measuredSizes[i].w * shrinkScale
-				n.measuredSizes[i] = child.measure(mctx.with(newW, innerH))
+				if w := math.Min(n.m.sizes[i].w, innerW) * shrinkScale; w != n.m.sizes[i].w {
+					n.m.measure(i, child, w, innerH)
+				}
 			}
 		}
 	}
@@ -263,21 +335,22 @@ func (n *hstackNode) measureUncached(mctx *measureCtx) nodeSize {
 		case *weightedNode:
 			totalWeight += v.weight
 		default:
-			usedW += n.measuredSizes[i].w
+			usedW += n.m.sizes[i].w
 		}
 	}
 	if totalWeight > 0 {
+		totalGaps := math.Max(0, float64(len(n.children)-1)) * n.gap
 		unitW := math.Max(0, innerW-totalGaps-usedW) / totalWeight
 		for i, child := range n.children {
 			if v, ok := child.(*weightedNode); ok {
-				n.measuredSizes[i] = child.measure(mctx.with(unitW*v.weight, innerH))
+				n.m.measure(i, child, unitW*v.weight, innerH)
 			}
 		}
 	}
 
 	var totalW, maxH float64
 	for i, child := range n.children {
-		s := n.measuredSizes[i]
+		s := n.m.sizes[i]
 		if i > 0 {
 			totalW += n.gap
 		}
@@ -310,7 +383,7 @@ func (n *hstackNode) layout(bounds nodeRect) {
 		case *weightedNode:
 			totalWeight += v.weight
 		default:
-			fixedW += n.measuredSizes[i].w
+			fixedW += n.m.sizes[i].w
 		}
 	}
 	unitW := 0.0
@@ -333,11 +406,11 @@ func (n *hstackNode) layout(bounds nodeRect) {
 			childW = unitW * v.weight
 			fillCrossAxis = true
 		case *dividerNode:
-			childW = n.measuredSizes[i].w
+			childW = n.m.sizes[i].w
 			fillCrossAxis = true
 		default:
-			childW = n.measuredSizes[i].w
-			childH = math.Min(n.measuredSizes[i].h, innerH)
+			childW = n.m.sizes[i].w
+			childH = math.Min(n.m.sizes[i].h, innerH)
 		}
 		if fillCrossAxis {
 			childH = innerH
@@ -352,7 +425,7 @@ func (n *hstackNode) layout(bounds nodeRect) {
 			case AlignStart:
 			}
 		}
-		child.layout(nodeRect{x: x, y: childY, w: childW, h: childH})
+		n.m.layout(i, child, nodeRect{x: x, y: childY, w: childW, h: childH})
 		x += childW
 	}
 }
@@ -366,21 +439,22 @@ func (n *hstackNode) draw(dctx *drawCtx) {
 // --- zstackNode ---
 
 type zstackNode struct {
-	memo          measureMemo
-	align         ZAlignment
-	children      []node
-	measuredSizes []nodeSize
-	bounds        nodeRect
+	memo     measureMemo[childSizes]
+	m        childSizes
+	align    ZAlignment
+	children []node
+	bounds   nodeRect
 }
 
-func (n *zstackNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
+func (n *zstackNode) measure(mctx *measureCtx) nodeSize {
+	return n.memo.do(mctx, &n.m, n.measureUncached)
+}
 
 func (n *zstackNode) measureUncached(mctx *measureCtx) nodeSize {
-	n.measuredSizes = make([]nodeSize, len(n.children))
+	n.m = newChildSizes(mctx, len(n.children))
 	var maxW, maxH float64
 	for i, child := range n.children {
-		s := child.measure(mctx)
-		n.measuredSizes[i] = s
+		s := n.m.measure(i, child, mctx.availW, mctx.availH)
 		if s.w > maxW {
 			maxW = s.w
 		}
@@ -394,7 +468,7 @@ func (n *zstackNode) measureUncached(mctx *measureCtx) nodeSize {
 func (n *zstackNode) layout(bounds nodeRect) {
 	n.bounds = bounds
 	for i, child := range n.children {
-		s := n.measuredSizes[i]
+		s := n.m.sizes[i]
 		// Horizontal: align%3 → 0=leading, 1=center, 2=trailing
 		var cx float64
 		switch int(n.align) % 3 {
@@ -415,7 +489,7 @@ func (n *zstackNode) layout(bounds nodeRect) {
 		default:
 			cy = bounds.y
 		}
-		child.layout(nodeRect{x: cx, y: cy, w: s.w, h: s.h})
+		n.m.layout(i, child, nodeRect{x: cx, y: cy, w: s.w, h: s.h})
 	}
 }
 
@@ -428,16 +502,16 @@ func (n *zstackNode) draw(dctx *drawCtx) {
 // --- boxNode ---
 
 type boxNode struct {
-	memo          measureMemo
-	padding       float64
-	borderWidth   float64
-	borderColor   color.Color
-	background    color.Color
-	cornerRadius  float64
-	clip          bool
-	children      []node
-	measuredSizes []nodeSize
-	bounds        nodeRect
+	memo         measureMemo[childSizes]
+	m            childSizes
+	padding      float64
+	borderWidth  float64
+	borderColor  color.Color
+	background   color.Color
+	cornerRadius float64
+	clip         bool
+	children     []node
+	bounds       nodeRect
 }
 
 // inset returns the distance from the box edge to its content.
@@ -448,16 +522,17 @@ func (n *boxNode) inset() float64 {
 	return n.padding + n.borderWidth
 }
 
-func (n *boxNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
+func (n *boxNode) measure(mctx *measureCtx) nodeSize {
+	return n.memo.do(mctx, &n.m, n.measureUncached)
+}
 
 func (n *boxNode) measureUncached(mctx *measureCtx) nodeSize {
 	innerW := math.Max(0, mctx.availW-2*n.inset())
 	innerH := math.Max(0, mctx.availH-2*n.inset())
-	n.measuredSizes = make([]nodeSize, len(n.children))
+	n.m = newChildSizes(mctx, len(n.children))
 	var maxW, maxH float64
 	for i, child := range n.children {
-		s := child.measure(mctx.with(innerW, innerH))
-		n.measuredSizes[i] = s
+		s := n.m.measure(i, child, innerW, innerH)
 		if s.w > maxW {
 			maxW = s.w
 		}
@@ -474,8 +549,8 @@ func (n *boxNode) layout(bounds nodeRect) {
 	innerY := bounds.y + n.inset()
 	innerW := math.Max(0, bounds.w-2*n.inset())
 	innerH := math.Max(0, bounds.h-2*n.inset())
-	for _, child := range n.children {
-		child.layout(nodeRect{x: innerX, y: innerY, w: innerW, h: innerH})
+	for i, child := range n.children {
+		n.m.layout(i, child, nodeRect{x: innerX, y: innerY, w: innerW, h: innerH})
 	}
 }
 
@@ -525,21 +600,23 @@ func (n *boxNode) draw(dctx *drawCtx) {
 
 type frameNode struct {
 	w, h     float64
+	m        childSizes
 	children []node
 	bounds   nodeRect
 }
 
 func (n *frameNode) measure(mctx *measureCtx) nodeSize {
-	for _, child := range n.children {
-		child.measure(mctx.with(n.w, n.h))
+	n.m = newChildSizes(mctx, len(n.children))
+	for i, child := range n.children {
+		n.m.measure(i, child, n.w, n.h)
 	}
 	return nodeSize{w: n.w, h: n.h}
 }
 
 func (n *frameNode) layout(bounds nodeRect) {
 	n.bounds = bounds
-	for _, child := range n.children {
-		child.layout(nodeRect{x: bounds.x, y: bounds.y, w: n.w, h: n.h})
+	for i, child := range n.children {
+		n.m.layout(i, child, nodeRect{x: bounds.x, y: bounds.y, w: n.w, h: n.h})
 	}
 }
 
@@ -613,7 +690,6 @@ func (n *spacerNode) draw(_ *drawCtx) {}
 // --- weightedNode ---
 
 type weightedNode struct {
-	memo   measureMemo
 	weight float64
 	child  node
 	mctx   *measureCtx // retained from measure to re-measure the child with its allocated bounds
@@ -622,9 +698,7 @@ type weightedNode struct {
 
 // measure returns the child's size. Stacks ignore the main-axis component and
 // use the cross-axis one.
-func (n *weightedNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
-
-func (n *weightedNode) measureUncached(mctx *measureCtx) nodeSize {
+func (n *weightedNode) measure(mctx *measureCtx) nodeSize {
 	n.mctx = mctx
 	return n.child.measure(mctx)
 }
@@ -692,13 +766,15 @@ func (n *dividerNode) draw(dctx *drawCtx) {
 // --- textNode ---
 
 type textNode struct {
-	memo   measureMemo
+	memo   measureMemo[struct{}]
 	text   string
 	style  Style
 	bounds nodeRect
 }
 
-func (n *textNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
+func (n *textNode) measure(mctx *measureCtx) nodeSize {
+	return n.memo.do(mctx, &struct{}{}, n.measureUncached)
+}
 
 // measureUncached measures the text. buildNode guarantees a loaded font and,
 // for vector fonts, a non-zero size.
@@ -1189,7 +1265,8 @@ func (n *barcodeNode) draw(dctx *drawCtx) {
 // --- gridNode ---
 
 type gridNode struct {
-	memo     measureMemo
+	memo     measureMemo[gridMeasure]
+	m        gridMeasure
 	columns  []GridTrack
 	rows     []GridTrack
 	rowGap   float64
@@ -1197,24 +1274,29 @@ type gridNode struct {
 	padding  float64
 	children []node
 
-	// computed during measure / finalized in layout
 	numCols    int
 	numRows    int
-	colWidths  []float64
-	rowHeights []float64
-	cellSizes  []nodeSize // len == numRows*numCols; zero for empty slots
+	colWidths  []float64 // computed in layout
+	rowHeights []float64 // computed in layout
 	bounds     nodeRect
+}
 
-	mctx *measureCtx // retained from measure for deferred re-measure of children in Fr rows
+// gridMeasure is the measure-time state a grid's layout reads.
+type gridMeasure struct {
+	cells childSizes // len == numRows*numCols; zero for empty slots
 	// frRowsAuto is set when measured with unbounded height; Fr rows then size
 	// to content like Auto rows.
 	frRowsAuto bool
 }
 
-func (n *gridNode) measure(mctx *measureCtx) nodeSize { return n.memo.do(mctx, n.measureUncached) }
+func (n *gridNode) measure(mctx *measureCtx) nodeSize {
+	return n.memo.do(mctx, &n.m, n.measureUncached)
+}
 
+// measureUncached measures children in Auto columns at their natural width
+// first, which, as in hstackNode, keeps the measurement shared by every size
+// the grid is measured at.
 func (n *gridNode) measureUncached(mctx *measureCtx) nodeSize {
-	n.mctx = mctx
 	n.numCols = len(n.columns)
 	// Explicit row definitions fix the row count; buildNode drops children
 	// beyond the last cell.
@@ -1222,50 +1304,56 @@ func (n *gridNode) measureUncached(mctx *measureCtx) nodeSize {
 	if len(n.rows) > 0 {
 		n.numRows = len(n.rows)
 	}
+	n.m = gridMeasure{cells: newChildSizes(mctx, n.numRows*n.numCols), frRowsAuto: isUnbounded(mctx.availH)}
 	if n.numRows == 0 {
 		return nodeSize{}
 	}
+	cells := &n.m.cells
 
 	innerW := math.Max(0, mctx.availW-2*n.padding)
 	innerH := math.Max(0, mctx.availH-2*n.padding)
-	n.frRowsAuto = isUnbounded(mctx.availH)
 	totalColGaps := math.Max(0, float64(n.numCols-1)) * n.colGap
 	availForCols := math.Max(0, innerW-totalColGaps)
 
-	// Step 1: estimate column widths for the first measure pass.
-	roughColWidths := n.computeColWidths(availForCols, nil)
-
-	// Step 2: measure all children with the estimated widths.
-	n.cellSizes = make([]nodeSize, n.numRows*n.numCols)
+	// Step 1: measure children in Auto columns at their natural width.
 	for i, child := range n.children {
-		col := i % n.numCols
-		n.cellSizes[i] = child.measure(mctx.with(roughColWidths[col], unbounded))
-	}
-
-	// Step 3: size auto columns from measured content.
-	n.colWidths = n.computeColWidths(availForCols, n.cellSizes)
-
-	// Step 4: re-measure children whose column width changed so row heights
-	// reflect re-wrapped content.
-	for i, child := range n.children {
-		col := i % n.numCols
-		if math.Abs(n.colWidths[col]-roughColWidths[col]) > 0.5 {
-			n.cellSizes[i] = child.measure(mctx.with(n.colWidths[col], unbounded))
+		if n.columns[i%n.numCols].kind == gridTrackAuto {
+			cells.measure(i, child, unbounded, unbounded)
 		}
 	}
 
-	// Step 5: compute row heights. Fr rows are recomputed in layout with the
+	// Step 2: limit children in Auto columns to an even share of the width
+	// left after Fixed columns, re-measuring the ones that are wider.
+	shares := n.computeColWidths(availForCols, nil)
+	for i, child := range n.children {
+		col := i % n.numCols
+		if n.columns[col].kind == gridTrackAuto && cells.sizes[i].w > shares[col] {
+			cells.measure(i, child, shares[col], unbounded)
+		}
+	}
+
+	// Step 3: size Auto columns to their content and measure the other
+	// children at their column's width.
+	colWidths := n.computeColWidths(availForCols, cells.sizes)
+	for i, child := range n.children {
+		col := i % n.numCols
+		if n.columns[col].kind != gridTrackAuto {
+			cells.measure(i, child, colWidths[col], unbounded)
+		}
+	}
+
+	// Step 4: compute row heights. Fr rows are recomputed in layout with the
 	// actual bounds.
 	totalRowGaps := math.Max(0, float64(n.numRows-1)) * n.rowGap
 	availForRows := math.Max(0, innerH-totalRowGaps)
-	n.rowHeights = n.computeRowHeights(availForRows, n.cellSizes)
+	rowHeights := n.computeRowHeights(availForRows, cells.sizes)
 
 	totalW := totalColGaps
-	for _, w := range n.colWidths {
+	for _, w := range colWidths {
 		totalW += w
 	}
 	totalH := totalRowGaps
-	for _, h := range n.rowHeights {
+	for _, h := range rowHeights {
 		totalH += h
 	}
 	return nodeSize{w: totalW + 2*n.padding, h: totalH + 2*n.padding}
@@ -1281,15 +1369,16 @@ func (n *gridNode) layout(bounds nodeRect) {
 	availForRows := math.Max(0, innerH-totalRowGaps)
 
 	// The parent may assign a different width than measure was given.
-	n.colWidths = n.computeColWidths(availForCols, n.cellSizes)
+	n.colWidths = n.computeColWidths(availForCols, n.m.cells.sizes)
 
 	// Distribute Fr rows using the actual available height.
-	n.rowHeights = n.finalizeRowHeights(availForRows, n.cellSizes)
+	n.rowHeights = n.computeRowHeights(availForRows, n.m.cells.sizes)
 
-	// Re-measure children in Fr rows with their definite height.
+	// Re-measure children in Fr rows with their definite height. The cells are
+	// copied first since the memo shares them.
+	n.m.cells = n.m.cells.clone()
 	for row := range n.numRows {
-		rowTrack := n.rowTrack(row)
-		if rowTrack.kind != gridTrackFr {
+		if n.rowTrack(row).kind != gridTrackFr {
 			continue
 		}
 		for col := range n.numCols {
@@ -1297,7 +1386,7 @@ func (n *gridNode) layout(bounds nodeRect) {
 			if idx >= len(n.children) {
 				break
 			}
-			n.cellSizes[idx] = n.children[idx].measure(n.mctx.with(n.colWidths[col], n.rowHeights[row]))
+			n.m.cells.measure(idx, n.children[idx], n.colWidths[col], n.rowHeights[row])
 		}
 	}
 
@@ -1319,7 +1408,7 @@ func (n *gridNode) layout(bounds nodeRect) {
 	for i, child := range n.children {
 		col := i % n.numCols
 		row := i / n.numCols
-		child.layout(nodeRect{
+		n.m.cells.layout(i, child, nodeRect{
 			x: originX + colOffsets[col],
 			y: originY + rowOffsets[row],
 			w: n.colWidths[col],
@@ -1337,7 +1426,7 @@ func (n *gridNode) draw(dctx *drawCtx) {
 // rowTrack returns the GridTrack for the given row, defaulting to gridTrackAuto.
 // Fr rows are reported as Auto when the grid's height is unbounded.
 func (n *gridNode) rowTrack(row int) GridTrack {
-	if row < len(n.rows) && (n.rows[row].kind != gridTrackFr || !n.frRowsAuto) {
+	if row < len(n.rows) && (n.rows[row].kind != gridTrackFr || !n.m.frRowsAuto) {
 		return n.rows[row]
 	}
 	return GridTrack{kind: gridTrackAuto}
@@ -1445,11 +1534,6 @@ func (n *gridNode) computeRowHeights(availForRows float64, cellSizes []nodeSize)
 		}
 	}
 	return heights
-}
-
-// finalizeRowHeights computes row heights for the final layout bounds.
-func (n *gridNode) finalizeRowHeights(availForRows float64, cellSizes []nodeSize) []float64 {
-	return n.computeRowHeights(availForRows, cellSizes)
 }
 
 // --- Build bridge: exported Node tree → internal node tree ---

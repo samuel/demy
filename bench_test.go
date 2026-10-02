@@ -69,3 +69,37 @@ func BenchmarkRenderDashboard(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkRenderNested renders HStacks and Grids nested 16 deep around text,
+// which measure their children at more than one size.
+func BenchmarkRenderNested(b *testing.B) {
+	style := demy.Style{Font: "sans", Size: 12}
+	wraps := []struct {
+		name string
+		wrap func(demy.Node) demy.Node
+	}{
+		{"HStack", func(n demy.Node) demy.Node {
+			return demy.HStack(demy.Gap(1), demy.Text("words that overflow the row", style), demy.Children(n))
+		}},
+		{"Grid", func(n demy.Node) demy.Node {
+			return demy.Grid(demy.Columns(demy.GridAuto(), demy.GridFr(1)), demy.Rows(demy.GridFr(1)), demy.Gap(1),
+				demy.Text("words", style), demy.Children(n))
+		}},
+	}
+	cfg := demy.TRMNLOriginal
+	cfg.Fonts = map[string]*demy.FontFamily{"sans": demy.MustLoadFontBytes("sans", goregular.TTF)}
+	c := demy.MustNew(cfg)
+	for _, w := range wraps {
+		b.Run(w.name, func(b *testing.B) {
+			var root demy.Node = demy.Text("leaf", style)
+			for range 16 {
+				root = w.wrap(root)
+			}
+			for b.Loop() {
+				if _, err := c.Render(root, demy.TwoBit); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

@@ -3,6 +3,16 @@
 All notable changes to demy are listed here. Until v1.0.0, minor releases may include breaking
 changes; they are called out under each release.
 
+## Unreleased
+
+- Layout time grows linearly with nesting depth. Nested `HStack`s and `Grid`s used to measure
+  their descendants at exponentially many sizes.
+- Breaking: an `HStack` sizes children from their natural width, limited to the stack's width,
+  instead of measuring them at the full width first. An `Image` in an `HStack` now keeps its
+  natural size rather than filling the row; wrap it in `Weighted` to fill. Children in `Grid`
+  Auto columns are sized the same way, so an image in an Auto column no longer grows to the
+  column's share of the width.
+
 ## v0.1.0 — 2026-10-01
 
 First release.

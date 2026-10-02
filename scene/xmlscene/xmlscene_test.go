@@ -166,7 +166,7 @@ func TestExecuteScene(t *testing.T) {
 </scene>`
 
 	data := struct{ Title, Sub string }{"Hello", "World"}
-	gotNode, gotStyles, err := xmlscene.ExecuteScene([]byte(tmpl), data, demy.Config{})
+	gotNode, gotStyles, err := xmlscene.ExecuteScene(t.Context(), []byte(tmpl), data, demy.Config{})
 	if err != nil {
 		t.Fatalf("ExecuteScene: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestExecute(t *testing.T) {
 		Items: []string{"one", "two"},
 	}
 
-	got, err := xmlscene.Execute([]byte(tmpl), data, demy.Config{})
+	got, err := xmlscene.Execute(t.Context(), []byte(tmpl), data, demy.Config{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

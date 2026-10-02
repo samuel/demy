@@ -1,6 +1,7 @@
 package demy_test
 
 import (
+	"context"
 	"image"
 	"math"
 	"strings"
@@ -25,7 +26,7 @@ func textConfig(w, h int) demy.Config {
 }
 
 func renderErr(n demy.Node) error {
-	_, err := demy.MustNew(textConfig(40, 40)).Render(n, demy.RGBA)
+	_, err := demy.MustNew(textConfig(40, 40)).Render(context.Background(), n, demy.RGBA)
 	return err
 }
 
@@ -180,12 +181,12 @@ func TestRenderValidatesModes(t *testing.T) {
 	c := demy.MustNew(textConfig(10, 10))
 	root := demy.Frame(4, 4)
 	bad := map[string]func() error{
-		"bwred":          func() error { _, err := c.Render(root, demy.BWRed); return err },
-		"unknown mode":   func() error { _, err := c.Render(root, demy.ColorMode(99)); return err },
-		"negative mode":  func() error { _, err := c.Render(root, demy.ColorMode(-1)); return err },
-		"unknown dither": func() error { _, err := c.Render(root, demy.OneBit, demy.Dither(9)); return err },
+		"bwred":          func() error { _, err := c.Render(t.Context(), root, demy.BWRed); return err },
+		"unknown mode":   func() error { _, err := c.Render(t.Context(), root, demy.ColorMode(99)); return err },
+		"negative mode":  func() error { _, err := c.Render(t.Context(), root, demy.ColorMode(-1)); return err },
+		"unknown dither": func() error { _, err := c.Render(t.Context(), root, demy.OneBit, demy.Dither(9)); return err },
 		"image dither": func() error {
-			_, err := c.Render(demy.Image(image.NewGray(image.Rect(0, 0, 2, 2)), demy.Dither(9)), demy.OneBit)
+			_, err := c.Render(t.Context(), demy.Image(image.NewGray(image.Rect(0, 0, 2, 2)), demy.Dither(9)), demy.OneBit)
 			return err
 		},
 	}
@@ -197,7 +198,7 @@ func TestRenderValidatesModes(t *testing.T) {
 		})
 	}
 	for _, mode := range []demy.ColorMode{demy.RGBA, demy.Grayscale, demy.OneBit, demy.TwoBit, demy.FourBit} {
-		if _, err := c.Render(root, mode, demy.Atkinson); err != nil {
+		if _, err := c.Render(t.Context(), root, mode, demy.Atkinson); err != nil {
 			t.Errorf("mode %d: %v", mode, err)
 		}
 	}
@@ -205,7 +206,7 @@ func TestRenderValidatesModes(t *testing.T) {
 
 func TestRenderUnsetMode(t *testing.T) {
 	cfg := textConfig(10, 10)
-	img, err := demy.MustNew(cfg).Render(demy.Frame(4, 4), demy.Unset)
+	img, err := demy.MustNew(cfg).Render(t.Context(), demy.Frame(4, 4), demy.Unset)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +214,7 @@ func TestRenderUnsetMode(t *testing.T) {
 		t.Errorf("Unset with Unset Config.ColorMode: got %T, want *image.RGBA", img)
 	}
 	cfg.ColorMode = demy.TwoBit
-	img, err = demy.MustNew(cfg).Render(demy.Frame(4, 4), demy.Unset)
+	img, err = demy.MustNew(cfg).Render(t.Context(), demy.Frame(4, 4), demy.Unset)
 	if err != nil {
 		t.Fatal(err)
 	}

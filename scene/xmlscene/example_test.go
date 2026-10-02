@@ -1,6 +1,7 @@
 package xmlscene_test
 
 import (
+	"context"
 	"fmt"
 	"log"
 
@@ -52,7 +53,7 @@ func ExampleExecute() {
 		"Title": "Groceries <today>",
 		"Items": []map[string]any{{"Name": "Milk", "Qty": 2}, {"Name": "Eggs", "Qty": 12}},
 	}
-	n, err := xmlscene.Execute([]byte(tmpl), data, demy.Config{})
+	n, err := xmlscene.Execute(context.Background(), []byte(tmpl), data, demy.Config{})
 	if err != nil {
 		log.Fatal(err)
 	}

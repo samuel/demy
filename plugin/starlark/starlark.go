@@ -27,6 +27,7 @@
 //	})
 //	p, err := env.Load(ctx, "display.star", cfg, time.Local)
 //	node, err := p.Render(r.Context(), data)
+//	img, err := canvas.Render(r.Context(), node, demy.Unset)
 //
 // Module execution and each Render call are limited to Environment.MaxSteps
 // Starlark execution steps (DefaultMaxSteps when zero) and are cancelled when

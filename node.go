@@ -1,6 +1,7 @@
 package demy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -30,8 +31,32 @@ type nodeSize struct{ w, h float64 }
 // nodeRect holds a node's assigned bounds in pixels.
 type nodeRect struct{ x, y, w, h float64 }
 
+// renderState is shared by every pass of one render.
+type renderState struct {
+	ctx context.Context
+	err error // the context's error once it's done
+}
+
+// stopped reports whether the render's context is done. A nil renderState
+// never stops.
+func (s *renderState) stopped() bool {
+	if s == nil {
+		return false
+	}
+	if s.err == nil {
+		s.err = s.ctx.Err()
+	}
+	return s.err != nil
+}
+
+// stopErr returns the error for a stopped render.
+func (s *renderState) stopErr() error {
+	return fmt.Errorf("demy: render stopped: %w", s.err)
+}
+
 // measureCtx carries context for the measure pass.
 type measureCtx struct {
+	rs     *renderState
 	fonts  map[string]*FontFamily
 	dpmm   float64
 	scale  float64
@@ -62,6 +87,7 @@ func (mctx *measureCtx) with(availW, availH float64) *measureCtx {
 
 // drawCtx carries context for the draw pass.
 type drawCtx struct {
+	rs        *renderState
 	ctx       *cv.Context
 	dpmm      float64 // logical DPMM (physical DPMM / scale)
 	scale     float64
@@ -129,8 +155,12 @@ func newChildSizes(mctx *measureCtx, n int) childSizes {
 	return childSizes{mctx: mctx, avail: make([]nodeSize, n), sizes: make([]nodeSize, n)}
 }
 
-// measure measures child i at the given available size and records the result.
+// measure measures child i at the given available size and records the
+// result. Once the render is stopped, children are no longer measured.
 func (c *childSizes) measure(i int, child node, availW, availH float64) nodeSize {
+	if c.mctx.rs.stopped() {
+		return nodeSize{}
+	}
 	mctx := c.mctx.with(availW, availH)
 	c.avail[i] = nodeSize{w: mctx.availW, h: mctx.availH}
 	c.sizes[i] = child.measure(mctx)
@@ -141,6 +171,9 @@ func (c *childSizes) measure(i int, child node, availW, availH float64) nodeSize
 // which hits the child's memo and restores the state from that measurement.
 // The child may have been measured at other sizes since.
 func (c *childSizes) layout(i int, child node, bounds nodeRect) {
+	if c.mctx.rs.stopped() {
+		return
+	}
 	child.measure(c.mctx.with(c.avail[i].w, c.avail[i].h))
 	child.layout(bounds)
 }
@@ -257,9 +290,7 @@ func (n *vstackNode) layout(bounds nodeRect) {
 }
 
 func (n *vstackNode) draw(dctx *drawCtx) {
-	for _, child := range n.children {
-		child.draw(dctx)
-	}
+	drawChildren(dctx, n.children)
 }
 
 // --- hstackNode ---
@@ -431,9 +462,7 @@ func (n *hstackNode) layout(bounds nodeRect) {
 }
 
 func (n *hstackNode) draw(dctx *drawCtx) {
-	for _, child := range n.children {
-		child.draw(dctx)
-	}
+	drawChildren(dctx, n.children)
 }
 
 // --- zstackNode ---
@@ -494,9 +523,7 @@ func (n *zstackNode) layout(bounds nodeRect) {
 }
 
 func (n *zstackNode) draw(dctx *drawCtx) {
-	for _, child := range n.children {
-		child.draw(dctx)
-	}
+	drawChildren(dctx, n.children)
 }
 
 // --- boxNode ---
@@ -591,9 +618,7 @@ func (n *boxNode) draw(dctx *drawCtx) {
 		drawClipped(dctx, n.bounds, n.children)
 		return
 	}
-	for _, child := range n.children {
-		child.draw(dctx)
-	}
+	drawChildren(dctx, n.children)
 }
 
 // --- frameNode ---
@@ -622,6 +647,16 @@ func (n *frameNode) layout(bounds nodeRect) {
 
 func (n *frameNode) draw(dctx *drawCtx) {
 	drawClipped(dctx, nodeRect{x: n.bounds.x, y: n.bounds.y, w: n.w, h: n.h}, n.children)
+}
+
+// drawChildren draws each child until the render is stopped.
+func drawChildren(dctx *drawCtx, children []node) {
+	for _, child := range children {
+		if dctx.rs.stopped() {
+			return
+		}
+		child.draw(dctx)
+	}
 }
 
 // drawClipped draws children onto a sub-canvas covering r and composites it
@@ -653,6 +688,7 @@ func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 	subCtx.Translate(-xMM, -yMM)
 
 	subDctx := &drawCtx{
+		rs:      dctx.rs,
 		ctx:     subCtx,
 		dpmm:    dctx.dpmm,
 		scale:   dctx.scale,
@@ -661,16 +697,17 @@ func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 		palette: dctx.palette,
 		clip:    clip,
 	}
-	for _, child := range children {
-		child.draw(subDctx)
-	}
+	drawChildren(subDctx, children)
 	if subDctx.err != nil {
 		dctx.setErr(subDctx.err)
 	}
 	dctx.textBlits = append(dctx.textBlits, subDctx.textBlits...)
 
 	subImg := image.NewRGBA(image.Rect(0, 0, clip.Dx(), clip.Dy()))
-	subCvs.RenderTo(newVectorRenderer(subImg, physDPMM))
+	if dctx.rs.stopped() {
+		return
+	}
+	subCvs.RenderTo(newVectorRenderer(subImg, physDPMM, dctx.rs))
 	dctx.ctx.DrawImage(xMM, yMM, subImg, cv.DPMM(physDPMM))
 }
 
@@ -1192,7 +1229,7 @@ func (n *imageNode) drawDithered(dctx *drawCtx, img image.Image, rect cv.Rect, f
 	drawn := subCtx.FitImage(img, rect, fit)
 
 	subImg := image.NewRGBA(image.Rect(0, 0, px.Dx(), px.Dy()))
-	subCvs.RenderTo(newVectorRenderer(subImg, physDPMM))
+	subCvs.RenderTo(newVectorRenderer(subImg, physDPMM, dctx.rs))
 
 	// Dither only the area the image covers, not letterboxing around it.
 	area := image.Rect(
@@ -1418,9 +1455,7 @@ func (n *gridNode) layout(bounds nodeRect) {
 }
 
 func (n *gridNode) draw(dctx *drawCtx) {
-	for _, child := range n.children {
-		child.draw(dctx)
-	}
+	drawChildren(dctx, n.children)
 }
 
 // rowTrack returns the GridTrack for the given row, defaulting to gridTrackAuto.
@@ -1540,8 +1575,8 @@ func (n *gridNode) computeRowHeights(availForRows float64, cellSizes []nodeSize)
 
 // buildNode converts an exported Node tree into the internal nodes used by
 // the measure/layout/draw pipeline.
-func buildNode(n Node, cfg *Config) (node, error) {
-	b := &builder{cfg: cfg}
+func buildNode(n Node, cfg *Config, rs *renderState) (node, error) {
+	b := &builder{cfg: cfg, rs: rs}
 	return b.build(n, dirVertical, 0)
 }
 
@@ -1549,6 +1584,7 @@ func buildNode(n Node, cfg *Config) (node, error) {
 // several places is built, and counted, once per use.
 type builder struct {
 	cfg       *Config
+	rs        *renderState
 	nodes     int // all nodes, bounded by maxNodes
 	clipped   int // Frames and Boxes with Clip, bounded by maxClippedNodes
 	barcodes  int // bounded by maxBarcodes
@@ -1573,6 +1609,9 @@ func (b *builder) build(n Node, parentDir layoutDir, depth int) (node, error) {
 	}
 	if err := count(&b.nodes, maxNodes, "nodes"); err != nil {
 		return nil, err
+	}
+	if b.rs.stopped() {
+		return nil, b.rs.stopErr()
 	}
 	if isNilNode(n) {
 		return &spacerNode{weight: 0}, nil

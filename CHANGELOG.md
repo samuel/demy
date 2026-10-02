@@ -22,6 +22,9 @@ changes; they are called out under each release.
   ±4096 pixels, or if their glyph bitmaps take more than 16 MiB. Rendering fails if bitmap
   glyphs cover more than 16 times the canvas area.
 - Bitmap glyphs are blitted only where visible, writing pixels directly.
+- Breaking: `Canvas.Render`, `xmlscene.Execute`, and `xmlscene.ExecuteScene` take a
+  `context.Context` and stop when it's done. Template output is limited to
+  `xmlscene.MaxTemplateOutput` (4 MiB).
 
 ## v0.1.0 — 2026-10-01
 

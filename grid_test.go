@@ -17,7 +17,7 @@ func renderGridCfg(t *testing.T, g *demy.GridNode, w, h int, cfg demy.Config) {
 	cfg.PhysicalWidthMM = float64(w)
 	cfg.PhysicalHeightMM = float64(h)
 	c := demy.MustNew(cfg)
-	if _, err := c.Render(g, demy.RGBA); err != nil {
+	if _, err := c.Render(t.Context(), g, demy.RGBA); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 }
@@ -55,7 +55,7 @@ func TestGridNoColumns(t *testing.T) {
 		"rows only":     demy.Grid(demy.Rows(demy.GridAuto())),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := demy.MustNew(cfg).Render(g, demy.RGBA); err == nil {
+			if _, err := demy.MustNew(cfg).Render(t.Context(), g, demy.RGBA); err == nil {
 				t.Error("expected error for a Grid with no columns")
 			}
 		})
@@ -161,7 +161,7 @@ func TestGridOverflowNotDrawn(t *testing.T) {
 		demy.Text("overflow"),
 		demy.Box(demy.Background(color.Black), demy.Frame(100, 100)),
 	)
-	img, err := demy.MustNew(cfg).Render(g, demy.RGBA)
+	img, err := demy.MustNew(cfg).Render(t.Context(), g, demy.RGBA)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}

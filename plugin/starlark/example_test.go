@@ -55,7 +55,7 @@ def render(data):
 
 	// Script styles must be in Config.Styles for Class references to resolve.
 	cfg.Styles = p.Styles()
-	img, err := demy.MustNew(cfg).Render(node, demy.Unset)
+	img, err := demy.MustNew(cfg).Render(context.Background(), node, demy.Unset)
 	if err != nil {
 		log.Fatal(err)
 	}

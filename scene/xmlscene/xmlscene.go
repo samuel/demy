@@ -44,6 +44,7 @@ package xmlscene
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -83,8 +84,12 @@ func Unmarshal(data []byte, cfg demy.Config) (demy.Node, error) {
 // with Unmarshal. The output of every template action is XML-escaped, so data
 // can't inject markup; pipe a value to raw (e.g. {{.Snippet | raw}}) to insert
 // it unescaped.
-func Execute(tmplSrc []byte, data any, cfg demy.Config) (demy.Node, error) {
-	out, err := executeTemplate(tmplSrc, data)
+//
+// Execution stops with an error when ctx is done or the output passes
+// MaxTemplateOutput bytes. The context is checked as output is written, on
+// each range iteration, and on each template invocation.
+func Execute(ctx context.Context, tmplSrc []byte, data any, cfg demy.Config) (demy.Node, error) {
+	out, err := executeTemplate(ctx, tmplSrc, data)
 	if err != nil {
 		return nil, err
 	}
@@ -147,9 +152,10 @@ func UnmarshalScene(data []byte, cfg demy.Config) (demy.Node, map[string]demy.St
 }
 
 // ExecuteScene executes a text/template that produces XML and unmarshals the result
-// with UnmarshalScene. Action output is XML-escaped as in Execute.
-func ExecuteScene(tmplSrc []byte, data any, cfg demy.Config) (demy.Node, map[string]demy.Style, error) {
-	out, err := executeTemplate(tmplSrc, data)
+// with UnmarshalScene. Action output is XML-escaped, and execution is limited,
+// as in Execute.
+func ExecuteScene(ctx context.Context, tmplSrc []byte, data any, cfg demy.Config) (demy.Node, map[string]demy.Style, error) {
+	out, err := executeTemplate(ctx, tmplSrc, data)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -160,8 +166,30 @@ func ExecuteScene(tmplSrc []byte, data any, cfg demy.Config) (demy.Node, map[str
 
 const (
 	escapeFunc = "xmlscene_escape"
+	checkFunc  = "xmlscene_check"
 	rawFunc    = "raw"
 )
+
+// MaxTemplateOutput bounds the XML a template may produce, in bytes. It is
+// well above what a scene within demy's node and text limits needs.
+const MaxTemplateOutput = 1 << 22
+
+// templateWriter collects template output, failing once ctx is done or the
+// output passes MaxTemplateOutput.
+type templateWriter struct {
+	ctx context.Context
+	buf bytes.Buffer
+}
+
+func (w *templateWriter) Write(p []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if w.buf.Len()+len(p) > MaxTemplateOutput {
+		return 0, fmt.Errorf("output is more than %d bytes", MaxTemplateOutput)
+	}
+	return w.buf.Write(p)
+}
 
 // rawXML marks a value that the template inserts without escaping.
 type rawXML string
@@ -180,21 +208,41 @@ var templateFuncs = template.FuncMap{
 	rawFunc: func(v any) rawXML { return rawXML(fmt.Sprint(v)) },
 }
 
-func executeTemplate(src []byte, data any) ([]byte, error) {
-	t, err := template.New("scene").Funcs(templateFuncs).Parse(string(src))
+func executeTemplate(ctx context.Context, src []byte, data any) ([]byte, error) {
+	t, err := template.New("scene").Funcs(templateFuncs).Funcs(template.FuncMap{
+		checkFunc: func() (string, error) { return "", ctx.Err() },
+	}).Parse(string(src))
 	if err != nil {
 		return nil, fmt.Errorf("xmlscene: template parse: %w", err)
 	}
 	for _, tt := range t.Templates() {
 		if tt.Tree != nil {
 			escapeActions(tt.Tree, tt.Root)
+			// Templates can loop or recurse without writing output, so check
+			// the context each time one starts.
+			tt.Root.Nodes = slices.Insert(tt.Root.Nodes, 0, parse.Node(checkAction(tt.Tree, tt.Root.Pos)))
 		}
 	}
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, data); err != nil {
+	w := &templateWriter{ctx: ctx}
+	if err := t.Execute(w, data); err != nil {
 		return nil, fmt.Errorf("xmlscene: template execute: %w", err)
 	}
-	return buf.Bytes(), nil
+	return w.buf.Bytes(), nil
+}
+
+// checkAction returns an action that calls checkFunc, which prints nothing and
+// stops execution once the context is done.
+func checkAction(tree *parse.Tree, pos parse.Pos) *parse.ActionNode {
+	id := parse.NewIdentifier(checkFunc).SetTree(tree).SetPos(pos)
+	return &parse.ActionNode{
+		NodeType: parse.NodeAction,
+		Pos:      pos,
+		Pipe: &parse.PipeNode{
+			NodeType: parse.NodePipe,
+			Pos:      pos,
+			Cmds:     []*parse.CommandNode{{NodeType: parse.NodeCommand, Pos: pos, Args: []parse.Node{id}}},
+		},
+	}
 }
 
 // escapeActions appends the escape function to the pipeline of every action
@@ -226,6 +274,7 @@ func escapeActions(tree *parse.Tree, n parse.Node) {
 	case *parse.RangeNode:
 		escapeActions(tree, n.List)
 		escapeActions(tree, n.ElseList)
+		n.List.Nodes = slices.Insert(n.List.Nodes, 0, parse.Node(checkAction(tree, n.Pos)))
 	case *parse.WithNode:
 		escapeActions(tree, n.List)
 		escapeActions(tree, n.ElseList)

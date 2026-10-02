@@ -38,7 +38,7 @@ func TestRenderInvalidText(t *testing.T) {
 			PixelWidth: 120, PixelHeight: 30, PhysicalWidthMM: 120, PhysicalHeightMM: 30,
 			Fonts: fonts, DefaultTextStyle: Style{Font: font, Size: 14},
 		}
-		img, err := MustNew(cfg).Render(Text(s), Grayscale)
+		img, err := MustNew(cfg).Render(t.Context(), Text(s), Grayscale)
 		if err != nil {
 			t.Fatalf("Render(%q): %v", s, err)
 		}

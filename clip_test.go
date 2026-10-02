@@ -19,7 +19,7 @@ func render(t *testing.T, n demy.Node, w, h int, mode demy.ColorMode, cfg demy.C
 	cfg.PixelHeight = h
 	cfg.PhysicalWidthMM = float64(w)
 	cfg.PhysicalHeightMM = float64(h)
-	img, err := demy.MustNew(cfg).Render(n, mode)
+	img, err := demy.MustNew(cfg).Render(t.Context(), n, mode)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}

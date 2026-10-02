@@ -8,7 +8,7 @@ import (
 
 func buildTest(t *testing.T, n Node) node {
 	t.Helper()
-	built, err := buildNode(n, &Config{})
+	built, err := buildNode(n, &Config{}, nil)
 	if err != nil {
 		t.Fatalf("buildNode: %v", err)
 	}

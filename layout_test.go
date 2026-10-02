@@ -61,7 +61,7 @@ func absDiff(a, b uint8) uint8 {
 func TestRootPixelAligned(t *testing.T) {
 	cfg := demy.TRMNLOriginal
 	c := demy.MustNew(cfg)
-	img, err := c.Render(demy.VStack(redBox(10, 10)), demy.RGBA)
+	img, err := c.Render(t.Context(), demy.VStack(redBox(10, 10)), demy.RGBA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func TestTextAlignInLaidOutBounds(t *testing.T) {
 	}
 	c := demy.MustNew(textConfig(200, 40))
 	for name, tt := range tests {
-		img, err := c.Render(tt.node, demy.RGBA)
+		img, err := c.Render(t.Context(), tt.node, demy.RGBA)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}

@@ -47,6 +47,6 @@ func FuzzUnmarshalRender(f *testing.F) {
 		if err != nil {
 			return
 		}
-		_, _ = canvas.Render(n, demy.Grayscale)
+		_, _ = canvas.Render(t.Context(), n, demy.Grayscale)
 	})
 }

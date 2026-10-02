@@ -123,7 +123,7 @@ func TestExecuteEscapesData(t *testing.T) {
 		"Name":  `</text></vstack><image key="secret"/><vstack><text>`,
 		"Class": `h1" size="400`,
 	}
-	got, err := xmlscene.Execute([]byte(tmpl), data, demy.Config{})
+	got, err := xmlscene.Execute(t.Context(), []byte(tmpl), data, demy.Config{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestExecuteEscapesData(t *testing.T) {
 		t.Errorf("class = %q, want %q", cls, data["Class"])
 	}
 
-	got, err = xmlscene.Execute([]byte(`<text>{{.}}</text>`), "AT&T < 3", demy.Config{})
+	got, err = xmlscene.Execute(t.Context(), []byte(`<text>{{.}}</text>`), "AT&T < 3", demy.Config{})
 	if err != nil {
 		t.Fatalf("Execute with & and <: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestExecuteEscapesData(t *testing.T) {
 func TestExecuteRaw(t *testing.T) {
 	const tmpl = `<vstack>{{.Inner | raw}}{{range .Items}}<text>{{.}}</text>{{end}}{{$x := .Title}}<text>{{$x}}</text></vstack>`
 	data := map[string]any{"Inner": `<spacer/>`, "Items": []string{"a&b"}, "Title": "t<"}
-	got, err := xmlscene.Execute([]byte(tmpl), data, demy.Config{})
+	got, err := xmlscene.Execute(t.Context(), []byte(tmpl), data, demy.Config{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

@@ -175,10 +175,10 @@ func TestBlitCoverageLimit(t *testing.T) {
 		Fonts: map[string]*FontFamily{"b": ff},
 	}
 	c := MustNew(cfg)
-	if _, err := c.Render(Text(strings.Repeat("A", maxBlitCoverage), Style{Font: "b"}), Grayscale); err != nil {
+	if _, err := c.Render(t.Context(), Text(strings.Repeat("A", maxBlitCoverage), Style{Font: "b"}), Grayscale); err != nil {
 		t.Fatalf("at the limit: %v", err)
 	}
-	_, err := c.Render(Text(strings.Repeat("A", maxBlitCoverage+1), Style{Font: "b"}), Grayscale)
+	_, err := c.Render(t.Context(), Text(strings.Repeat("A", maxBlitCoverage+1), Style{Font: "b"}), Grayscale)
 	if err == nil || !strings.Contains(err.Error(), "canvas area") {
 		t.Fatalf("over the limit: err = %v, want coverage error", err)
 	}
@@ -262,6 +262,6 @@ func FuzzParseBDF(f *testing.F) {
 				b.WriteRune(r)
 			}
 		}
-		_, _ = MustNew(cfg).Render(Text(b.String()+" A g", Style{Font: "bdf"}), Grayscale)
+		_, _ = MustNew(cfg).Render(t.Context(), Text(b.String()+" A g", Style{Font: "bdf"}), Grayscale)
 	})
 }

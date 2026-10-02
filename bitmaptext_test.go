@@ -19,7 +19,7 @@ func renderBitmap(t *testing.T, root Node, w, h int, scale float64, mode ColorMo
 		Roles:            Roles{Background: White, Foreground: Black},
 	}
 	c := MustNew(cfg)
-	img, err := c.Render(root, mode)
+	img, err := c.Render(t.Context(), root, mode)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}

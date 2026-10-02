@@ -22,6 +22,7 @@ Scenes, templates, scripts, and fonts must be trusted; see
 
 ```go
 import (
+    "context"
     "image/png"
     "log"
     "os"
@@ -56,7 +57,7 @@ root := demy.VStack(demy.Gap(4), demy.Padding(8),
     ),
 )
 
-img, err := c.Render(root, demy.TwoBit)
+img, err := c.Render(context.Background(), root, demy.TwoBit)
 if err != nil {
     log.Fatal(err)
 }
@@ -272,10 +273,14 @@ correction levels: `ECLevelLow` (~7%), `ECLevelMedium` (~15%, default), `ECLevel
 ## Rendering
 
 ```go
-img, err := c.Render(root, mode)                // mode: RGBA, Grayscale, OneBit, TwoBit, FourBit (BWRed is not implemented)
-img, err := c.Render(root, demy.Unset)          // use Config.ColorMode
-img, err := c.Render(root, demy.TwoBit, demy.Atkinson) // dither the whole scene
+img, err := c.Render(ctx, root, mode)                // mode: RGBA, Grayscale, OneBit, TwoBit, FourBit (BWRed is not implemented)
+img, err := c.Render(ctx, root, demy.Unset)          // use Config.ColorMode
+img, err := c.Render(ctx, root, demy.TwoBit, demy.Atkinson) // dither the whole scene
 ```
+
+`Render` stops when `ctx` is done and returns an error wrapping the context's error, so
+`errors.Is(err, context.DeadlineExceeded)` reports a timeout. It checks the context for each
+node it builds, measures, lays out, and draws, and for each path and image it rasterizes.
 
 `Render` returns an `*image.RGBA` for `RGBA` and an `*image.Gray` otherwise, with quantized modes
 snapped to the palette's gray levels. Encode it with `image/png` or any other encoder.
@@ -312,7 +317,7 @@ root := demy.VStack(
     demy.Text("Headline", title),
     demy.Image(photo, demy.Atkinson), // or demy.FloydSteinberg
 )
-img, err := c.Render(root, demy.TwoBit)
+img, err := c.Render(ctx, root, demy.TwoBit)
 ```
 
 ## JSON scenes (`scene/jsonscene`)
@@ -370,11 +375,15 @@ const tmpl = `<vstack gap="4">
   </hstack>
   {{end}}
 </vstack>`
-node, err = xmlscene.Execute([]byte(tmpl), data, cfg)
+node, err = xmlscene.Execute(ctx, []byte(tmpl), data, cfg)
 ```
 
 Template output is XML-escaped automatically, so data like `AT&T` or `</text>` is inserted as
 text and can't inject markup. Pipe a value to `raw` (`{{.Snippet | raw}}`) to insert XML as is.
+
+Execution stops when `ctx` is done, checked as output is written, on each `range` iteration,
+and each time a template starts, so loops and recursion that print nothing still stop. Output
+is limited to `xmlscene.MaxTemplateOutput` (4 MiB).
 
 A document can also be wrapped in `<scene>` with a `<styles>` block of
 `<style name="…" font="…" size="…"/>` entries. Use `UnmarshalScene`, `ExecuteScene`, or
@@ -404,7 +413,7 @@ env := &starlarkplugin.Environment{}
 p, err := env.Load(ctx, "weather.star", cfg, loc) // loc sets the zone for now(); nil = UTC
 
 node, err := p.Render(ctx, map[string]any{"city": "Portland", "temp": 72.4, "items": items})
-img, err := c.Render(node, demy.Unset)
+img, err := c.Render(ctx, node, demy.Unset)
 ```
 
 Use `Environment.AddBuiltin`, `AddValue`, and `AddModule` to expose Go functions to scripts.
@@ -466,7 +475,6 @@ Scenes, templates, Starlark scripts, and BDF fonts must come from trusted source
 validates its input and returns errors instead of panicking on malformed trees, but it does not
 yet bound the time or memory a hostile input can use:
 
-- `Canvas.Render` and `xmlscene.Execute` can't be cancelled.
 - `Environment.MaxSteps` bounds Starlark execution steps, not memory. A panic in a Go builtin
   registered with `AddBuiltin` or `AddModule` crashes the process, and script `print()` output
   isn't limited.

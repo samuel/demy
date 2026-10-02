@@ -40,10 +40,10 @@ func TestNodeBudget(t *testing.T) {
 		}, "barcodes"},
 	}
 	for name, tt := range tests {
-		if _, err := buildNode(tt.tree(tt.limit), &Config{}); err != nil {
+		if _, err := buildNode(tt.tree(tt.limit), &Config{}, nil); err != nil {
 			t.Errorf("%s: at the limit: %v", name, err)
 		}
-		_, err := buildNode(tt.tree(tt.limit+1), &Config{})
+		_, err := buildNode(tt.tree(tt.limit+1), &Config{}, nil)
 		if err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: over the limit: err = %v, want %q error", name, err, tt.want)
 		}
@@ -54,7 +54,7 @@ func TestNodeBudget(t *testing.T) {
 // a clipped node.
 func TestNodeBudgetUnclippedBox(t *testing.T) {
 	tree := ZStack(children(maxClippedNodes+1, func() Node { return Box() }))
-	if _, err := buildNode(tree, &Config{}); err != nil {
+	if _, err := buildNode(tree, &Config{}, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -84,7 +84,7 @@ func TestTextBudget(t *testing.T) {
 		}(), "bytes of text"},
 	}
 	for name, tt := range tests {
-		_, err := buildNode(tt.tree, cfg)
+		_, err := buildNode(tt.tree, cfg, nil)
 		switch {
 		case tt.want == "" && err != nil:
 			t.Errorf("%s: %v", name, err)

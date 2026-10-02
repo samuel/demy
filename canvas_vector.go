@@ -16,15 +16,17 @@ import (
 // default srwiley/scanx rasterizer can loop forever on some path geometries
 // on Linux.
 type vectorRenderer struct {
+	rs            *renderState // paths and images aren't drawn once the render is stopped
 	img           *image.RGBA
 	resolution    cv.Resolution
 	width, height float64
 	ras           *vector.Rasterizer
 }
 
-func newVectorRenderer(img *image.RGBA, dpmm float64) *vectorRenderer {
+func newVectorRenderer(img *image.RGBA, dpmm float64, rs *renderState) *vectorRenderer {
 	b := img.Bounds().Size()
 	return &vectorRenderer{
+		rs:         rs,
 		img:        img,
 		resolution: cv.DPMM(dpmm),
 		width:      float64(b.X) / dpmm,
@@ -38,6 +40,9 @@ func (r *vectorRenderer) Size() (float64, float64) {
 }
 
 func (r *vectorRenderer) RenderPath(path *cv.Path, style cv.Style, m cv.Matrix) {
+	if r.rs.stopped() {
+		return
+	}
 	if style.HasFill() && style.Fill.IsColor() {
 		r.fill(path.Copy().Transform(m), style.Fill.Color)
 	}
@@ -89,6 +94,9 @@ func (r *vectorRenderer) RenderText(text *cv.Text, m cv.Matrix) {
 }
 
 func (r *vectorRenderer) RenderImage(img image.Image, m cv.Matrix) {
+	if r.rs.stopped() {
+		return
+	}
 	dpmm := r.resolution.DPMM()
 	sb := img.Bounds()
 	origin := m.Dot(cv.Point{X: 0, Y: float64(sb.Dy())}).Mul(dpmm)

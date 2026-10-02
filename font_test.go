@@ -42,7 +42,7 @@ func TestTextFontErrors(t *testing.T) {
 				DefaultTextStyle: tt.def,
 				Styles:           map[string]Style{"h": {Size: 10}, "z": {Font: "zero", Size: 10}},
 			}
-			_, err := MustNew(cfg).Render(VStack(tt.node), Grayscale)
+			_, err := MustNew(cfg).Render(t.Context(), VStack(tt.node), Grayscale)
 			switch {
 			case tt.want == "" && err != nil:
 				t.Fatalf("Render: %v", err)

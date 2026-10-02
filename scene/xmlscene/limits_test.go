@@ -1,6 +1,8 @@
 package xmlscene_test
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +74,47 @@ func FuzzUnmarshalRender(f *testing.F) {
 		if err != nil {
 			return
 		}
-		_, _ = canvas.Render(n, demy.Grayscale)
+		_, _ = canvas.Render(t.Context(), n, demy.Grayscale)
 	})
+}
+
+func TestExecuteOutputLimit(t *testing.T) {
+	tmpl := "<vstack>{{range 10000}}" + strings.Repeat("<spacer/>", 100) + "{{end}}</vstack>"
+	if _, err := xmlscene.Execute(t.Context(), []byte(tmpl), nil, demy.Config{}); err == nil || !strings.Contains(err.Error(), "bytes") {
+		t.Fatalf("err = %v, want output limit error", err)
+	}
+}
+
+func TestExecuteCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := xmlscene.Execute(ctx, []byte(`<text>hi</text>`), nil, demy.Config{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+// TestExecuteDeadline checks that templates that run for a long time without
+// writing output stop at the deadline.
+func TestExecuteDeadline(t *testing.T) {
+	tests := map[string]struct {
+		tmpl string
+		data any
+	}{
+		"silent range": {`{{range 1000000000000}}{{end}}<spacer/>`, nil},
+		// Each call makes two more, 2^40 in all.
+		"recursion": {`{{define "a"}}{{if .}}{{template "a" (slice . 1)}}{{template "a" (slice . 1)}}{{end}}{{end}}{{template "a" .}}<spacer/>`, make([]int, 40)},
+	}
+	for name, tt := range tests {
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+		start := time.Now()
+		_, err := xmlscene.Execute(ctx, []byte(tt.tmpl), tt.data, demy.Config{})
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("%s: err = %v, want context.DeadlineExceeded", name, err)
+		}
+		if d := time.Since(start); d > 500*time.Millisecond {
+			t.Errorf("%s: took %v after a 20ms deadline", name, d)
+		}
+	}
 }

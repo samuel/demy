@@ -62,7 +62,7 @@ func BenchmarkRenderDashboard(b *testing.B) {
 			root := dashboard()
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := c.Render(root, demy.TwoBit); err != nil {
+				if _, err := c.Render(b.Context(), root, demy.TwoBit); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -96,7 +96,7 @@ func BenchmarkRenderNested(b *testing.B) {
 				root = w.wrap(root)
 			}
 			for b.Loop() {
-				if _, err := c.Render(root, demy.TwoBit); err != nil {
+				if _, err := c.Render(b.Context(), root, demy.TwoBit); err != nil {
 					b.Fatal(err)
 				}
 			}

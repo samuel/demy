@@ -48,7 +48,7 @@ def render(data):
 		t.Fatal(err)
 	}
 	start := time.Now()
-	if _, err := demy.MustNew(cfg).Render(n, demy.Grayscale); err == nil || !strings.Contains(err.Error(), "nodes") {
+	if _, err := demy.MustNew(cfg).Render(t.Context(), n, demy.Grayscale); err == nil || !strings.Contains(err.Error(), "nodes") {
 		t.Fatalf("err = %v, want node limit error", err)
 	}
 	if d := time.Since(start); d > time.Second {

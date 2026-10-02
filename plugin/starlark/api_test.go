@@ -72,11 +72,11 @@ def render(d): return Text("x", Class("h1"))
 		t.Errorf("class = %q, want h1", c)
 	}
 	cfg.Styles = p.Styles()
-	if _, err := demy.MustNew(cfg).Render(n, demy.Grayscale); err != nil {
+	if _, err := demy.MustNew(cfg).Render(t.Context(), n, demy.Grayscale); err != nil {
 		t.Errorf("render with merged styles: %v", err)
 	}
 	cfg.Styles = nil
-	if _, err := demy.MustNew(cfg).Render(n, demy.Grayscale); err == nil {
+	if _, err := demy.MustNew(cfg).Render(t.Context(), n, demy.Grayscale); err == nil {
 		t.Error("render without the class: expected error")
 	}
 }
@@ -284,7 +284,7 @@ def render(d):
 		go func() {
 			n, err := p.Render(t.Context(), map[string]any{"i": i, "name": "x"})
 			if err == nil {
-				_, err = c.Render(n, demy.Grayscale)
+				_, err = c.Render(t.Context(), n, demy.Grayscale)
 			}
 			errs <- err
 		}()

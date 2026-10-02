@@ -30,7 +30,7 @@ func TestConcurrentCanvasRender(t *testing.T) {
 				demy.Text(text, demy.Style{Font: "sans", Size: 14}),
 				demy.Text(text, demy.Style{Font: "sans", Size: 20, Weight: demy.FontBold, Overflow: demy.TextOverflowEllipsis, MaxLines: 1}),
 			)
-			if _, err := c.Render(root, demy.TwoBit); err != nil {
+			if _, err := c.Render(t.Context(), root, demy.TwoBit); err != nil {
 				t.Error(err)
 			}
 		})

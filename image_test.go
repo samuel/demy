@@ -66,7 +66,7 @@ func TestImageFillWithoutSubImage(t *testing.T) {
 	for _, d := range []demy.Dither{demy.NoDithering, demy.FloydSteinberg} {
 		render := func(img image.Image) image.Image {
 			cfg := textConfig(40, 40)
-			got, err := demy.MustNew(cfg).Render(
+			got, err := demy.MustNew(cfg).Render(t.Context(),
 				demy.Frame(40, 40, demy.Image(img, demy.ImageFill, d)), demy.Grayscale)
 			if err != nil {
 				t.Fatalf("Render: %v", err)

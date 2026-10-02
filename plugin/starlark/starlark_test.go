@@ -61,7 +61,7 @@ def render(data):
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Render(node, demy.RGBA); err != nil {
+	if _, err := c.Render(t.Context(), node, demy.RGBA); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -104,7 +104,7 @@ def render(data):
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Render(node, demy.RGBA); err != nil {
+	if _, err := c.Render(t.Context(), node, demy.RGBA); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -163,7 +163,7 @@ def render(data):
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Render(node, demy.RGBA); err != nil {
+	if _, err := c.Render(t.Context(), node, demy.RGBA); err != nil {
 		t.Fatalf("canvas.Render: %v", err)
 	}
 }
@@ -201,7 +201,7 @@ def render(data):
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Render(node, demy.RGBA); err != nil {
+	if _, err := c.Render(t.Context(), node, demy.RGBA); err != nil {
 		t.Fatalf("canvas.Render: %v", err)
 	}
 }
@@ -298,7 +298,7 @@ def render(data):
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Render(node, demy.RGBA); err != nil {
+	if _, err := c.Render(t.Context(), node, demy.RGBA); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -333,7 +333,7 @@ def render(data):
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Render(node, demy.RGBA); err != nil {
+	if _, err := c.Render(t.Context(), node, demy.RGBA); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -414,7 +414,7 @@ def render(data):
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Render(node, demy.RGBA); err != nil {
+	if _, err := c.Render(t.Context(), node, demy.RGBA); err != nil {
 		t.Fatalf("canvas.Render: %v", err)
 	}
 }

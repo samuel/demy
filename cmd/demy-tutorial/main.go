@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"encoding/json/v2"
 	"errors"
@@ -41,6 +42,9 @@ type lesson struct {
 
 // maxBodyBytes bounds the size of a posted scene.
 const maxBodyBytes = 1 << 20
+
+// renderTimeout bounds the time spent rendering a posted scene.
+const renderTimeout = 10 * time.Second
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8081", "listen address")
@@ -137,8 +141,10 @@ func renderHandler(w http.ResponseWriter, r *http.Request) {
 		ditherAlgo = demy.Atkinson
 	}
 
+	ctx, cancel := context.WithTimeout(r.Context(), renderTimeout)
+	defer cancel()
 	var buf bytes.Buffer
-	img, err := canvas.Render(node, colorMode, ditherAlgo)
+	img, err := canvas.Render(ctx, node, colorMode, ditherAlgo)
 	if err != nil {
 		writeJSONError(w, fmt.Errorf("rendering: %w", err), http.StatusInternalServerError)
 		return

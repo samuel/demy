@@ -285,8 +285,11 @@ A typical dashboard renders in about 10 ms on TRMNL Original and 40 ms on TRMNL 
 
 `Render` returns an error rather than panicking on invalid trees: sizes, gaps, padding, and
 weights must be finite and within `[0, 32768]`, trees may nest at most 1000 levels, and
-`GridRow` must be a direct child of `Grid`. XML and JSON scenes are also limited to 1000 levels
-of nesting. These checks don't make untrusted input safe to render; see
+`GridRow` must be a direct child of `Grid`. A tree may have at most 16384 nodes, 128 clipped
+nodes (`Frame`, and `Box` with `Clip`), and 16 barcodes. A node used in several places counts
+once per use, so a small tree that shares nodes can't expand into an unbounded amount of work.
+XML and JSON scenes are also limited to 1000 levels of nesting and 16384 nodes, checked while
+decoding. These checks don't make untrusted input safe to render; see
 [Security and trusted input](#security-and-trusted-input).
 
 ### Per-image dithering
@@ -455,8 +458,6 @@ Scenes, templates, Starlark scripts, and BDF fonts must come from trusted source
 validates its input and returns errors instead of panicking on malformed trees, but it does not
 yet bound the time or memory a hostile input can use:
 
-- There is no limit on the number of nodes. A Starlark script can build a tree that shares
-  nodes (`x = VStack(x, x)` in a loop) whose expanded size is exponential in its source size.
 - Text length isn't capped, and every text node is shaped during both measure and draw.
 - A small BDF font can declare glyphs whose bitmaps take far more memory than its size
   suggests.

@@ -149,7 +149,7 @@ func (c *Canvas) draw(root Node, pal []color.Gray) (*cv.Canvas, []textBlit, erro
 	ctx := cv.NewContext(cvs)
 	ctx.SetCoordSystem(cv.CartesianIV)
 
-	internal, err := buildNode(root, &c.cfg, dirVertical, 0)
+	internal, err := buildNode(root, &c.cfg)
 	if err != nil {
 		return nil, nil, err
 	}

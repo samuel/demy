@@ -24,6 +24,18 @@ func TestUnmarshalDepthLimit(t *testing.T) {
 	}
 }
 
+func TestUnmarshalNodeLimit(t *testing.T) {
+	spacers := func(count int) []byte {
+		return []byte(`{"type":"vstack","children":[` + strings.Repeat(`{"type":"spacer"},`, count-1) + `{"type":"spacer"}]}`)
+	}
+	if _, err := jsonscene.Unmarshal(spacers(1<<14 - 1)); err != nil {
+		t.Fatalf("at the limit: %v", err)
+	}
+	if _, err := jsonscene.Unmarshal(spacers(1 << 14)); err == nil || !strings.Contains(err.Error(), "nodes") {
+		t.Fatalf("over the limit: err = %v, want node limit error", err)
+	}
+}
+
 func FuzzUnmarshalRender(f *testing.F) {
 	f.Add(`{"type":"vstack","gap":4,"children":[{"type":"text","text":"hi"},{"type":"frame","width":10,"height":10}]}`)
 	f.Add(`{"type":"grid","columns":[{"kind":"fr","weight":1}],"children":[{"type":"spacer"},{"type":"divider"}]}`)

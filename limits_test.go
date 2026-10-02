@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/image/font/gofont/goregular"
 
@@ -95,6 +96,23 @@ func TestNodeDepthLimit(t *testing.T) {
 	err := renderErr(n)
 	if err == nil || !strings.Contains(err.Error(), "nested") {
 		t.Fatalf("err = %v, want nesting error", err)
+	}
+}
+
+// TestSharedNodeBlowup checks that a small tree whose nodes are shared, and
+// so expand to 2²⁰ nodes, fails quickly instead of being laid out.
+func TestSharedNodeBlowup(t *testing.T) {
+	var n demy.Node = demy.Text("a")
+	for range 20 {
+		n = demy.VStack(demy.Children(n, n))
+	}
+	start := time.Now()
+	err := renderErr(n)
+	if err == nil || !strings.Contains(err.Error(), "nodes") {
+		t.Fatalf("err = %v, want node limit error", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("render took %v, want well under a second", d)
 	}
 }
 

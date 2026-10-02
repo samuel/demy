@@ -97,7 +97,7 @@ func Unmarshal(data []byte) (demy.Node, error) {
 	if err := decodeStrict(data, &sn); err != nil {
 		return nil, err
 	}
-	n, err := sceneToNode(sn, 1)
+	n, err := sceneToNode(sn, 1, new(int))
 	if err != nil {
 		return nil, fmt.Errorf("jsonscene: %w", err)
 	}
@@ -133,7 +133,7 @@ func UnmarshalScene(data []byte) (demy.Node, map[string]demy.Style, error) {
 	if err := decodeStrict(data, &s); err != nil {
 		return nil, nil, err
 	}
-	n, err := sceneToNode(s.Root, 1)
+	n, err := sceneToNode(s.Root, 1, new(int))
 	if err != nil {
 		return nil, nil, fmt.Errorf("jsonscene: %w", err)
 	}
@@ -305,10 +305,10 @@ func styleToScene(s demy.Style) (Style, error) {
 
 // --- unmarshal helpers ---
 
-func childrenFromScene(children []Node, depth int) ([]demy.Node, error) {
+func childrenFromScene(children []Node, depth int, nodes *int) ([]demy.Node, error) {
 	var out []demy.Node
 	for _, child := range children {
-		c, err := sceneToNode(child, depth)
+		c, err := sceneToNode(child, depth, nodes)
 		if err != nil {
 			return nil, err
 		}
@@ -318,9 +318,13 @@ func childrenFromScene(children []Node, depth int) ([]demy.Node, error) {
 }
 
 // sceneToNode converts sn, which is nested depth levels deep (the root is 1).
-func sceneToNode(sn Node, depth int) (demy.Node, error) {
+// nodes counts the nodes converted so far.
+func sceneToNode(sn Node, depth int, nodes *int) (demy.Node, error) {
 	if depth > codec.MaxDepth {
 		return nil, fmt.Errorf("nodes nested deeper than %d", codec.MaxDepth)
+	}
+	if *nodes++; *nodes > codec.MaxNodes {
+		return nil, fmt.Errorf("more than %d nodes", codec.MaxNodes)
 	}
 	var leaf bool
 	switch sn.Type {
@@ -333,7 +337,7 @@ func sceneToNode(sn Node, depth int) (demy.Node, error) {
 	if sn.Type == "weighted" && len(sn.Children) > 1 {
 		return nil, fmt.Errorf("weighted: has %d children, want at most 1", len(sn.Children))
 	}
-	children, err := childrenFromScene(sn.Children, depth+1)
+	children, err := childrenFromScene(sn.Children, depth+1, nodes)
 	if err != nil {
 		return nil, err
 	}

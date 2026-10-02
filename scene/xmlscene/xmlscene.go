@@ -447,6 +447,7 @@ type unmarshalCtx struct {
 	dec   *xml.Decoder
 	dpmm  float64
 	depth int // element nesting depth
+	nodes int // node elements read
 }
 
 // styleAttrs lists the attributes shared by <text> and <style>.
@@ -780,6 +781,9 @@ func (u *unmarshalCtx) element(start xml.StartElement) (demy.Node, error) {
 	defer func() { u.depth-- }()
 	if u.depth > codec.MaxDepth {
 		return nil, fmt.Errorf("elements nested deeper than %d", codec.MaxDepth)
+	}
+	if u.nodes++; u.nodes > codec.MaxNodes {
+		return nil, fmt.Errorf("more than %d node elements", codec.MaxNodes)
 	}
 	name := start.Name.Local
 	a, err := readAttrs(start, u.dpmm)

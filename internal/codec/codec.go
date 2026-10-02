@@ -186,6 +186,10 @@ func ParseWeight(s string) (demy.FontStyle, error) {
 // exhaust the stack.
 const MaxDepth = 1000
 
+// MaxNodes bounds the number of nodes in decoded scenes, matching the limit
+// demy applies when rendering, so oversized input fails while decoding.
+const MaxNodes = 1 << 14
+
 // Grid track kinds.
 const (
 	TrackAuto  = "auto"

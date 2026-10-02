@@ -32,6 +32,30 @@ func TestRenderStepLimit(t *testing.T) {
 	}
 }
 
+// TestSharedNodeBlowup checks that a script returning a tree whose nodes are
+// shared, and so expand to 2²⁰ nodes, fails to render quickly.
+func TestSharedNodeBlowup(t *testing.T) {
+	const script = `
+def render(data):
+    x = Text("a")
+    for i in range(20):
+        x = VStack(x, x)
+    return x
+`
+	cfg := testCfg()
+	n, err := run(t, &starlarkplugin.Environment{}, cfg, script, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := demy.MustNew(cfg).Render(n, demy.Grayscale); err == nil || !strings.Contains(err.Error(), "nodes") {
+		t.Fatalf("err = %v, want node limit error", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("render took %v, want well under a second", d)
+	}
+}
+
 func TestLoadStepLimit(t *testing.T) {
 	env := starlarkplugin.Environment{MaxSteps: 10_000}
 	src := "x = [i for i in range(1 << 40)]\ndef render(data): return Text(\"\")\n"

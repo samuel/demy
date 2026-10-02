@@ -12,6 +12,9 @@ changes; they are called out under each release.
   natural size rather than filling the row; wrap it in `Weighted` to fill. Children in `Grid`
   Auto columns are sized the same way, so an image in an Auto column no longer grows to the
   column's share of the width.
+- Breaking: a node tree may have at most 16384 nodes, 128 clipped nodes (`Frame`, and `Box`
+  with `Clip`), and 16 barcodes, counting each use of a shared node. Larger trees fail to
+  render. XML and JSON scenes with more than 16384 nodes fail to decode.
 
 ## v0.1.0 — 2026-10-01
 

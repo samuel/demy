@@ -3,6 +3,7 @@ package xmlscene_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/samuel/demy"
 	"github.com/samuel/demy/scene/xmlscene"
@@ -16,6 +17,23 @@ func TestUnmarshalDepthLimit(t *testing.T) {
 	src = strings.Repeat("<vstack>", 1000) + strings.Repeat("</vstack>", 1000)
 	if _, err := xmlscene.Unmarshal([]byte(src), demy.Config{}); err != nil {
 		t.Fatalf("1000 levels: %v", err)
+	}
+}
+
+// TestUnmarshalNodeLimit checks that a scene with 10M elements fails once it
+// passes the node limit rather than decoding them all.
+func TestUnmarshalNodeLimit(t *testing.T) {
+	src := "<vstack>" + strings.Repeat("<spacer/>", 10_000_000) + "</vstack>"
+	start := time.Now()
+	if _, err := xmlscene.Unmarshal([]byte(src), demy.Config{}); err == nil || !strings.Contains(err.Error(), "node elements") {
+		t.Fatalf("err = %v, want node limit error", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("unmarshal took %v, want well under a second", d)
+	}
+	src = "<vstack>" + strings.Repeat("<spacer/>", 1<<14-1) + "</vstack>"
+	if _, err := xmlscene.Unmarshal([]byte(src), demy.Config{}); err != nil {
+		t.Fatalf("at the limit: %v", err)
 	}
 }
 

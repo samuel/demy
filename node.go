@@ -1538,23 +1538,51 @@ func (n *gridNode) computeRowHeights(availForRows float64, cellSizes []nodeSize)
 
 // --- Build bridge: exported Node tree → internal node tree ---
 
-// buildNode converts an exported Node into the internal node used by the
-// measure/layout/draw pipeline. parentDir is the layout direction of the
-// enclosing container, used to infer DividerNode orientation. depth is the
-// nesting depth of n, bounded by maxNodeDepth.
-func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error) {
+// buildNode converts an exported Node tree into the internal nodes used by
+// the measure/layout/draw pipeline.
+func buildNode(n Node, cfg *Config) (node, error) {
+	b := &builder{cfg: cfg}
+	return b.build(n, dirVertical, 0)
+}
+
+// builder converts a Node tree and counts what it builds. A Node used in
+// several places is built, and counted, once per use.
+type builder struct {
+	cfg      *Config
+	nodes    int // all nodes, bounded by maxNodes
+	clipped  int // Frames and Boxes with Clip, bounded by maxClippedNodes
+	barcodes int // bounded by maxBarcodes
+}
+
+// count adds one to *counter and reports an error past limit.
+func count(counter *int, limit int, what string) error {
+	*counter++
+	if *counter > limit {
+		return fmt.Errorf("demy: node tree has more than %d %s, counting each use of a shared node", limit, what)
+	}
+	return nil
+}
+
+// build converts n. parentDir is the layout direction of the enclosing
+// container, used to infer DividerNode orientation. depth is the nesting depth
+// of n, bounded by maxNodeDepth.
+func (b *builder) build(n Node, parentDir layoutDir, depth int) (node, error) {
 	if depth > maxNodeDepth {
 		return nil, fmt.Errorf("demy: node tree nested deeper than %d", maxNodeDepth)
+	}
+	if err := count(&b.nodes, maxNodes, "nodes"); err != nil {
+		return nil, err
 	}
 	if isNilNode(n) {
 		return &spacerNode{weight: 0}, nil
 	}
+	cfg := b.cfg
 	switch v := n.(type) {
 	case *VStackNode:
 		if err := checkDims("VStack", dim{"gap", v.Gap}, dim{"padding", v.Padding}); err != nil {
 			return nil, err
 		}
-		children, err := buildNodes(v.Children, cfg, dirVertical, depth+1)
+		children, err := b.buildChildren(v.Children, dirVertical, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -1568,7 +1596,7 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		if err := checkDims("HStack", dim{"gap", v.Gap}, dim{"padding", v.Padding}); err != nil {
 			return nil, err
 		}
-		children, err := buildNodes(v.Children, cfg, dirHorizontal, depth+1)
+		children, err := b.buildChildren(v.Children, dirHorizontal, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -1579,7 +1607,7 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 			children: children,
 		}, nil
 	case *ZStackNode:
-		children, err := buildNodes(v.Children, cfg, dirVertical, depth+1)
+		children, err := b.buildChildren(v.Children, dirVertical, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -1592,7 +1620,12 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		); err != nil {
 			return nil, err
 		}
-		children, err := buildNodes(v.Children, cfg, dirVertical, depth+1)
+		if v.Clip {
+			if err := count(&b.clipped, maxClippedNodes, "clipped Frames and Boxes"); err != nil {
+				return nil, err
+			}
+		}
+		children, err := b.buildChildren(v.Children, dirVertical, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -1615,7 +1648,10 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		if err := checkDims("Frame", dim{"width", v.Width}, dim{"height", v.Height}); err != nil {
 			return nil, err
 		}
-		children, err := buildNodes(v.Children, cfg, dirVertical, depth+1)
+		if err := count(&b.clipped, maxClippedNodes, "clipped Frames and Boxes"); err != nil {
+			return nil, err
+		}
+		children, err := b.buildChildren(v.Children, dirVertical, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -1640,7 +1676,7 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		var child node
 		if v.Child != nil {
 			var err error
-			child, err = buildNode(v.Child, cfg, parentDir, depth+1)
+			child, err = b.build(v.Child, parentDir, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -1704,6 +1740,9 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		}
 		return &imageNode{img: img, scale: v.Scale, dither: v.Dither}, nil
 	case *BarcodeNode:
+		if err := count(&b.barcodes, maxBarcodes, "barcodes"); err != nil {
+			return nil, err
+		}
 		bc, err := encodeBarcode(v)
 		if err != nil {
 			return nil, err
@@ -1729,12 +1768,15 @@ func buildNode(n Node, cfg *Config, parentDir layoutDir, depth int) (node, error
 		flat := make([]Node, 0, len(v.Children))
 		for _, child := range v.Children {
 			if row, ok := child.(*GridRowNode); ok && row != nil {
+				if err := count(&b.nodes, maxNodes, "nodes"); err != nil {
+					return nil, err
+				}
 				flat = append(flat, row.Children...)
 			} else {
 				flat = append(flat, child)
 			}
 		}
-		children, err := buildNodes(flat, cfg, dirVertical, depth+1)
+		children, err := b.buildChildren(flat, dirVertical, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -1832,6 +1874,18 @@ const maxDimension = 1 << 15
 // draw can't exhaust the stack.
 const maxNodeDepth = 1000
 
+// maxNodes bounds the number of nodes in a tree, counting each use of a
+// shared node, so a small tree that reuses nodes can't expand into an
+// unbounded amount of layout work.
+const maxNodes = 1 << 14
+
+// maxClippedNodes bounds Frames and Boxes with Clip, each of which rasterizes
+// and composites a sub-canvas up to the size of the whole canvas.
+const maxClippedNodes = 128
+
+// maxBarcodes bounds barcodes, which are encoded while building the tree.
+const maxBarcodes = 16
+
 type dim struct {
 	name string
 	v    float64
@@ -1866,14 +1920,14 @@ func isNilNode(n Node) bool {
 	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
-// buildNodes converts a slice of exported Nodes, skipping nil entries.
-func buildNodes(nodes []Node, cfg *Config, parentDir layoutDir, depth int) ([]node, error) {
+// buildChildren converts a slice of exported Nodes, skipping nil entries.
+func (b *builder) buildChildren(nodes []Node, parentDir layoutDir, depth int) ([]node, error) {
 	result := make([]node, 0, len(nodes))
 	for _, n := range nodes {
 		if isNilNode(n) {
 			continue
 		}
-		built, err := buildNode(n, cfg, parentDir, depth)
+		built, err := b.build(n, parentDir, depth)
 		if err != nil {
 			return nil, err
 		}

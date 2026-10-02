@@ -19,7 +19,7 @@ func TestStyleOverridesBackToDefaults(t *testing.T) {
 		Align:    TextAlignLeft,
 		MaxLines: MaxLinesUnlimited,
 		Overflow: TextOverflowWrap,
-	}), cfg, dirVertical, 0)
+	}), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestStyleOverridesBackToDefaults(t *testing.T) {
 		t.Errorf("style = %+v, want class values overridden", got)
 	}
 
-	n, err = buildNode(Text("x", Class("h")), cfg, dirVertical, 0)
+	n, err = buildNode(Text("x", Class("h")), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

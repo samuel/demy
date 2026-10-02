@@ -28,7 +28,6 @@ import (
 
 	"github.com/go-text/typesetting/font"
 	"github.com/go-text/typesetting/font/opentype"
-	"github.com/go-text/typesetting/shaping"
 )
 
 // Color constants for display palettes.
@@ -122,13 +121,10 @@ type FontFamily struct {
 	// bitmap holds one font per style; non-nil marks a bitmap family.
 	bitmap map[FontStyle]*bitmapFont
 
-	// mu serializes shaping and outline loading: go-text's shaper, line
-	// wrapper, and faces keep caches that aren't safe for concurrent use.
-	mu       sync.Mutex
-	shaper   shaping.HarfbuzzShaper
-	wrapper  shaping.LineWrapper
-	seg      shaping.Segmenter
-	outlines map[outlineKey][]opentype.Segment // glyph outlines with faux styling applied
+	shapers shaperPool
+
+	outlineMu sync.RWMutex
+	outlines  map[outlineKey][]opentype.Segment // glyph outlines with faux styling applied
 }
 
 // isBitmap reports whether this is a bitmap (pixel) font family.

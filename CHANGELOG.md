@@ -35,6 +35,8 @@ Other changes:
 - Rendering no longer depends on tdewolff/canvas, which removes 23 of the 28 modules a build
   used (X11, PDF, TeX, Markdown, and more). Text uses go-text/typesetting directly and shapes
   the same way. Rendering is about 30% faster with far fewer allocations.
+- Concurrent renders that share a font family shape text in parallel instead of one at a
+  time. A page of text renders about twice as fast across 10 goroutines.
 - `xmlscene.ParseTemplate` parses a template once into a `*Template`, whose `Execute` and
   `ExecuteScene` methods can run it repeatedly and concurrently without reparsing.
 

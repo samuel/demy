@@ -2,8 +2,10 @@ package demy
 
 import (
 	"math"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/go-text/typesetting/di"
 	"github.com/go-text/typesetting/font"
@@ -85,6 +87,56 @@ func (ff *FontFamily) face(want FontStyle) faceStyle {
 	return fs
 }
 
+// textShaper holds go-text's shaping state, which isn't safe for concurrent
+// use. Faces cache glyph lookups and the shaper caches fonts by face, so each
+// textShaper shapes with its own copies of the family's faces.
+type textShaper struct {
+	shaper  shaping.HarfbuzzShaper
+	wrapper shaping.LineWrapper
+	seg     shaping.Segmenter
+	faces   map[*font.Face]*font.Face // family face → this shaper's copy
+}
+
+// shaperPool keeps idle textShapers for reuse. Unlike a sync.Pool, it isn't
+// emptied by garbage collection, which would rebuild the faces' caches and the
+// shaper's fonts and plans on most renders. It keeps at most GOMAXPROCS idle
+// shapers.
+type shaperPool struct {
+	mu   sync.Mutex
+	idle []*textShaper
+}
+
+func (p *shaperPool) get() *textShaper {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if n := len(p.idle); n > 0 {
+		ts := p.idle[n-1]
+		p.idle = p.idle[:n-1]
+		return ts
+	}
+	return &textShaper{faces: map[*font.Face]*font.Face{}}
+}
+
+func (p *shaperPool) put(ts *textShaper) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.idle) < runtime.GOMAXPROCS(0) {
+		p.idle = append(p.idle, ts)
+	}
+}
+
+// face returns this shaper's copy of the family face f.
+func (ts *textShaper) face(f *font.Face) *font.Face {
+	c, ok := ts.faces[f]
+	if !ok {
+		c = font.NewFace(f.Font)
+		c.SetCoords(f.Coords())
+		c.SetPpem(f.Ppem())
+		ts.faces[f] = c
+	}
+	return c
+}
+
 // singleFace resolves every rune to one face.
 type singleFace struct{ face *font.Face }
 
@@ -108,9 +160,6 @@ const maxWrapWidth = fixed.Int26_6(math.MaxInt32 >> 1)
 // last line ends in "…". Lines are separated by "\n", "\r\n", or "\r", and
 // each starts a new line, even when empty.
 func (ff *FontFamily) layoutText(s string, st Style, size, width float64) textLayout {
-	ff.mu.Lock()
-	defer ff.mu.Unlock()
-
 	fs := ff.face(st.Weight)
 	fs.size = size
 	lay := textLayout{face: fs}
@@ -129,19 +178,22 @@ func (ff *FontFamily) layoutText(s string, st Style, size, width float64) textLa
 	if !isUnbounded(width) {
 		maxW = toFixed(min(width/unit, fromFixed(maxWrapWidth)))
 	}
+	ts := ff.shapers.get()
+	defer ff.shapers.put(ts)
+	face := ts.face(fs.face)
 	sizeFixed := fixed.I(int(fs.face.Upem()))
 	shape := func(runes []rune) []shaping.Output {
 		in := shaping.Input{
 			Text:      runes,
 			RunEnd:    len(runes),
 			Direction: di.DirectionLTR,
-			Face:      fs.face,
+			Face:      face,
 			Size:      sizeFixed,
 			Language:  language.DefaultLanguage(),
 		}
 		var outs []shaping.Output
-		for _, run := range ff.seg.Split(in, singleFace{fs.face}) {
-			outs = append(outs, ff.shaper.Shape(run))
+		for _, run := range ts.seg.Split(in, singleFace{face}) {
+			outs = append(outs, ts.shaper.Shape(run))
 		}
 		return outs
 	}
@@ -168,7 +220,7 @@ func (ff *FontFamily) layoutText(s string, st Style, size, width float64) textLa
 			c.TruncateAfterLines = remaining
 			c.TextContinues = i < len(paras)-1
 		}
-		wrapped, _ := ff.wrapper.WrapParagraphF(c, maxW, runes, shaping.NewSliceIterator(shape(runes)))
+		wrapped, _ := ts.wrapper.WrapParagraphF(c, maxW, runes, shaping.NewSliceIterator(shape(runes)))
 		for _, l := range wrapped {
 			lines = append(lines, slices.Clone(l))
 		}
@@ -221,13 +273,16 @@ type outlineKey struct {
 
 // outline returns the glyph's outline in font units (Y up) with faux bold and
 // italic applied. Outlines are cached per family; the count is bounded by the
-// fonts' glyphs. The caller holds ff.mu.
+// fonts' glyphs. Loading an outline only reads the face, so concurrent calls
+// can share it.
 func (ff *FontFamily) outline(fs faceStyle, id font.GID) []opentype.Segment {
 	key := outlineKey{fs.face, fs.style, id}
-	if segs, ok := ff.outlines[key]; ok {
+	ff.outlineMu.RLock()
+	segs, ok := ff.outlines[key]
+	ff.outlineMu.RUnlock()
+	if ok {
 		return segs
 	}
-	var segs []opentype.Segment
 	if o, ok := fs.face.GlyphData(id).(font.GlyphOutline); ok {
 		segs = slices.Clone(o.Segments)
 		if fs.fauxBold > 0 {
@@ -241,6 +296,11 @@ func (ff *FontFamily) outline(fs faceStyle, id font.GID) []opentype.Segment {
 				}
 			}
 		}
+	}
+	ff.outlineMu.Lock()
+	defer ff.outlineMu.Unlock()
+	if cached, ok := ff.outlines[key]; ok {
+		return cached
 	}
 	if ff.outlines == nil {
 		ff.outlines = map[outlineKey][]opentype.Segment{}
@@ -266,7 +326,6 @@ func (ff *FontFamily) drawText(p *painter, lay *textLayout, st Style, x, y, widt
 		// stems and the baseline sharp.
 		base := math.Floor((y+l.baseline)*scale + 0.5)
 		var pa path
-		ff.mu.Lock()
 		for _, g := range l.glyphs {
 			gx := (lx + g.x) * scale
 			gy := base + g.y*scale
@@ -292,7 +351,6 @@ func (ff *FontFamily) drawText(p *painter, lay *textLayout, st Style, x, y, widt
 				}
 			}
 		}
-		ff.mu.Unlock()
 		p.fill(&pa, st.Color)
 	}
 }

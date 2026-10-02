@@ -479,7 +479,7 @@ error. `ToStarlark` applies the same limits. Set `Environment.Now` to fix the ti
 
 Builtins reject unknown keyword arguments, wrong argument types, unknown enum names (such as
 `weight="semibold"`), numbers outside [0, 32768] (every numeric argument is a size, gap, or
-weight), and `Style(class=)` names missing from `Config.Styles`. Errors from `Load` and
+weight), and `Style(base=)` names missing from `Config.Styles`. Errors from `Load` and
 `Render` start with the script position that failed, such as `t.star:2:17: Frame: w +Inf out
 of range [0, 32768]`. A panic in a builtin registered with `AddBuiltin` or `AddModule` fails
 that call with an error instead of crashing; panics in goroutines the builtin starts are not
@@ -505,7 +505,7 @@ Globals:
 |----------|-------|
 | Layout | `VStack`, `HStack`, `ZStack`, `Box`, `Frame`, `Spacer`, `Weighted(weight, child)`, `Divider(size=, color=)`, `Grid`, `GridRow` |
 | Widgets | `Text(s, style_or_class...)`, `ImageKey`, `Barcode` |
-| Style | `Style(class=, font=, size=, weight=, color=, align=, line_height=, max_lines=, overflow=)` (`max_lines=-1` is unlimited); `Class(name)` |
+| Style | `Style(base=, font=, size=, weight=, color=, align=, line_height=, max_lines=, overflow=)` (`base=` copies a `Config.Styles` entry for the other fields to override; `max_lines=-1` is unlimited); `Class(name)` |
 | Options | `Gap`, `Padding`, `Background`, `Border`, `CornerRadius`, `Children`, `Clip`, `Columns`, `Rows`, `RowGap`, `ColGap` |
 | Grid tracks | `GridFixed`, `GridAuto`, `GridFr` |
 | Alignment | `AlignStart`, `AlignCenter`, `AlignEnd`; `ZAlignTopLeading` … `ZAlignBottomTrailing` |

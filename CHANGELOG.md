@@ -18,6 +18,8 @@ Breaking changes:
   `Must…` variants are `MustLoadBDFBytes` and `MustLoadBDFFile`.
 - `ZAlignment` constants have a `ZAlign` prefix (`ZAlignTopLeading`, `ZAlignCenter`, …), in Go
   and in Starlark. Scene formats keep their names (`"top-leading"`, `"center"`, …).
+- Starlark `Style(class=…)` is `Style(base=…)`. `class` is a reserved word in Starlark, so
+  `class=` was a syntax error.
 - `New` rejects a `Config.Palette` with fewer than 2 or more than 256 colors, or with nil,
   translucent, or role colors.
 - Bitmap text snaps to the nearest palette color instead of black or white, and keeps its color

@@ -49,9 +49,9 @@
 //	              Frame(w, h, ...), GridRow(nodes...), Weighted(weight, child)
 //	Nodes:        Text(s, style_or_class...), ImageKey(key, ...), Barcode(content, ...),
 //	              Spacer(weight?), Divider(size=, color=)
-//	Style:        Style(class=, font=, size=, weight=, color=, align=, line_height=,
+//	Style:        Style(base=, font=, size=, weight=, color=, align=, line_height=,
 //	              max_lines=, overflow=)
-//	              class= copies a named style from Config.Styles (it must exist);
+//	              base= copies a named style from Config.Styles (it must exist);
 //	              other fields override it. weight is "regular", "thin" … "black",
 //	              optionally suffixed with "-italic", or "italic"; align is "left",
 //	              "center", or "right"; overflow is "wrap", "clip", or "ellipsis";
@@ -789,25 +789,25 @@ func builtinBarcode(args sl.Tuple) (sl.Value, error) {
 	return &nodeValue{demy.Barcode(content, opts...)}, nil
 }
 
-// builtinStyle builds a Style from keyword arguments. class= copies a named
-// style from Config.Styles as the base; the other fields override it.
+// builtinStyle builds a Style from keyword arguments. base= copies a named
+// style from Config.Styles; the other fields override it.
 func builtinStyle(args sl.Tuple, kwargs []sl.Tuple, cfg demy.Config) (sl.Value, error) {
 	if len(args) > 0 {
 		return nil, errors.New("takes keyword arguments only")
 	}
 	var s demy.Style
-	// Pass 1: resolve class as base so per-field kwargs override it regardless of order.
+	// Pass 1: resolve base first so per-field kwargs override it regardless of order.
 	for _, kv := range kwargs {
-		if key, _ := sl.AsString(kv[0]); key == "class" {
-			name, err := toString("class", kv[1])
+		if key, _ := sl.AsString(kv[0]); key == "base" {
+			name, err := toString("base", kv[1])
 			if err != nil {
 				return nil, err
 			}
-			classStyle, ok := cfg.Styles[name]
+			base, ok := cfg.Styles[name]
 			if !ok {
-				return nil, fmt.Errorf("class %q not found in Config.Styles (use Class(%q) for styles merged at render time)", name, name)
+				return nil, fmt.Errorf("base style %q not found in Config.Styles (use Class(%q) for styles merged at render time)", name, name)
 			}
-			s = classStyle
+			s = base
 			break
 		}
 	}
@@ -820,7 +820,7 @@ func builtinStyle(args sl.Tuple, kwargs []sl.Tuple, cfg demy.Config) (sl.Value, 
 			str string
 		)
 		switch key {
-		case "class":
+		case "base":
 			// handled in pass 1
 		case "font":
 			s.Font, err = toString("font", val)

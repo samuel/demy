@@ -54,7 +54,7 @@ func TestBuiltinArgumentErrors(t *testing.T) {
 		"barcode int":          {`Barcode(1)`, "Barcode: content must be a string"},
 		"barcode bad option":   {`Barcode("x", 1)`, "Barcode: expected node or option"},
 		"style positional":     {`Text("x", Style("sans"))`, "Style: takes keyword arguments only"},
-		"style class int":      {`Text("x", Style(**{"class": 1}))`, "Style: class must be a string"},
+		"style base int":       {`Text("x", Style(base=1))`, "Style: base must be a string"},
 		"style max_lines str":  {`Text("x", Style(max_lines="1"))`, "Style: "},
 		"style weight int":     {`Text("x", Style(weight=700))`, "Style: weight must be a string"},
 		"style color empty":    {`Text("x", Style(color=""))`, "Style: color must not be empty"},
@@ -155,7 +155,7 @@ func TestStyleFields(t *testing.T) {
 	cfg := testCfg()
 	cfg.Styles = map[string]demy.Style{"base": {Font: "sans", Size: 10, MaxLines: 2}}
 	src := `def render(d): return Text("x", Style(size=14, line_height=1.5,
-    color=Red, weight="bold-italic", align="center", overflow="ellipsis", **{"class": "base"}))`
+    color=Red, weight="bold-italic", align="center", overflow="ellipsis", base="base"))`
 	n, err := run(t, &starlarkplugin.Environment{}, cfg, src, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -81,10 +81,10 @@ def render(d): return Text("x", Class("h1"))
 	}
 }
 
-func TestStyleUnknownClass(t *testing.T) {
-	_, err := run(t, &starlarkplugin.Environment{}, testCfg(), `def render(d): return Text("x", Style(**{"class": "nope"}))`, nil)
-	if err == nil || !strings.Contains(err.Error(), `class "nope" not found`) {
-		t.Errorf("err = %v, want a class not found error", err)
+func TestStyleUnknownBase(t *testing.T) {
+	_, err := run(t, &starlarkplugin.Environment{}, testCfg(), `def render(d): return Text("x", Style(base="nope"))`, nil)
+	if err == nil || !strings.Contains(err.Error(), `base style "nope" not found`) {
+		t.Errorf("err = %v, want a base style not found error", err)
 	}
 }
 

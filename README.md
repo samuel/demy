@@ -15,8 +15,9 @@ A declarative rendering library for e-ink and similar displays.
 - **Serialization**: JSON (`scene/jsonscene`) and XML with `text/template` support (`scene/xmlscene`)
 - **Scripting**: Starlark plugin host (`plugin/starlark`)
 
-Scenes, templates, scripts, and fonts must be trusted; see
-[Security and trusted input](#security-and-trusted-input).
+Scenes, templates, and BDF fonts from untrusted sources are rendered within fixed limits;
+untrusted Starlark scripts also need a memory limit from outside the process. See
+[Security and untrusted input](#security-and-untrusted-input).
 
 ## Quick start
 
@@ -302,8 +303,8 @@ weights must be finite and within `[0, 32768]`, trees may nest at most 1000 leve
 nodes (`Frame`, and `Box` with `Clip`), 16 barcodes, and 65536 bytes of text. A node used in several places counts
 once per use, so a small tree that shares nodes can't expand into an unbounded amount of work.
 XML and JSON scenes are also limited to 1000 levels of nesting and 16384 nodes, checked while
-decoding. These checks don't make untrusted input safe to render; see
-[Security and trusted input](#security-and-trusted-input).
+decoding. See [Security and untrusted input](#security-and-untrusted-input) for what else to
+limit.
 
 ### Per-image dithering
 
@@ -436,7 +437,8 @@ may share nodes between renders, so treat it as read-only.
 
 Module execution and each `Render` call are limited to `Environment.MaxSteps` Starlark
 execution steps (`DefaultMaxSteps`, 10 million, when zero) and stop when their context is
-cancelled. Script `print()` output goes to `Environment.Logger` (default `slog.Default()`).
+cancelled. Neither bounds memory; see [Security and untrusted input](#security-and-untrusted-input)
+before running untrusted scripts. Script `print()` output goes to `Environment.Logger` (default `slog.Default()`).
 Each message is truncated to 4 KiB, and after 64 KiB of output in one `Load` or `Render`,
 later output is dropped with a warning.
 
@@ -478,15 +480,32 @@ demy follows semantic versioning. Until v1.0.0, a minor release (v0.x.0) may mak
 changes; patch releases (v0.x.y) only fix bugs. [CHANGELOG.md](CHANGELOG.md) lists breaking
 changes for each release.
 
-## Security and trusted input
+## Security and untrusted input
 
-Scenes, templates, Starlark scripts, and BDF fonts must come from trusted sources. demy
-validates its input and returns errors instead of panicking on malformed trees, but it does not
-yet bound the time or memory a hostile input can use:
+demy validates everything it renders and returns errors instead of panicking. The table lists
+which inputs can come from untrusted sources and what bounds them.
 
-- `Environment.MaxSteps` bounds Starlark execution steps, not memory.
+| Input | Untrusted? | Bounded by |
+|-------|------------|------------|
+| Node trees (`Render`) | Yes | Node, clipped-node, barcode, text, nesting, and dimension limits (see [Rendering](#rendering)); the `Render` context |
+| JSON scenes (`jsonscene`) | Yes, with an input size limit | Nesting and node limits, checked after the whole document is parsed, so cap the input size first (e.g. `http.MaxBytesReader`) |
+| XML scenes (`xmlscene`) | Yes, with an input size limit | Nesting and node limits, checked while decoding |
+| XML templates (`xmlscene.Execute`) | Yes, with plain data | The context and `MaxTemplateOutput` (4 MiB). Templates can call exported methods on the data and its fields, so pass maps, slices, and plain structs |
+| BDF fonts | Yes | Glyph size, metric, and bitmap size limits; blitted glyph area per render |
+| Starlark scripts (`plugin/starlark`) | Only with memory isolation | `MaxSteps` and the context bound time, not memory |
+| `Config` (vector fonts, images, styles), template data, and builtins added with `AddBuiltin`/`AddModule` | No | These are the host's: vector fonts are parsed by tdewolff/canvas without extra checks, and builtins run with the host's privileges |
 
-Run untrusted input in a separate process with memory and time limits.
+Apply a deadline to every untrusted render with the context passed to `Render`, `Execute`, and
+`Plugin.Render`. A render's memory grows with the canvas size, since the canvas and each
+clipped `Frame` or `Box` are rasterized to an image of at most the canvas size.
+
+**Starlark memory isn't limited.** `Environment.MaxSteps` counts execution steps, and one step
+can allocate a lot: `"x" * (1 << 29)` is a single step that allocates 512 MiB. Go can't limit
+the memory of one goroutine, and `debug.SetMemoryLimit` only makes the garbage collector work
+harder. Run untrusted scripts where the operating system or a runtime enforces a memory limit:
+a separate process in a cgroup (`memory.max`) or container, a process with `RLIMIT_AS`, or a
+WASM build of the host in a runtime with a memory cap. Send the result back with
+`jsonscene.Marshal`, and kill the process when its deadline passes.
 
 ## Dependencies
 

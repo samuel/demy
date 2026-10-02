@@ -28,6 +28,8 @@ changes; they are called out under each release.
 - A panic in a Starlark builtin registered with `AddBuiltin` or `AddModule` fails the call
   instead of crashing. Script `print()` messages are truncated to 4 KiB, and output past 64 KiB
   per `Load` or `Render` is dropped. `Load` and `Render` errors start with the script position.
+- The README and package docs describe which inputs may be untrusted and what limits apply.
+  Untrusted Starlark scripts still need a memory limit from outside the process.
 - Breaking: Starlark builtins reject numbers outside [0, 32768], and `Render` data and
   `ToStarlark` reject cyclic data, nesting deeper than 100 levels, and more than 262144 values.
 

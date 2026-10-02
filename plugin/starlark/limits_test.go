@@ -5,6 +5,7 @@ import (
 	"context"
 	"image/color"
 	"log/slog"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -238,5 +239,30 @@ func TestNumberRange(t *testing.T) {
 	}
 	if _, err := run(t, &starlarkplugin.Environment{}, testCfg(), "def render(data): return Frame(32768, 0)\n", nil); err != nil {
 		t.Errorf("at the limit: %v", err)
+	}
+}
+
+// TestStepLimitDoesNotBoundMemory documents that MaxSteps limits execution
+// steps, not memory: one step allocates 512 MiB and the render succeeds.
+// Untrusted scripts need memory limits from outside the process.
+func TestStepLimitDoesNotBoundMemory(t *testing.T) {
+	env := starlarkplugin.Environment{MaxSteps: 1000}
+	src := "def render(data):\n    s = \"x\" * (1 << 29)\n    return Text(str(len(s)))\n"
+	p, err := env.LoadBytes(t.Context(), "mem.star", []byte(src), demy.TRMNLOriginal, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	n, err := p.Render(t.Context(), nil)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatalf("render failed: %v; if memory is now limited, update the docs", err)
+	}
+	if got := n.(*demy.TextNode).Text; got != "536870912" { //nolint:forcetypeassert // the script returns Text
+		t.Errorf("text = %q, want 536870912", got)
+	}
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc < 1<<29 {
+		t.Errorf("allocated %d bytes, want at least 512 MiB", alloc)
 	}
 }

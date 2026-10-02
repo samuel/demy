@@ -7,7 +7,9 @@
 //
 // Decoding is strict: unknown or duplicate fields, field names that differ in
 // case, unknown enum names, children on leaf nodes, nesting deeper than 1000
-// nodes, invalid UTF-8, and trailing data are errors.
+// nodes, more than 16384 nodes, invalid UTF-8, and trailing data are errors.
+// The node limits are checked after the whole document is parsed, so limit the
+// size of untrusted input before unmarshaling it.
 //
 // Two formats are supported:
 //   - Bare node: {"type":"vstack",...} — Marshal/Unmarshal

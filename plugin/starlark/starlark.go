@@ -83,6 +83,16 @@
 // H1) when the name is an identifier that doesn't shadow a builtin; use
 // Class(name) for the rest. Data passed to Render is converted with sorted map
 // keys, so iteration order is stable.
+//
+// # Untrusted scripts
+//
+// MaxSteps and the context bound a script's execution time, but nothing bounds
+// its memory: one step can allocate hundreds of megabytes ("x" * (1 << 29)),
+// and Go can't limit one goroutine's memory. Run untrusted scripts in a
+// process or runtime with an enforced memory limit, such as a separate process
+// in a cgroup or container or with RLIMIT_AS, or a WASM build of the host in a
+// runtime with a memory cap, and send the node tree back with jsonscene.
+// Builtins added with AddBuiltin and AddModule run with the host's privileges.
 package starlarkplugin
 
 import (

@@ -1,5 +1,19 @@
 // Package demy is a declarative rendering library for e-ink and other
 // low-refresh displays, with a SwiftUI-inspired layout model.
+//
+// # Untrusted input
+//
+// Canvas.Render can render node trees and BDF fonts from untrusted sources.
+// It returns errors instead of panicking and enforces fixed limits: at most
+// 16384 nodes (counting each use of a shared node), 128 clipped nodes, 16
+// barcodes, 8192 bytes per Text and 65536 bytes of text per tree, 1000 levels
+// of nesting, and dimensions in [0, 32768]. BDF fonts are limited in glyph
+// size, metrics, and bitmap size, and the visible area of bitmap glyphs is
+// limited to 16 times the canvas. Render stops when its context is done, so
+// give untrusted renders a deadline. Memory grows with the canvas size.
+//
+// Config is trusted: vector fonts are parsed without further checks, and images
+// are the host's.
 package demy
 
 import (

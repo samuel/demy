@@ -21,8 +21,16 @@
 //
 // Decoding is strict: unknown elements and attributes, unknown enum names,
 // malformed numbers (including NaN, Inf, and hex floats), children or text in
-// elements that don't take them, nesting deeper than 1000 elements, and content
-// after the root element are errors.
+// elements that don't take them, nesting deeper than 1000 elements, more than
+// 16384 node elements, and content after the root element are errors.
+//
+// # Untrusted input
+//
+// Scenes and templates may come from untrusted sources. Unmarshal stops at the
+// nesting and node limits while decoding; limit the input size as well.
+// Execute stops when its context is done or its output passes
+// MaxTemplateOutput. Templates can call exported methods on their data, so
+// pass untrusted templates maps, slices, and plain structs.
 //
 // # Physical units
 //

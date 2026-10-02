@@ -18,6 +18,10 @@ changes; they are called out under each release.
 - Breaking: a `Text` may be at most 8192 bytes of UTF-8, and all text in a tree at most 65536
   bytes. Longer text fails to render.
 - Text is shaped once per render instead of in both measure and draw.
+- Breaking: BDF fonts are rejected if glyph advances, offsets, or font metrics are outside
+  ±4096 pixels, or if their glyph bitmaps take more than 16 MiB. Rendering fails if bitmap
+  glyphs cover more than 16 times the canvas area.
+- Bitmap glyphs are blitted only where visible, writing pixels directly.
 
 ## v0.1.0 — 2026-10-01
 

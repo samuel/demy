@@ -222,6 +222,11 @@ demy.Text("Crisp pixels", demy.Style{Font: "pixel"})
 - Missing glyphs fall back to the font's `DEFAULT_CHAR`.
 - Bitmap text is composited after everything else, so it always draws on top. Only `Frame`
   and `Box` with `Clip` clip it.
+- A font is rejected if a glyph's size, offsets, or advance, or the font's ascent, descent, or
+  bounding box, is outside ±4096 pixels (advances and sizes must not be negative), or if its
+  glyph bitmaps, padded to their bounding boxes, take more than 16 MiB.
+- Rendering fails if the visible bitmap glyphs together cover more than 16 times the canvas
+  area, as they can with a font whose large glyphs barely advance.
 
 ## Colors
 
@@ -461,8 +466,6 @@ Scenes, templates, Starlark scripts, and BDF fonts must come from trusted source
 validates its input and returns errors instead of panicking on malformed trees, but it does not
 yet bound the time or memory a hostile input can use:
 
-- A small BDF font can declare glyphs whose bitmaps take far more memory than its size
-  suggests.
 - `Canvas.Render` and `xmlscene.Execute` can't be cancelled.
 - `Environment.MaxSteps` bounds Starlark execution steps, not memory. A panic in a Go builtin
   registered with `AddBuiltin` or `AddModule` crashes the process, and script `print()` output

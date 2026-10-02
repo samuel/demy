@@ -21,32 +21,64 @@ type textBlit struct {
 	clip         image.Rectangle // physical pixels; empty means unclipped
 }
 
+// visible returns the part of the scaled glyph inside bounds and the clip.
+func (b textBlit) visible(bounds image.Rectangle) image.Rectangle {
+	if !b.clip.Empty() {
+		bounds = bounds.Intersect(b.clip)
+	}
+	g := b.glyph
+	return image.Rect(b.destX, b.destY, b.destX+g.width*b.scale, b.destY+g.height*b.scale).Intersect(bounds)
+}
+
+// maxBlitCoverage bounds the total visible area of bitmap glyphs as a multiple
+// of the canvas area. Blitting time is proportional to it, and a font whose
+// glyphs are large but advance little could otherwise stack thousands of
+// canvas-sized glyphs.
+const maxBlitCoverage = 16
+
+// checkBlits reports an error if the glyphs' visible area within bounds
+// exceeds maxBlitCoverage times the area of bounds.
+func checkBlits(blits []textBlit, bounds image.Rectangle) error {
+	limit := maxBlitCoverage * bounds.Dx() * bounds.Dy()
+	var area int
+	for _, b := range blits {
+		r := b.visible(bounds)
+		if area += r.Dx() * r.Dy(); area > limit {
+			return fmt.Errorf("demy: bitmap glyphs cover more than %d times the canvas area", maxBlitCoverage)
+		}
+	}
+	return nil
+}
+
 // blitGlyph writes each set mask pixel of the glyph as a solid scale×scale
-// block, leaving unset pixels untouched.
+// block, leaving unset pixels untouched. Only the part of the glyph inside the
+// clip is visited.
 func blitGlyph(dst draw.Image, b textBlit) {
 	g := b.glyph
 	if g.width == 0 || g.height == 0 || len(g.bits) == 0 || b.scale < 1 {
 		return
 	}
-	clip := dst.Bounds()
-	if !b.clip.Empty() {
-		clip = clip.Intersect(b.clip)
+	r := b.visible(dst.Bounds())
+	if r.Empty() {
+		return
 	}
-	for row := range g.height {
-		for col := range g.width {
-			if !g.pixelSet(col, row) {
-				continue
-			}
-			px0 := b.destX + col*b.scale
-			py0 := b.destY + row*b.scale
-			for dy := range b.scale {
-				y := py0 + dy
-				for dx := range b.scale {
-					x := px0 + dx
-					if image.Pt(x, y).In(clip) {
-						dst.Set(x, y, b.color)
-					}
-				}
+	var plot func(x, y int)
+	switch d := dst.(type) {
+	case *image.Gray:
+		plot = func(x, y int) { d.Pix[d.PixOffset(x, y)] = b.color.Y }
+	case *image.RGBA:
+		plot = func(x, y int) {
+			i := d.PixOffset(x, y)
+			d.Pix[i], d.Pix[i+1], d.Pix[i+2], d.Pix[i+3] = b.color.Y, b.color.Y, b.color.Y, 0xff
+		}
+	default:
+		plot = func(x, y int) { dst.Set(x, y, b.color) }
+	}
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		row := (y - b.destY) / b.scale
+		for x := r.Min.X; x < r.Max.X; x++ {
+			if g.pixelSet((x-b.destX)/b.scale, row) {
+				plot(x, y)
 			}
 		}
 	}
@@ -226,6 +258,9 @@ func (c *Canvas) Render(root Node, mode ColorMode, algo ...Dither) (image.Image,
 	pal := palette(mode)
 	cvs, blits, err := c.draw(root, pal)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkBlits(blits, image.Rect(0, 0, c.cfg.PixelWidth, c.cfg.PixelHeight)); err != nil {
 		return nil, err
 	}
 	rgba := c.rasterize(cvs)

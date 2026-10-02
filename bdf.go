@@ -61,9 +61,28 @@ func (f *bitmapFont) glyph(r rune) (bitmapGlyph, bool) {
 	return bitmapGlyph{}, false
 }
 
-// maxBDFGlyphSize bounds glyph bounding boxes so malformed fonts can't
-// request huge allocations.
+// maxBDFGlyphSize bounds glyph bounding boxes, offsets, advances, and font
+// metrics so malformed fonts can't request huge allocations or overflow
+// placement math.
 const maxBDFGlyphSize = 4096
+
+// maxBDFBitmapBytes bounds the total size of a font's glyph masks. Masks are
+// padded to their bounding box, so without it a small font that declares
+// large, empty glyphs would take far more memory than its size.
+const maxBDFBitmapBytes = 1 << 24
+
+// bdfMetric reports an error unless v is within ±maxBDFGlyphSize, or within
+// [0, maxBDFGlyphSize] when nonNegative is set.
+func bdfMetric(name string, v int, nonNegative bool) error {
+	lo := -maxBDFGlyphSize
+	if nonNegative {
+		lo = 0
+	}
+	if v < lo || v > maxBDFGlyphSize {
+		return fmt.Errorf("bdf: %s %d out of range [%d, %d]", name, v, lo, maxBDFGlyphSize)
+	}
+	return nil
+}
 
 // parseBDF parses the subset of the Adobe BDF format that demy needs: the font
 // bounding box, ascent/descent and default-char properties, and each glyph's
@@ -89,6 +108,8 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 		gyoff     int
 		rows      []byte
 		bytesWide int
+
+		bitmapBytes int // total size of stored glyph masks
 	)
 
 	resetGlyph := func() {
@@ -111,6 +132,10 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 		if inBitmap {
 			if strings.HasPrefix(line, "ENDCHAR") {
 				if enc >= 0 {
+					bitmapBytes += gh * bytesWide
+					if bitmapBytes > maxBDFBitmapBytes {
+						return nil, fmt.Errorf("bdf: glyph bitmaps take more than %d bytes", maxBDFBitmapBytes)
+					}
 					// Pad missing rows so every mask row is addressable.
 					rows = append(rows, make([]byte, gh*bytesWide-len(rows))...)
 					if !hasDWidth {
@@ -146,16 +171,28 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 			if len(fields) >= 5 {
 				bbHeight = atoiOr(fields[2], 0)
 				bbYOffset = atoiOr(fields[4], 0)
+				if err := errors.Join(
+					bdfMetric("font bounding box height", bbHeight, true),
+					bdfMetric("font bounding box y offset", bbYOffset, false),
+				); err != nil {
+					return nil, err
+				}
 				haveBoundingBox = true
 			}
 		case "FONT_ASCENT":
 			if len(fields) >= 2 {
 				f.ascent = atoiOr(fields[1], 0)
+				if err := bdfMetric("FONT_ASCENT", f.ascent, false); err != nil {
+					return nil, err
+				}
 				haveAscent = true
 			}
 		case "FONT_DESCENT":
 			if len(fields) >= 2 {
 				f.descent = atoiOr(fields[1], 0)
+				if err := bdfMetric("FONT_DESCENT", f.descent, false); err != nil {
+					return nil, err
+				}
 				haveDescent = true
 			}
 		case "DEFAULT_CHAR":
@@ -172,6 +209,9 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 		case "DWIDTH":
 			if inChar && len(fields) >= 2 {
 				dwidth = atoiOr(fields[1], 0)
+				if err := bdfMetric("DWIDTH", dwidth, true); err != nil {
+					return nil, err
+				}
 				hasDWidth = true
 			}
 		case "BBX":
@@ -182,6 +222,9 @@ func parseBDF(data []byte) (*bitmapFont, error) {
 				gyoff = atoiOr(fields[4], 0)
 				if gw < 0 || gh < 0 || gw > maxBDFGlyphSize || gh > maxBDFGlyphSize {
 					return nil, fmt.Errorf("bdf: glyph bounding box %dx%d out of range [0, %d]", gw, gh, maxBDFGlyphSize)
+				}
+				if err := errors.Join(bdfMetric("BBX x offset", gxoff, false), bdfMetric("BBX y offset", gyoff, false)); err != nil {
+					return nil, err
 				}
 				bytesWide = (gw + 7) / 8
 			}

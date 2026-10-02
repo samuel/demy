@@ -525,6 +525,18 @@ Serves an interactive tutorial at http://127.0.0.1:8081. Lessons are XML scenes 
 rendered live in the browser. Use `-addr` to change the listen
 address.
 
+## Limitations
+
+- **No font fallback.** Each `Text` uses one font family, and glyphs the font lacks (emoji,
+  CJK, symbols) render as its `.notdef` glyph, usually an empty box. Bitmap fonts fall back to
+  the font's `DEFAULT_CHAR`, then to a blank advance. Load a font that covers the text you render.
+- **Paragraphs are left to right.** Right-to-left text (Arabic, Hebrew) is shaped right to
+  left within a run, but the base direction of every paragraph is left to right. A
+  right-to-left paragraph with more than one run (numbers, Latin text, punctuation) puts its
+  runs in the wrong visual order, and `TextAlignInherit` aligns it left.
+- **Some inputs must be trusted.** Vector fonts are parsed without extra checks, and Starlark
+  scripts' memory isn't limited; see [Security and untrusted input](#security-and-untrusted-input).
+
 ## Stability
 
 demy follows semantic versioning. Until v1.0.0, a minor release (v0.x.0) may make breaking
@@ -544,7 +556,7 @@ which inputs can come from untrusted sources and what bounds them.
 | XML templates (`xmlscene.Execute`, `Template.Execute`) | Yes, with plain data | The context and `MaxTemplateOutput` (4 MiB). Templates can call exported methods on the data and its fields, so pass maps, slices, and plain structs |
 | BDF fonts | Yes | Glyph size, metric, and bitmap size limits; blitted glyph area per render |
 | Starlark scripts (`plugin/starlark`) | Only with memory isolation | `MaxSteps` and the context bound time, not memory |
-| `Config` (vector fonts, images, styles), template data, and builtins added with `AddBuiltin`/`AddModule` | No | These are the host's: vector fonts are parsed by go-text/typesetting without extra checks, and builtins run with the host's privileges |
+| `Config` (vector fonts, images, styles), template data, and builtins added with `AddBuiltin`/`AddModule` | No | These are the host's: vector fonts are parsed by go-text/typesetting without extra checks (and render only the glyphs they contain; see [Limitations](#limitations)), and builtins run with the host's privileges |
 
 Apply a deadline to every untrusted render with the context passed to `Render`, `Execute`, and
 `Plugin.Render`. A render's memory grows with the canvas size, since the canvas and each
@@ -556,7 +568,8 @@ the memory of one goroutine, and `debug.SetMemoryLimit` only makes the garbage c
 harder. Run untrusted scripts where the operating system or a runtime enforces a memory limit:
 a separate process in a cgroup (`memory.max`) or container, a process with `RLIMIT_AS`, or a
 WASM build of the host in a runtime with a memory cap. Send the result back with
-`jsonscene.Marshal`, and kill the process when its deadline passes.
+`jsonscene.Marshal`, and kill the process when its deadline passes. [Limitations](#limitations)
+lists the other known gaps.
 
 ## Dependencies
 

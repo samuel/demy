@@ -129,14 +129,14 @@ func TestStyleGlobalsDontShadowBuiltins(t *testing.T) {
 		"section-label": {Size: 9},
 		"h1":            {Size: 24},
 	}
-	src := `def render(d): return ZStack(Center, Text("x", H1), Text("y", Class("section-label")))`
+	src := `def render(d): return ZStack(ZAlignCenter, Text("x", H1), Text("y", Class("section-label")))`
 	n, err := run(t, &starlarkplugin.Environment{}, cfg, src, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	zs := n.(*demy.ZStackNode) //nolint:forcetypeassert // test
-	if zs.Align != demy.Center {
-		t.Errorf("align = %v, want Center", zs.Align)
+	if zs.Align != demy.ZAlignCenter {
+		t.Errorf("align = %v, want ZAlignCenter", zs.Align)
 	}
 	if got := zs.Children[0].(*demy.TextNode).Style.Size; got != 24 { //nolint:forcetypeassert // test
 		t.Errorf("H1 size = %v, want 24", got)

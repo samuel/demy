@@ -27,7 +27,7 @@
 //	})
 //	p, err := env.Load(ctx, "display.star", cfg, time.Local)
 //	node, err := p.Render(r.Context(), data)
-//	img, err := canvas.Render(r.Context(), node, demy.Unset)
+//	img, err := canvas.Render(r.Context(), node, demy.ColorModeDefault)
 //
 // Module execution and each Render call are limited to Environment.MaxSteps
 // Starlark execution steps (DefaultMaxSteps when zero) and are cancelled when
@@ -63,8 +63,9 @@
 //	              Columns(tracks or list), Rows(tracks or list), RowGap(px), ColGap(px)
 //	Grid tracks:  GridFixed(px), GridAuto(), GridFr(weight)
 //	Alignment:    AlignStart, AlignCenter, AlignEnd
-//	ZAlignment:   TopLeading, Top, TopTrailing, Leading, Center, Trailing,
-//	              BottomLeading, Bottom, BottomTrailing
+//	ZAlignment:   ZAlignTopLeading, ZAlignTop, ZAlignTopTrailing, ZAlignLeading,
+//	              ZAlignCenter, ZAlignTrailing, ZAlignBottomLeading, ZAlignBottom,
+//	              ZAlignBottomTrailing
 //	ImageScale:   ImageFit, ImageFill, ImageStretch
 //	Dither:       FloydSteinberg, Atkinson (options to ImageKey)
 //	BarcodeType:  BarcodeTypeQR
@@ -523,15 +524,15 @@ func newEnv(cfg demy.Config, loc *time.Location, now func() time.Time) sl.String
 		"AlignCenter": &optValue{demy.AlignCenter},
 		"AlignEnd":    &optValue{demy.AlignEnd},
 		// ZStack positioning
-		"TopLeading":     &optValue{demy.TopLeading},
-		"Top":            &optValue{demy.Top},
-		"TopTrailing":    &optValue{demy.TopTrailing},
-		"Leading":        &optValue{demy.Leading},
-		"Center":         &optValue{demy.Center},
-		"Trailing":       &optValue{demy.Trailing},
-		"BottomLeading":  &optValue{demy.BottomLeading},
-		"Bottom":         &optValue{demy.Bottom},
-		"BottomTrailing": &optValue{demy.BottomTrailing},
+		"ZAlignTopLeading":     &optValue{demy.ZAlignTopLeading},
+		"ZAlignTop":            &optValue{demy.ZAlignTop},
+		"ZAlignTopTrailing":    &optValue{demy.ZAlignTopTrailing},
+		"ZAlignLeading":        &optValue{demy.ZAlignLeading},
+		"ZAlignCenter":         &optValue{demy.ZAlignCenter},
+		"ZAlignTrailing":       &optValue{demy.ZAlignTrailing},
+		"ZAlignBottomLeading":  &optValue{demy.ZAlignBottomLeading},
+		"ZAlignBottom":         &optValue{demy.ZAlignBottom},
+		"ZAlignBottomTrailing": &optValue{demy.ZAlignBottomTrailing},
 		// Image scale
 		"ImageFit":     &optValue{demy.ImageFit},
 		"ImageFill":    &optValue{demy.ImageFill},

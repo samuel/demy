@@ -26,7 +26,7 @@ func Example() {
 		demy.Text("Temperature", demy.Style{Weight: demy.FontBold}),
 		demy.HStack(demy.Text("23.4 °C"), demy.Spacer(), demy.Text("Portland")),
 	)
-	img, err := demy.MustNew(cfg).Render(context.Background(), root, demy.Unset) // cfg.ColorMode: Paletted
+	img, err := demy.MustNew(cfg).Render(context.Background(), root, demy.ColorModeDefault) // cfg.ColorMode: Paletted
 	if err != nil {
 		log.Fatal(err)
 	}

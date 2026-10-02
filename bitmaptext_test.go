@@ -16,7 +16,7 @@ func renderBitmap(t *testing.T, root Node, w, h int, scale float64, pal []color.
 		PhysicalWidthMM:  float64(w),
 		PhysicalHeightMM: float64(h),
 		Scale:            scale,
-		Fonts:            map[string]*FontFamily{"px": MustLoadBitmapFontBDF("px", []byte(testBDF))},
+		Fonts:            map[string]*FontFamily{"px": MustLoadBDFBytes("px", []byte(testBDF))},
 		Roles:            Roles{Background: White, Foreground: Black},
 		Palette:          pal,
 	}
@@ -156,7 +156,7 @@ func TestBitmapTextClipped(t *testing.T) {
 func TestBitmapTextPaletteColor(t *testing.T) {
 	cfg := Config{
 		PixelWidth: 64, PixelHeight: 32, PhysicalWidthMM: 64, PhysicalHeightMM: 32,
-		Fonts:   map[string]*FontFamily{"px": MustLoadBitmapFontBDF("px", []byte(testBDF))},
+		Fonts:   map[string]*FontFamily{"px": MustLoadBDFBytes("px", []byte(testBDF))},
 		Palette: PaletteBWR,
 	}
 	c := MustNew(cfg)

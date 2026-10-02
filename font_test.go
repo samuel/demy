@@ -11,7 +11,7 @@ import (
 
 func TestTextFontErrors(t *testing.T) {
 	sans := MustLoadFontBytes("sans", goregular.TTF)
-	px := MustLoadBitmapFontBDF("px", []byte(testBDF))
+	px := MustLoadBDFBytes("px", []byte(testBDF))
 	fonts := map[string]*FontFamily{"sans": sans, "px": px, "zero": {}}
 	tests := map[string]struct {
 		def  Style

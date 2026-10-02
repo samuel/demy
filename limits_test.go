@@ -219,19 +219,19 @@ func TestRenderValidatesModes(t *testing.T) {
 
 func TestRenderUnsetMode(t *testing.T) {
 	cfg := textConfig(10, 10)
-	img, err := demy.MustNew(cfg).Render(t.Context(), demy.Frame(4, 4), demy.Unset)
+	img, err := demy.MustNew(cfg).Render(t.Context(), demy.Frame(4, 4), demy.ColorModeDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := img.(*image.RGBA); !ok {
-		t.Errorf("Unset with Unset Config.ColorMode: got %T, want *image.RGBA", img)
+		t.Errorf("ColorModeDefault with default Config.ColorMode: got %T, want *image.RGBA", img)
 	}
 	cfg.ColorMode = demy.Paletted
-	img, err = demy.MustNew(cfg).Render(t.Context(), demy.Frame(4, 4), demy.Unset)
+	img, err = demy.MustNew(cfg).Render(t.Context(), demy.Frame(4, 4), demy.ColorModeDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := img.(*image.Paletted); !ok {
-		t.Errorf("Unset with Paletted Config.ColorMode: got %T, want *image.Paletted", img)
+		t.Errorf("ColorModeDefault with Paletted Config.ColorMode: got %T, want *image.Paletted", img)
 	}
 }

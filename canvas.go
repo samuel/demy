@@ -127,8 +127,8 @@ const (
 // New creates a Canvas for cfg. It returns an error unless the pixel dimensions
 // are in [1, 16384], the physical dimensions are finite and positive, the
 // effective scale is in [0.5, 64] (Scale 0 selects it automatically),
-// ColorMode is Unset or a supported mode, and Config.Palette, if set or
-// required by ColorMode Paletted, has 2 to 256 opaque, concrete colors.
+// ColorMode is ColorModeDefault or a supported mode, and Config.Palette, if set
+// or required by ColorMode Paletted, has 2 to 256 opaque, concrete colors.
 func New(cfg Config) (*Canvas, error) {
 	if cfg.PixelWidth <= 0 || cfg.PixelHeight <= 0 || cfg.PixelWidth > maxPixelDimension || cfg.PixelHeight > maxPixelDimension {
 		return nil, fmt.Errorf("demy: Config pixel dimensions %dx%d out of range [1, %d]", cfg.PixelWidth, cfg.PixelHeight, maxPixelDimension)
@@ -144,7 +144,7 @@ func New(cfg Config) (*Canvas, error) {
 		return nil, fmt.Errorf("demy: automatic scale %v from %v pixels per mm exceeds %v; check the physical dimensions or set Config.Scale",
 			scale, cfg.PhysicalDPMM(), maxScale)
 	}
-	if cfg.ColorMode != Unset {
+	if cfg.ColorMode != ColorModeDefault {
 		if err := cfg.ColorMode.check(); err != nil {
 			return nil, err
 		}
@@ -236,9 +236,9 @@ func (c *Canvas) draw(rs *renderState, root Node, q *quantizer) (*image.RGBA, []
 	return img, dctx.textBlits, nil
 }
 
-// Render lays out and rasterizes root. Unset mode uses Config.ColorMode, and
-// RGBA is used if that is also Unset. Paletted mode quantizes to
-// Config.Palette and returns an *image.Paletted whose palette is
+// Render lays out and rasterizes root. ColorModeDefault uses Config.ColorMode,
+// and RGBA if Config.ColorMode is also ColorModeDefault. Paletted mode
+// quantizes to Config.Palette and returns an *image.Paletted whose palette is
 // Config.Palette in the same order. algo selects the dithering applied when
 // quantizing (default NoDithering); an ImageNode with its own Dither is
 // dithered with that algorithm instead, so images can be dithered while text
@@ -247,10 +247,10 @@ func (c *Canvas) draw(rs *renderState, root Node, q *quantizer) (*image.RGBA, []
 // Rendering stops early when ctx is done, returning an error that wraps the
 // context's error.
 func (c *Canvas) Render(ctx context.Context, root Node, mode ColorMode, algo ...Dither) (image.Image, error) {
-	if mode == Unset {
+	if mode == ColorModeDefault {
 		mode = c.cfg.ColorMode
 	}
-	if mode == Unset {
+	if mode == ColorModeDefault {
 		mode = RGBA
 	}
 	if err := mode.check(); err != nil {

@@ -75,7 +75,7 @@ func TestRenderLayoutVariants(t *testing.T) {
 
 	script := []byte(`
 def render(data):
-    return ZStack(TopLeading,
+    return ZStack(ZAlignTopLeading,
         Frame(200, 100,
             Box(Background(Muted), Padding(4), CornerRadius(8),
                 Text("hello", Style(font="sans", size=10, weight="bold")),

@@ -168,7 +168,7 @@ func TestParseBDFBitmapAmplification(t *testing.T) {
 // glyph.
 func TestBlitCoverageLimit(t *testing.T) {
 	// The glyph's top is at the top of the line, so it covers the canvas.
-	ff := MustLoadBitmapFontBDF("b", []byte(bdfHeader+
+	ff := MustLoadBDFBytes("b", []byte(bdfHeader+
 		"STARTCHAR A\nENCODING 65\nDWIDTH 0 0\nBBX 64 64 0 -58\nBITMAP\nENDCHAR\n"))
 	cfg := Config{
 		PixelWidth: 64, PixelHeight: 64, PhysicalWidthMM: 64, PhysicalHeightMM: 64,
@@ -239,7 +239,7 @@ func TestParseBundledFonts(t *testing.T) {
 		"cmd/demy-tutorial/fonts/spleen-8x16.bdf",
 		"cmd/demy-tutorial/fonts/tom-thumb.bdf",
 	} {
-		if _, err := LoadBitmapFontBDFFile("f", path); err != nil {
+		if _, err := LoadBDFFile("f", path); err != nil {
 			t.Errorf("%s: %v", path, err)
 		}
 	}
@@ -249,7 +249,7 @@ func FuzzParseBDF(f *testing.F) {
 	f.Add([]byte(testBDF))
 	f.Add([]byte(bdfHeader + "STARTCHAR A\nENCODING 65\nBBX 8 8 -2 -2\nBITMAP\nFF\nENDCHAR\n"))
 	f.Fuzz(func(t *testing.T, data []byte) {
-		ff, err := LoadBitmapFontBDF("bdf", data)
+		ff, err := LoadBDFBytes("bdf", data)
 		if err != nil {
 			return
 		}

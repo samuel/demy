@@ -30,7 +30,7 @@ func TestSanitizeText(t *testing.T) {
 func TestRenderInvalidText(t *testing.T) {
 	fonts := map[string]*FontFamily{
 		"sans": MustLoadFontBytes("sans", goregular.TTF),
-		"px":   MustLoadBitmapFontBDF("px", []byte(testBDF)),
+		"px":   MustLoadBDFBytes("px", []byte(testBDF)),
 	}
 	render := func(t *testing.T, font, s string) []byte {
 		t.Helper()

@@ -59,7 +59,7 @@ root := demy.VStack(demy.Gap(4), demy.Padding(8),
     ),
 )
 
-img, err := c.Render(context.Background(), root, demy.Unset) // the preset's 4-gray palette
+img, err := c.Render(context.Background(), root, demy.ColorModeDefault) // the preset's 4-gray palette
 if err != nil {
     log.Fatal(err)
 }
@@ -92,7 +92,7 @@ directly. In a `Grid` a skipped child takes no cell, so later children move up o
 | Constructor | Options |
 |-------------|---------|
 | `VStack(opts...)` / `HStack(opts...)` | `Gap`, `Padding`, `AlignStart`/`AlignCenter`/`AlignEnd`, children |
-| `ZStack(opts...)` | `TopLeading` (default), `Top`, …, `BottomTrailing`, children |
+| `ZStack(opts...)` | `ZAlignTopLeading` (default), `ZAlignTop`, …, `ZAlignBottomTrailing`, children |
 | `Box(opts...)` | `Padding`, `Background(color)`, `Border(width, color)` (insets children by its width), `CornerRadius`, `Clip` (rectangular, ignores corner radius), children |
 | `Frame(w, h, children...)` | constrains children to exactly w×h and clips to its bounds |
 | `Spacer()` / `Spacer(weight)` | fills remaining stack space |
@@ -220,7 +220,7 @@ BDF pixel fonts render without antialiasing, so they stay crisp on 1-bit and 2-b
 They are loaded into `Config.Fonts` and referenced by name like vector fonts:
 
 ```go
-px := demy.MustLoadBitmapFontBDF("pixel", spleenBDF) // or LoadBitmapFontBDFFile
+px := demy.MustLoadBDFBytes("pixel", spleenBDF) // or LoadBDFFile
 err := px.AddStyleBDF(spleenBoldBDF, demy.FontBold)
 cfg.Fonts = map[string]*demy.FontFamily{"pixel": px} // or add to an existing map
 
@@ -284,8 +284,8 @@ correction levels: `ECLevelLow` (~7%), `ECLevelMedium` (~15%, default), `ECLevel
 ## Rendering
 
 ```go
-img, err := c.Render(ctx, root, mode)                // mode: RGBA, Grayscale, Paletted
-img, err := c.Render(ctx, root, demy.Unset)          // use Config.ColorMode
+img, err := c.Render(ctx, root, mode)                         // mode: RGBA, Grayscale, Paletted
+img, err := c.Render(ctx, root, demy.ColorModeDefault)        // use Config.ColorMode
 img, err := c.Render(ctx, root, demy.Paletted, demy.Atkinson) // dither the whole scene
 ```
 
@@ -465,7 +465,7 @@ env := &starlarkplugin.Environment{}
 p, err := env.Load(ctx, "weather.star", cfg, loc) // loc sets the zone for now(); nil = UTC
 
 node, err := p.Render(ctx, map[string]any{"city": "Portland", "temp": 72.4, "items": items})
-img, err := c.Render(ctx, node, demy.Unset)
+img, err := c.Render(ctx, node, demy.ColorModeDefault)
 ```
 
 Use `Environment.AddBuiltin`, `AddValue`, and `AddModule` to expose Go functions to scripts.
@@ -508,7 +508,7 @@ Globals:
 | Style | `Style(class=, font=, size=, weight=, color=, align=, line_height=, max_lines=, overflow=)` (`max_lines=-1` is unlimited); `Class(name)` |
 | Options | `Gap`, `Padding`, `Background`, `Border`, `CornerRadius`, `Children`, `Clip`, `Columns`, `Rows`, `RowGap`, `ColGap` |
 | Grid tracks | `GridFixed`, `GridAuto`, `GridFr` |
-| Alignment | `AlignStart`, `AlignCenter`, `AlignEnd`; `TopLeading` … `BottomTrailing` |
+| Alignment | `AlignStart`, `AlignCenter`, `AlignEnd`; `ZAlignTopLeading` … `ZAlignBottomTrailing` |
 | Images | `ImageFit`, `ImageFill`, `ImageStretch`, `FloydSteinberg`, `Atkinson` |
 | Barcodes | `BarcodeTypeQR`, `ECLevelLow`, `ECLevelMedium`, `ECLevelQuartile`, `ECLevelHigh` |
 | Colors | `Foreground`, `Accent`, `Muted` (roles); `Black`, `DarkGray`, `LightGray`, `White`, `Red`, `Yellow`, `Green`, `Blue`, `Orange` |

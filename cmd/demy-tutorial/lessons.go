@@ -230,7 +230,7 @@ demy.Frame(80, 160,
 )
 
 // Center-aligned variant
-demy.ZStack(demy.Center,
+demy.ZStack(demy.ZAlignCenter,
     demy.Frame(600, 100,
         demy.Box(demy.Background(demy.Black)),
     ),
@@ -491,9 +491,9 @@ func metricRow(label, value string) demy.Node {
 	{
 		ID:    12,
 		Title: "Bitmap Fonts",
-		Desc:  "Bitmap (pixel) fonts render with no antialiasing, so they stay crisp on 1-bit and 2-bit displays where outline fonts turn muddy. Load a BDF font with LoadBitmapFontBDF and reference it by name like any other font. Switch the preview to 1-bit to see the difference: the vector (\"sans\") rows soften while the bitmap rows stay sharp. Bitmap fonts ignore size — they render at their native pixel size times the display Scale. \"spleen\" is an 8x16 monospace font; \"tomthumb\" is a tiny 4x6 proportional font.",
+		Desc:  "Bitmap (pixel) fonts render with no antialiasing, so they stay crisp on 1-bit and 2-bit displays where outline fonts turn muddy. Load a BDF font with LoadBDFBytes and reference it by name like any other font. Switch the preview to 1-bit to see the difference: the vector (\"sans\") rows soften while the bitmap rows stay sharp. Bitmap fonts ignore size — they render at their native pixel size times the display Scale. \"spleen\" is an 8x16 monospace font; \"tomthumb\" is a tiny 4x6 proportional font.",
 		GoEquiv: `// Load a BDF bitmap font and register it by name.
-spleen := demy.MustLoadBitmapFontBDF("spleen", spleenBDF)
+spleen := demy.MustLoadBDFBytes("spleen", spleenBDF)
 cfg.Fonts["spleen"] = spleen
 
 // Reference it like any other font. Size is ignored for bitmap

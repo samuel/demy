@@ -55,8 +55,8 @@ func main() {
 	baseCfg = demy.TRMNLOriginal
 	baseCfg.Fonts = map[string]*demy.FontFamily{
 		"sans":     font,
-		"spleen":   demy.MustLoadBitmapFontBDF("spleen", spleenBDF),
-		"tomthumb": demy.MustLoadBitmapFontBDF("tomthumb", tomThumbBDF),
+		"spleen":   demy.MustLoadBDFBytes("spleen", spleenBDF),
+		"tomthumb": demy.MustLoadBDFBytes("tomthumb", tomThumbBDF),
 	}
 
 	mux := http.NewServeMux()

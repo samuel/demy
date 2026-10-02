@@ -121,10 +121,12 @@ func (e Enum[T]) String(v T) (string, error) {
 var (
 	Align = NewEnum("alignment", demy.AlignStart,
 		demy.AlignStart, "start", demy.AlignCenter, "center", demy.AlignEnd, "end")
-	ZAlign = NewEnum("z-alignment", demy.TopLeading,
-		demy.TopLeading, "top-leading", demy.Top, "top", demy.TopTrailing, "top-trailing",
-		demy.Leading, "leading", demy.Center, "center", demy.Trailing, "trailing",
-		demy.BottomLeading, "bottom-leading", demy.Bottom, "bottom", demy.BottomTrailing, "bottom-trailing")
+	ZAlign = NewEnum("z-alignment", demy.ZAlignTopLeading,
+		demy.ZAlignTopLeading, "top-leading", demy.ZAlignTop, "top",
+		demy.ZAlignTopTrailing, "top-trailing", demy.ZAlignLeading, "leading",
+		demy.ZAlignCenter, "center", demy.ZAlignTrailing, "trailing",
+		demy.ZAlignBottomLeading, "bottom-leading", demy.ZAlignBottom, "bottom",
+		demy.ZAlignBottomTrailing, "bottom-trailing")
 	TextAlign = NewEnum("text alignment", demy.TextAlignInherit,
 		demy.TextAlignLeft, "left", demy.TextAlignCenter, "center", demy.TextAlignRight, "right")
 	Overflow = NewEnum("overflow", demy.TextOverflowInherit,

@@ -136,7 +136,7 @@ func (ff *FontFamily) isBitmap() bool { return ff.bitmap != nil }
 
 // errFontNotLoaded is returned for a FontFamily not created by one of the Load
 // functions, such as a zero value.
-var errFontNotLoaded = errors.New("demy: font family is not loaded; create it with LoadFontBytes, LoadFontFile, or LoadBitmapFontBDF")
+var errFontNotLoaded = errors.New("demy: font family is not loaded; create it with LoadFontBytes, LoadFontFile, or LoadBDFBytes")
 
 // isLoaded reports whether the family was created by one of the Load functions.
 func (ff *FontFamily) isLoaded() bool { return ff.faces != nil || ff.bitmap != nil }
@@ -224,13 +224,13 @@ func (ff *FontFamily) AddStyle(data []byte, style FontStyle) error {
 	return nil
 }
 
-// LoadBitmapFontBDF parses a BDF (Adobe Bitmap Distribution Format) font as
+// LoadBDFBytes parses a BDF (Adobe Bitmap Distribution Format) font as
 // the Regular style of a new bitmap family.
 //
 // Bitmap fonts render without antialiasing at their native pixel size times
 // the integer display scale; Style.Size is ignored. Bitmap text is composited
 // after quantization, so it always draws on top of other content.
-func LoadBitmapFontBDF(name string, data []byte) (*FontFamily, error) {
+func LoadBDFBytes(name string, data []byte) (*FontFamily, error) {
 	bf, err := parseBDF(data)
 	if err != nil {
 		return nil, err
@@ -238,27 +238,27 @@ func LoadBitmapFontBDF(name string, data []byte) (*FontFamily, error) {
 	return &FontFamily{name: name, bitmap: map[FontStyle]*bitmapFont{FontRegular: bf}}, nil
 }
 
-// MustLoadBitmapFontBDF loads a BDF bitmap font and panics on error.
-func MustLoadBitmapFontBDF(name string, data []byte) *FontFamily {
-	f, err := LoadBitmapFontBDF(name, data)
+// MustLoadBDFBytes loads a BDF bitmap font and panics on error.
+func MustLoadBDFBytes(name string, data []byte) *FontFamily {
+	f, err := LoadBDFBytes(name, data)
 	if err != nil {
 		panic(err)
 	}
 	return f
 }
 
-// LoadBitmapFontBDFFile loads a BDF bitmap font from a file path.
-func LoadBitmapFontBDFFile(name, path string) (*FontFamily, error) {
+// LoadBDFFile loads a BDF bitmap font from a file path.
+func LoadBDFFile(name, path string) (*FontFamily, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return LoadBitmapFontBDF(name, data)
+	return LoadBDFBytes(name, data)
 }
 
-// MustLoadBitmapFontBDFFile loads a BDF bitmap font from a file and panics on error.
-func MustLoadBitmapFontBDFFile(name, path string) *FontFamily {
-	f, err := LoadBitmapFontBDFFile(name, path)
+// MustLoadBDFFile loads a BDF bitmap font from a file and panics on error.
+func MustLoadBDFFile(name, path string) *FontFamily {
+	f, err := LoadBDFFile(name, path)
 	if err != nil {
 		panic(err)
 	}
@@ -304,7 +304,7 @@ type Config struct {
 	// closer dithering; the indices stay the same.
 	Palette          []color.Color
 	Roles            Roles
-	ColorMode        ColorMode              // default mode when Render is called with Unset
+	ColorMode        ColorMode              // default mode when Render is called with ColorModeDefault
 	Fonts            map[string]*FontFamily // keyed by Style.Font
 	Images           map[string]image.Image // referenced by ImageKey
 	DefaultTextStyle Style                  // base style that Text styles are merged over
@@ -444,15 +444,15 @@ func (Alignment) demyOption() {}
 type ZAlignment int
 
 const (
-	TopLeading     ZAlignment = iota // 0
-	Top                              // 1
-	TopTrailing                      // 2
-	Leading                          // 3
-	Center                           // 4
-	Trailing                         // 5
-	BottomLeading                    // 6
-	Bottom                           // 7
-	BottomTrailing                   // 8
+	ZAlignTopLeading     ZAlignment = iota // 0
+	ZAlignTop                              // 1
+	ZAlignTopTrailing                      // 2
+	ZAlignLeading                          // 3
+	ZAlignCenter                           // 4
+	ZAlignTrailing                         // 5
+	ZAlignBottomLeading                    // 6
+	ZAlignBottom                           // 7
+	ZAlignBottomTrailing                   // 8
 )
 
 func (ZAlignment) demyOption() {}
@@ -461,10 +461,10 @@ func (ZAlignment) demyOption() {}
 type ColorMode int
 
 const (
-	Unset     ColorMode = iota // use Config.ColorMode
-	RGBA                       // full color, unquantized (*image.RGBA)
-	Grayscale                  // 8-bit luminance, unquantized (*image.Gray)
-	Paletted                   // quantized to Config.Palette (*image.Paletted)
+	ColorModeDefault ColorMode = iota // use Config.ColorMode
+	RGBA                              // full color, unquantized (*image.RGBA)
+	Grayscale                         // 8-bit luminance, unquantized (*image.Gray)
+	Paletted                          // quantized to Config.Palette (*image.Paletted)
 )
 
 // Dither selects the dithering algorithm used when quantizing to

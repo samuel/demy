@@ -170,7 +170,7 @@ func TestBoxBorderInsetsContent(t *testing.T) {
 
 func TestDitherImagePartlyOffCanvas(t *testing.T) {
 	gray := solid(10, 30, color.Gray{Y: 128})
-	n := demy.ZStack(demy.Bottom, demy.VStack(demy.Image(gray, demy.FloydSteinberg)))
+	n := demy.ZStack(demy.ZAlignBottom, demy.VStack(demy.Image(gray, demy.FloydSteinberg)))
 	img := render(t, n, 10, 10, demy.Paletted, demy.Config{Palette: demy.PaletteBW})
 	var black, white int
 	for y := range 10 {
@@ -300,7 +300,7 @@ func imagesEqual(a, b image.Image) bool {
 // TestPathPartlyOffCanvas checks that a shape extending past the canvas is
 // still filled where it's visible.
 func TestPathPartlyOffCanvas(t *testing.T) {
-	n := demy.ZStack(demy.Bottom, demy.VStack(redBox(30, 30)))
+	n := demy.ZStack(demy.ZAlignBottom, demy.VStack(redBox(30, 30)))
 	img := render(t, n, 10, 10, demy.RGBA, demy.Config{})
 	for y := range 10 {
 		for x := range 10 {

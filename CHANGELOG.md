@@ -12,6 +12,12 @@ Breaking changes:
   `*image.Paletted` whose indices follow `Config.Palette`. Use `PaletteBW`, `PaletteGray4`, or
   `PaletteGray16` for the old gray modes; they produce the same pixels. `TRMNLOriginal` and
   `TRMNLX` use `Paletted` with `PaletteGray4` and `PaletteGray16`.
+- `Unset` is renamed `ColorModeDefault`.
+- The BDF loaders are renamed to match `LoadFontBytes` and `LoadFontFile`:
+  `LoadBitmapFontBDF` is `LoadBDFBytes`, `LoadBitmapFontBDFFile` is `LoadBDFFile`, and the
+  `Must…` variants are `MustLoadBDFBytes` and `MustLoadBDFFile`.
+- `ZAlignment` constants have a `ZAlign` prefix (`ZAlignTopLeading`, `ZAlignCenter`, …), in Go
+  and in Starlark. Scene formats keep their names (`"top-leading"`, `"center"`, …).
 - `New` rejects a `Config.Palette` with fewer than 2 or more than 256 colors, or with nil,
   translucent, or role colors.
 - Bitmap text snaps to the nearest palette color instead of black or white, and keeps its color

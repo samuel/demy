@@ -82,7 +82,7 @@ func TestFullRoundTrip(t *testing.T) {
 			&demy.WeightedNode{Weight: 2, Child: &demy.SpacerNode{Weight: 3}},
 			&demy.DividerNode{Size: 2, Color: demy.RoleColor{Name: "accent"}},
 		}},
-		&demy.ZStackNode{Align: demy.BottomTrailing, Children: []demy.Node{
+		&demy.ZStackNode{Align: demy.ZAlignBottomTrailing, Children: []demy.Node{
 			&demy.BoxNode{Padding: 1, BorderWidth: 2, BorderColor: demy.RoleColor{Name: "muted"},
 				Background: color.NRGBA{R: 0x10, G: 0x20, B: 0x30, A: 0x80}, CornerRadius: 4, Clip: true},
 		}},

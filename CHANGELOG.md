@@ -3,6 +3,11 @@
 All notable changes to demy are listed here. Until v1.0.0, minor releases may include breaking
 changes; they are called out under each release.
 
+## Unreleased
+
+- `xmlscene.ParseTemplate` parses a template once into a `*Template`, whose `Execute` and
+  `ExecuteScene` methods can run it repeatedly and concurrently without reparsing.
+
 ## v0.2.0 — 2026-10-01
 
 Scenes, templates, and BDF fonts from untrusted sources can now be rendered within fixed

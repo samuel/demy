@@ -77,3 +77,18 @@ func ExampleExecute() {
 	// 	</hstack>
 	// </vstack>
 }
+
+// ParseTemplate parses a template once so it can be executed many times.
+func ExampleTemplate() {
+	tmpl := xmlscene.MustParseTemplate([]byte(`<text>{{.}}</text>`))
+	for _, s := range []string{"first", "second"} {
+		n, err := tmpl.Execute(context.Background(), s, demy.Config{})
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(n.(*demy.TextNode).Text)
+	}
+	// Output:
+	// first
+	// second
+}

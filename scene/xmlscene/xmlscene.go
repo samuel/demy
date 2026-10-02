@@ -2,7 +2,7 @@
 //
 // Element names map to node types, attributes to layout and style properties, and
 // child elements to child nodes, which makes the format convenient to generate with
-// text/template (see Execute):
+// text/template (see ParseTemplate):
 //
 //	<vstack gap="4" padding="8">
 //	  <text size="{{.TitleSize}}" color="foreground">{{.Title}}</text>
@@ -28,7 +28,7 @@
 //
 // Scenes and templates may come from untrusted sources. Unmarshal stops at the
 // nesting and node limits while decoding; limit the input size as well.
-// Execute stops when its context is done or its output passes
+// Template execution stops when its context is done or its output passes
 // MaxTemplateOutput. Templates can call exported methods on their data, so
 // pass untrusted templates maps, slices, and plain structs.
 //
@@ -88,20 +88,14 @@ func Unmarshal(data []byte, cfg demy.Config) (demy.Node, error) {
 	return n, nil
 }
 
-// Execute executes a text/template that produces XML and unmarshals the result
-// with Unmarshal. The output of every template action is XML-escaped, so data
-// can't inject markup; pipe a value to raw (e.g. {{.Snippet | raw}}) to insert
-// it unescaped.
-//
-// Execution stops with an error when ctx is done or the output passes
-// MaxTemplateOutput bytes. The context is checked as output is written, on
-// each range iteration, and on each template invocation.
+// Execute parses a template with ParseTemplate and executes it with
+// Template.Execute. Use ParseTemplate to execute a template more than once.
 func Execute(ctx context.Context, tmplSrc []byte, data any, cfg demy.Config) (demy.Node, error) {
-	out, err := executeTemplate(ctx, tmplSrc, data)
+	t, err := ParseTemplate(tmplSrc)
 	if err != nil {
 		return nil, err
 	}
-	return Unmarshal(out, cfg)
+	return t.Execute(ctx, data, cfg)
 }
 
 // MarshalScene serializes a Node tree and named style definitions to an indented
@@ -159,15 +153,14 @@ func UnmarshalScene(data []byte, cfg demy.Config) (demy.Node, map[string]demy.St
 	return unmarshalDoc(data, cfg, true)
 }
 
-// ExecuteScene executes a text/template that produces XML and unmarshals the result
-// with UnmarshalScene. Action output is XML-escaped, and execution is limited,
-// as in Execute.
+// ExecuteScene parses a template with ParseTemplate and executes it with
+// Template.ExecuteScene.
 func ExecuteScene(ctx context.Context, tmplSrc []byte, data any, cfg demy.Config) (demy.Node, map[string]demy.Style, error) {
-	out, err := executeTemplate(ctx, tmplSrc, data)
+	t, err := ParseTemplate(tmplSrc)
 	if err != nil {
 		return nil, nil, err
 	}
-	return UnmarshalScene(out, cfg)
+	return t.ExecuteScene(ctx, data, cfg)
 }
 
 // --- templates ---
@@ -216,9 +209,20 @@ var templateFuncs = template.FuncMap{
 	rawFunc: func(v any) rawXML { return rawXML(fmt.Sprint(v)) },
 }
 
-func executeTemplate(ctx context.Context, src []byte, data any) ([]byte, error) {
+// Template is a parsed XML scene template. It is safe for concurrent use.
+type Template struct {
+	t *template.Template
+}
+
+// noCheck stands in for checkFunc until an execution binds it to its context.
+func noCheck() (string, error) { return "", nil }
+
+// ParseTemplate parses a text/template that produces XML. The output of every
+// template action is XML-escaped, so data can't inject markup; pipe a value to
+// raw (e.g. {{.Snippet | raw}}) to insert it unescaped.
+func ParseTemplate(src []byte) (*Template, error) {
 	t, err := template.New("scene").Funcs(templateFuncs).Funcs(template.FuncMap{
-		checkFunc: func() (string, error) { return "", ctx.Err() },
+		checkFunc: noCheck,
 	}).Parse(string(src))
 	if err != nil {
 		return nil, fmt.Errorf("xmlscene: template parse: %w", err)
@@ -231,8 +235,53 @@ func executeTemplate(ctx context.Context, src []byte, data any) ([]byte, error) 
 			tt.Root.Nodes = slices.Insert(tt.Root.Nodes, 0, parse.Node(checkAction(tt.Tree, tt.Root.Pos)))
 		}
 	}
+	return &Template{t: t}, nil
+}
+
+// MustParseTemplate is like ParseTemplate but panics on error.
+func MustParseTemplate(src []byte) *Template {
+	t, err := ParseTemplate(src)
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
+
+// Execute executes the template and unmarshals the result with Unmarshal.
+//
+// Execution stops with an error when ctx is done or the output passes
+// MaxTemplateOutput bytes. The context is checked as output is written, on
+// each range iteration, and on each template invocation.
+func (t *Template) Execute(ctx context.Context, data any, cfg demy.Config) (demy.Node, error) {
+	out, err := t.execute(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	return Unmarshal(out, cfg)
+}
+
+// ExecuteScene executes the template and unmarshals the result with
+// UnmarshalScene. Execution is limited as in Execute.
+func (t *Template) ExecuteScene(ctx context.Context, data any, cfg demy.Config) (demy.Node, map[string]demy.Style, error) {
+	out, err := t.execute(ctx, data)
+	if err != nil {
+		return nil, nil, err
+	}
+	return UnmarshalScene(out, cfg)
+}
+
+// execute runs a clone of the template with checkFunc bound to ctx. Clones
+// share the parsed trees, so concurrent executions don't interfere.
+func (t *Template) execute(ctx context.Context, data any) ([]byte, error) {
+	c, err := t.t.Clone()
+	if err != nil {
+		return nil, fmt.Errorf("xmlscene: template clone: %w", err)
+	}
+	c.Funcs(template.FuncMap{
+		checkFunc: func() (string, error) { return "", ctx.Err() },
+	})
 	w := &templateWriter{ctx: ctx}
-	if err := t.Execute(w, data); err != nil {
+	if err := c.Execute(w, data); err != nil {
 		return nil, fmt.Errorf("xmlscene: template execute: %w", err)
 	}
 	return w.buf.Bytes(), nil

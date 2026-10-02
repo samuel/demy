@@ -379,6 +379,14 @@ const tmpl = `<vstack gap="4">
 node, err = xmlscene.Execute(ctx, []byte(tmpl), data, cfg)
 ```
 
+`Execute` parses the template on every call. To render a template repeatedly, parse it once
+with `ParseTemplate` and execute the returned `*Template`, which is safe for concurrent use:
+
+```go
+t, err := xmlscene.ParseTemplate([]byte(tmpl))
+node, err = t.Execute(ctx, data, cfg)
+```
+
 Template output is XML-escaped automatically, so data like `AT&T` or `</text>` is inserted as
 text and can't inject markup. Pipe a value to `raw` (`{{.Snippet | raw}}`) to insert XML as is.
 
@@ -490,7 +498,7 @@ which inputs can come from untrusted sources and what bounds them.
 | Node trees (`Render`) | Yes | Node, clipped-node, barcode, text, nesting, and dimension limits (see [Rendering](#rendering)); the `Render` context |
 | JSON scenes (`jsonscene`) | Yes, with an input size limit | Nesting and node limits, checked after the whole document is parsed, so cap the input size first (e.g. `http.MaxBytesReader`) |
 | XML scenes (`xmlscene`) | Yes, with an input size limit | Nesting and node limits, checked while decoding |
-| XML templates (`xmlscene.Execute`) | Yes, with plain data | The context and `MaxTemplateOutput` (4 MiB). Templates can call exported methods on the data and its fields, so pass maps, slices, and plain structs |
+| XML templates (`xmlscene.Execute`, `Template.Execute`) | Yes, with plain data | The context and `MaxTemplateOutput` (4 MiB). Templates can call exported methods on the data and its fields, so pass maps, slices, and plain structs |
 | BDF fonts | Yes | Glyph size, metric, and bitmap size limits; blitted glyph area per render |
 | Starlark scripts (`plugin/starlark`) | Only with memory isolation | `MaxSteps` and the context bound time, not memory |
 | `Config` (vector fonts, images, styles), template data, and builtins added with `AddBuiltin`/`AddModule` | No | These are the host's: vector fonts are parsed by tdewolff/canvas without extra checks, and builtins run with the host's privileges |

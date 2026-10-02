@@ -3,6 +3,8 @@ package demy
 import (
 	"strings"
 	"testing"
+
+	"golang.org/x/image/font/gofont/goregular"
 )
 
 // children returns count nodes made by f.
@@ -54,5 +56,40 @@ func TestNodeBudgetUnclippedBox(t *testing.T) {
 	tree := ZStack(children(maxClippedNodes+1, func() Node { return Box() }))
 	if _, err := buildNode(tree, &Config{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTextBudget(t *testing.T) {
+	cfg := &Config{
+		Fonts:            map[string]*FontFamily{"sans": MustLoadFontBytes("sans", goregular.TTF)},
+		DefaultTextStyle: Style{Font: "sans", Size: 12},
+	}
+	texts := func(count, size int) Node {
+		return ZStack(children(count, func() Node { return Text(strings.Repeat("x", size)) }))
+	}
+	tests := map[string]struct {
+		tree Node
+		want string // empty for no error
+	}{
+		"one at the limit":   {texts(1, maxTextBytes), ""},
+		"one over the limit": {texts(1, maxTextBytes+1), "Text has"},
+		// Each invalid byte becomes a 3-byte U+FFFD.
+		"sanitized at the limit":   {Text(strings.Repeat("\xff", maxTextBytes/3)), ""},
+		"sanitized over the limit": {Text(strings.Repeat("\xff", maxTextBytes/3+1)), "Text has"},
+		"tree at the limit":        {texts(maxTreeTextBytes/maxTextBytes, maxTextBytes), ""},
+		"tree over the limit":      {texts(maxTreeTextBytes/maxTextBytes+1, maxTextBytes), "bytes of text"},
+		"shared over the limit": {func() Node {
+			shared := Text(strings.Repeat("x", maxTextBytes))
+			return ZStack(children(maxTreeTextBytes/maxTextBytes+1, func() Node { return shared }))
+		}(), "bytes of text"},
+	}
+	for name, tt := range tests {
+		_, err := buildNode(tt.tree, cfg)
+		switch {
+		case tt.want == "" && err != nil:
+			t.Errorf("%s: %v", name, err)
+		case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+			t.Errorf("%s: err = %v, want %q error", name, err, tt.want)
+		}
 	}
 }

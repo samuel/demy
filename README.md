@@ -165,6 +165,9 @@ Text is sanitized before layout: each invalid UTF-8 byte, and each control chara
 than tab, line feed, and carriage return, becomes U+FFFD (�). Line feeds and carriage returns
 break lines.
 
+A `Text` may be at most 8192 bytes of UTF-8 after sanitizing, and all text in a tree at most
+65536 bytes, counting each use of a shared node; longer text fails to render.
+
 `MaxLines` truncates text to that many lines; with `TextOverflowEllipsis` the last line is
 shortened to fit an ellipsis.
 
@@ -286,7 +289,7 @@ A typical dashboard renders in about 10 ms on TRMNL Original and 40 ms on TRMNL 
 `Render` returns an error rather than panicking on invalid trees: sizes, gaps, padding, and
 weights must be finite and within `[0, 32768]`, trees may nest at most 1000 levels, and
 `GridRow` must be a direct child of `Grid`. A tree may have at most 16384 nodes, 128 clipped
-nodes (`Frame`, and `Box` with `Clip`), and 16 barcodes. A node used in several places counts
+nodes (`Frame`, and `Box` with `Clip`), 16 barcodes, and 65536 bytes of text. A node used in several places counts
 once per use, so a small tree that shares nodes can't expand into an unbounded amount of work.
 XML and JSON scenes are also limited to 1000 levels of nesting and 16384 nodes, checked while
 decoding. These checks don't make untrusted input safe to render; see
@@ -458,7 +461,6 @@ Scenes, templates, Starlark scripts, and BDF fonts must come from trusted source
 validates its input and returns errors instead of panicking on malformed trees, but it does not
 yet bound the time or memory a hostile input can use:
 
-- Text length isn't capped, and every text node is shaped during both measure and draw.
 - A small BDF font can declare glyphs whose bitmaps take far more memory than its size
   suggests.
 - `Canvas.Render` and `xmlscene.Execute` can't be cancelled.

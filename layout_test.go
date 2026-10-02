@@ -310,3 +310,49 @@ func TestPathPartlyOffCanvas(t *testing.T) {
 		}
 	}
 }
+
+// inkSpan returns the leftmost and rightmost columns with a non-white pixel.
+func inkSpan(img image.Image) (minX, maxX int) {
+	b := img.Bounds()
+	minX, maxX = b.Max.X, b.Min.X-1
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if rgbaAt(img, x, y) != testWhite {
+				minX, maxX = min(minX, x), max(maxX, x)
+			}
+		}
+	}
+	return minX, maxX
+}
+
+// TestTextAlignInLaidOutBounds checks that centered and right-aligned text is
+// aligned within its laid-out bounds whether it was measured with a bounded
+// width or an unbounded one.
+func TestTextAlignInLaidOutBounds(t *testing.T) {
+	right := demy.Style{Align: demy.TextAlignRight}
+	center := demy.Style{Align: demy.TextAlignCenter}
+	tests := map[string]struct {
+		node   demy.Node
+		center bool // otherwise right-aligned
+	}{
+		"right, bounded":    {demy.VStack(demy.Text("abc", right)), false},
+		"right, unbounded":  {demy.HStack(demy.Spacer(), demy.Text("abc", right)), false},
+		"center, bounded":   {demy.VStack(demy.AlignCenter, demy.Text("abc", center)), true},
+		"center, unbounded": {demy.HStack(demy.Spacer(), demy.Text("abc", center), demy.Spacer()), true},
+	}
+	c := demy.MustNew(textConfig(200, 40))
+	for name, tt := range tests {
+		img, err := c.Render(tt.node, demy.RGBA)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		minX, maxX := inkSpan(img)
+		if tt.center {
+			if mid := (minX + maxX) / 2; mid < 97 || mid > 103 {
+				t.Errorf("%s: ink spans [%d, %d], want it centered on 100", name, minX, maxX)
+			}
+		} else if maxX < 195 {
+			t.Errorf("%s: ink ends at %d, want at the right edge", name, maxX)
+		}
+	}
+}

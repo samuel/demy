@@ -766,14 +766,22 @@ func (n *dividerNode) draw(dctx *drawCtx) {
 // --- textNode ---
 
 type textNode struct {
-	memo   measureMemo[struct{}]
+	memo   measureMemo[textLayout]
+	lay    textLayout
 	text   string
-	style  Style
+	style  Style // Color is always set
 	bounds nodeRect
 }
 
+// textLayout is vector text shaped by a measurement, which draw reuses so
+// text is shaped once and drawn with the lines it was measured with.
+type textLayout struct {
+	tb  *cv.Text // nil for bitmap fonts
+	wMM float64  // box width tb was laid out in; 0 for no wrapping
+}
+
 func (n *textNode) measure(mctx *measureCtx) nodeSize {
-	return n.memo.do(mctx, &struct{}{}, n.measureUncached)
+	return n.memo.do(mctx, &n.lay, n.measureUncached)
 }
 
 // measureUncached measures the text. buildNode guarantees a loaded font and,
@@ -781,14 +789,18 @@ func (n *textNode) measure(mctx *measureCtx) nodeSize {
 func (n *textNode) measureUncached(mctx *measureCtx) nodeSize {
 	ff := mctx.fonts[n.style.Font]
 	if ff.isBitmap() {
+		n.lay = textLayout{}
 		return n.measureBitmap(mctx, ff)
 	}
-	clr := n.style.Color
-	if clr == nil {
-		clr = Black
+	// A zero width disables wrapping. It also keeps the alignment offsets of
+	// centered and right-aligned lines small, so draw can shift them exactly.
+	var wMM float64
+	if !isUnbounded(mctx.availW) {
+		wMM = mctx.availW / mctx.dpmm
 	}
-	face := ff.family.Face(n.style.Size, clr, n.style.Weight.cvStyle())
-	tb := ff.shape(func() *cv.Text { return n.textBox(face, mctx.availW/mctx.dpmm) })
+	face := ff.family.Face(n.style.Size, n.style.Color, n.style.Weight.cvStyle())
+	tb := ff.shape(func() *cv.Text { return n.textBox(face, wMM) })
+	n.lay = textLayout{tb: tb, wMM: wMM}
 	return nodeSize{w: tb.Width * mctx.dpmm, h: tb.Height * mctx.dpmm}
 }
 
@@ -837,20 +849,15 @@ func (n *textNode) draw(dctx *drawCtx) {
 		n.drawBitmap(dctx, ff)
 		return
 	}
-	clr := n.style.Color
-	if clr == nil {
-		clr = dctx.roles.Foreground
-	}
-	if clr == nil {
-		clr = Black
-	}
-	face := ff.family.Face(n.style.Size, clr, n.style.Weight.cvStyle())
-	// The laid-out width is often exactly the measured width; the epsilon
-	// absorbs the float round trip so lines don't break differently than measured.
-	tb := ff.shape(func() *cv.Text { return n.textBox(face, n.bounds.w/dctx.dpmm+1e-6) })
+	// Lines are aligned within the measured box; move them to the laid-out one.
 	xMM := n.bounds.x / dctx.dpmm
-	yMM := n.bounds.y / dctx.dpmm
-	dctx.ctx.DrawText(xMM, yMM, tb)
+	switch shift := n.bounds.w/dctx.dpmm - n.lay.wMM; n.style.Align {
+	case TextAlignCenter:
+		xMM += shift / 2
+	case TextAlignRight:
+		xMM += shift
+	}
+	dctx.ctx.DrawText(xMM, n.bounds.y/dctx.dpmm, n.lay.tb)
 }
 
 func cvHAlign(a TextAlign) cv.TextAlign {
@@ -917,14 +924,7 @@ func (n *textNode) drawBitmap(dctx *drawCtx, ff *FontFamily) {
 	if bf == nil {
 		return
 	}
-	clr := n.style.Color
-	if clr == nil {
-		clr = dctx.roles.Foreground
-	}
-	if clr == nil {
-		clr = Black
-	}
-	col := snapBitmapColor(clr)
+	col := snapBitmapColor(n.style.Color)
 
 	iscale := bitmapIntScale(dctx.scale)
 	lines := layoutBitmapText(bf, n.text, n.bounds.w/bitmapUnit(dctx.scale), n.style)
@@ -1548,10 +1548,11 @@ func buildNode(n Node, cfg *Config) (node, error) {
 // builder converts a Node tree and counts what it builds. A Node used in
 // several places is built, and counted, once per use.
 type builder struct {
-	cfg      *Config
-	nodes    int // all nodes, bounded by maxNodes
-	clipped  int // Frames and Boxes with Clip, bounded by maxClippedNodes
-	barcodes int // bounded by maxBarcodes
+	cfg       *Config
+	nodes     int // all nodes, bounded by maxNodes
+	clipped   int // Frames and Boxes with Clip, bounded by maxClippedNodes
+	barcodes  int // bounded by maxBarcodes
+	textBytes int // bounded by maxTreeTextBytes
 }
 
 // count adds one to *counter and reports an error past limit.
@@ -1720,8 +1721,18 @@ func (b *builder) build(n Node, parentDir layoutDir, depth int) (node, error) {
 		}
 		if cfg != nil {
 			style.Color = resolveColor(style.Color, cfg.Roles)
+			if style.Color == nil {
+				style.Color = cfg.Roles.Foreground
+			}
 		}
-		return &textNode{text: sanitizeText(v.Text), style: style}, nil
+		if style.Color == nil {
+			style.Color = Black
+		}
+		text, err := b.text(v.Text)
+		if err != nil {
+			return nil, err
+		}
+		return &textNode{text: text, style: style}, nil
 	case *ImageNode:
 		img := v.Image
 		if img == nil && v.Key != "" {
@@ -1800,6 +1811,22 @@ func (b *builder) build(n Node, parentDir layoutDir, depth int) (node, error) {
 	default:
 		return nil, fmt.Errorf("demy: unknown node type %T", n)
 	}
+}
+
+// text sanitizes s and counts it against the text limits.
+func (b *builder) text(s string) (string, error) {
+	// Sanitizing only grows text, so longer input fails before it's copied.
+	if len(s) <= maxTextBytes {
+		s = sanitizeText(s)
+	}
+	if len(s) > maxTextBytes {
+		return "", fmt.Errorf("demy: Text has %d bytes, more than %d", len(s), maxTextBytes)
+	}
+	b.textBytes += len(s)
+	if b.textBytes > maxTreeTextBytes {
+		return "", fmt.Errorf("demy: node tree has more than %d bytes of text, counting each use of a shared node", maxTreeTextBytes)
+	}
+	return s, nil
 }
 
 // sanitizeText replaces each invalid UTF-8 byte, and each control character
@@ -1885,6 +1912,14 @@ const maxClippedNodes = 128
 
 // maxBarcodes bounds barcodes, which are encoded while building the tree.
 const maxBarcodes = 16
+
+// maxTextBytes bounds the UTF-8 length of one Text. Line breaking time grows
+// faster than linearly with paragraph length.
+const maxTextBytes = 1 << 13
+
+// maxTreeTextBytes bounds the total UTF-8 length of all Text in a tree,
+// counting each use of a shared node.
+const maxTreeTextBytes = 1 << 16
 
 type dim struct {
 	name string

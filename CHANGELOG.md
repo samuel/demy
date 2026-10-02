@@ -15,6 +15,9 @@ changes; they are called out under each release.
 - Breaking: a node tree may have at most 16384 nodes, 128 clipped nodes (`Frame`, and `Box`
   with `Clip`), and 16 barcodes, counting each use of a shared node. Larger trees fail to
   render. XML and JSON scenes with more than 16384 nodes fail to decode.
+- Breaking: a `Text` may be at most 8192 bytes of UTF-8, and all text in a tree at most 65536
+  bytes. Longer text fails to render.
+- Text is shaped once per render instead of in both measure and draw.
 
 ## v0.1.0 — 2026-10-01
 

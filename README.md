@@ -2,8 +2,6 @@
 
 A declarative rendering library for e-ink and similar displays.
 
-[Quoin](https://github.com/samuel/quoin), a multi-user TRMNL display server, is built on demy.
-
 ## Features
 
 - **Declarative layout**: `VStack`, `HStack`, `ZStack`, `Grid`, `Box`, `Frame`, `Spacer`, `Weighted`, `Divider`

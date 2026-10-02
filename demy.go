@@ -17,14 +17,18 @@
 package demy
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"math"
 	"os"
 	"sync"
 
-	cv "github.com/tdewolff/canvas"
+	"github.com/go-text/typesetting/font"
+	"github.com/go-text/typesetting/font/opentype"
+	"github.com/go-text/typesetting/shaping"
 )
 
 // Color constants for display palettes.
@@ -77,11 +81,31 @@ func (s FontStyle) normalized() FontStyle {
 	return s
 }
 
-// cvStyle converts s to the equivalent tdewolff/canvas font style.
-func (s FontStyle) cvStyle() cv.FontStyle {
-	n := s.normalized()
-	return cv.FontStyle(n&^FontItalic-FontRegular) | cv.FontStyle(n&FontItalic)
+// fauxWeight is the outline offset, as a fraction of the em, that
+// synthesizes s's weight from a Regular face.
+func (s FontStyle) fauxWeight() float64 {
+	switch s.normalized() &^ FontItalic {
+	case FontThin:
+		return -0.02
+	case FontExtraLight:
+		return -0.01
+	case FontLight:
+		return -0.005
+	case FontMedium:
+		return 0.005
+	case FontSemiBold:
+		return 0.01
+	case FontBold:
+		return 0.02
+	case FontExtraBold:
+		return 0.03
+	case FontBlack:
+		return 0.04
+	}
+	return 0
 }
+
+func (s FontStyle) italic() bool { return s&FontItalic != 0 }
 
 // FontFamily holds the weight/style variants of one font family. A family is
 // either a vector family (TTF/OTF) or a bitmap family (BDF); the two cannot be
@@ -92,21 +116,19 @@ func (s FontStyle) cvStyle() cv.FontStyle {
 // safe to call while a render may be reading the family. Create one with a Load
 // function; a zero value is not usable and rendering text with it is an error.
 type FontFamily struct {
-	name   string
-	family *cv.FontFamily // nil for bitmap families
+	name string
+	// faces holds one vector face per style; non-nil marks a vector family.
+	faces map[FontStyle]*font.Face
 	// bitmap holds one font per style; non-nil marks a bitmap family.
 	bitmap map[FontStyle]*bitmapFont
 
-	// shapeMu serializes text shaping, whose glyph caches in go-text aren't
-	// safe for concurrent use.
-	shapeMu sync.Mutex
-}
-
-// shape runs fn, which lays out text in this family, holding the shaping lock.
-func (ff *FontFamily) shape(fn func() *cv.Text) *cv.Text {
-	ff.shapeMu.Lock()
-	defer ff.shapeMu.Unlock()
-	return fn()
+	// mu serializes shaping and outline loading: go-text's shaper, line
+	// wrapper, and faces keep caches that aren't safe for concurrent use.
+	mu       sync.Mutex
+	shaper   shaping.HarfbuzzShaper
+	wrapper  shaping.LineWrapper
+	seg      shaping.Segmenter
+	outlines map[outlineKey][]opentype.Segment // glyph outlines with faux styling applied
 }
 
 // isBitmap reports whether this is a bitmap (pixel) font family.
@@ -117,7 +139,7 @@ func (ff *FontFamily) isBitmap() bool { return ff.bitmap != nil }
 var errFontNotLoaded = errors.New("demy: font family is not loaded; create it with LoadFontBytes, LoadFontFile, or LoadBitmapFontBDF")
 
 // isLoaded reports whether the family was created by one of the Load functions.
-func (ff *FontFamily) isLoaded() bool { return ff.family != nil || ff.bitmap != nil }
+func (ff *FontFamily) isLoaded() bool { return ff.faces != nil || ff.bitmap != nil }
 
 // bitmapVariant returns the bitmap font for the requested style, falling back
 // to the Regular variant (then any variant) when the exact style is missing.
@@ -136,11 +158,11 @@ func (ff *FontFamily) bitmapVariant(style FontStyle) *bitmapFont {
 
 // LoadFontFile loads a TTF or OTF file as the Regular style of a new family.
 func LoadFontFile(name, path string) (*FontFamily, error) {
-	ff := cv.NewFontFamily(name)
-	if err := ff.LoadFontFile(path, cv.FontRegular); err != nil {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return nil, err
 	}
-	return &FontFamily{name: name, family: ff}, nil
+	return LoadFontBytes(name, data)
 }
 
 // MustLoadFontFile loads a font file and panics on error.
@@ -155,11 +177,24 @@ func MustLoadFontFile(name, path string) *FontFamily {
 // LoadFontBytes loads TrueType or OpenType bytes as the Regular style of a new
 // family, e.g. LoadFontBytes("go", goregular.TTF).
 func LoadFontBytes(name string, data []byte) (*FontFamily, error) {
-	ff := cv.NewFontFamily(name)
-	if err := ff.LoadFont(data, 0, cv.FontRegular); err != nil {
+	face, err := parseFont(data)
+	if err != nil {
 		return nil, err
 	}
-	return &FontFamily{name: name, family: ff}, nil
+	return &FontFamily{name: name, faces: map[FontStyle]*font.Face{FontRegular: face}}, nil
+}
+
+// parseFont parses a TrueType or OpenType font, or the first font of a
+// collection.
+func parseFont(data []byte) (*font.Face, error) {
+	face, err := font.ParseTTF(bytes.NewReader(data))
+	if err == nil {
+		return face, nil
+	}
+	if faces, cerr := font.ParseTTC(bytes.NewReader(data)); cerr == nil && len(faces) > 0 {
+		return faces[0], nil
+	}
+	return nil, fmt.Errorf("demy: parsing font: %w", err)
 }
 
 // MustLoadFontBytes loads a font from bytes and panics on error.
@@ -181,7 +216,12 @@ func (ff *FontFamily) AddStyle(data []byte, style FontStyle) error {
 	if ff.isBitmap() {
 		return errors.New("demy: cannot add a vector style to a bitmap font family")
 	}
-	return ff.family.LoadFont(data, 0, style.cvStyle())
+	face, err := parseFont(data)
+	if err != nil {
+		return err
+	}
+	ff.faces[style.normalized()] = face
+	return nil
 }
 
 // LoadBitmapFontBDF parses a BDF (Adobe Bitmap Distribution Format) font as

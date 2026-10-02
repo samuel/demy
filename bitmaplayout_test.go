@@ -1,6 +1,7 @@
 package demy
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -67,20 +68,51 @@ func TestBitmapFractionalScaleMeasure(t *testing.T) {
 	}
 }
 
-func TestVectorEllipsisTextBox(t *testing.T) {
+func TestVectorEllipsis(t *testing.T) {
 	ff := MustLoadFontBytes("sans", goregular.TTF)
-	n := &textNode{
-		text:  strings.Repeat("word ", 40),
-		style: Style{Font: "sans", Size: 12, MaxLines: 2, Overflow: TextOverflowEllipsis},
+	st := Style{Font: "sans", Size: 12, MaxLines: 2, Overflow: TextOverflowEllipsis}
+	lay := ff.layoutText(strings.Repeat("word ", 40), st, 16, 100)
+	if len(lay.lines) != 2 {
+		t.Fatalf("lines = %d, want 2", len(lay.lines))
 	}
-	tb := n.textBox(ff.family.Face(12, Black), 30)
-	if tb.OverflowsY {
-		t.Error("ellipsized text still overflows")
+	ellipsis, _ := lay.face.face.NominalGlyph('…')
+	last := lay.lines[1].glyphs
+	if len(last) == 0 || last[len(last)-1].id != ellipsis {
+		t.Error("last line doesn't end in an ellipsis")
 	}
-	if !strings.HasSuffix(tb.Text, "…") {
-		t.Errorf("text %q missing ellipsis", tb.Text)
+	for i, l := range lay.lines {
+		if l.width > 100 {
+			t.Errorf("line %d is %v wide, want at most 100", i, l.width)
+		}
 	}
-	if tb.Lines() != 2 {
-		t.Errorf("lines = %d, want 2", tb.Lines())
+}
+
+// TestVectorTextLines checks line breaking at newlines and the height of the
+// lines, which follows the font's ascent, descent, and line gap.
+func TestVectorTextLines(t *testing.T) {
+	ff := MustLoadFontBytes("sans", goregular.TTF)
+	ascent, descent, gap := lineMetrics(ff.faces[FontRegular], 16)
+	for _, tt := range []struct {
+		text  string
+		lines int
+	}{
+		{"", 0}, {"a", 1}, {"a\n", 2}, {"\n", 2}, {"a\n\nb", 3}, {"x\r\ny", 2}, {"x\ry", 2},
+	} {
+		lay := ff.layoutText(tt.text, Style{}, 16, unbounded)
+		if len(lay.lines) != tt.lines {
+			t.Errorf("%q: %d lines, want %d", tt.text, len(lay.lines), tt.lines)
+			continue
+		}
+		var want float64
+		if tt.lines > 0 {
+			want = ascent + descent + float64(tt.lines-1)*(ascent+descent+gap)
+		}
+		if math.Abs(lay.height-want) > 1e-9 {
+			t.Errorf("%q: height = %v, want %v", tt.text, lay.height, want)
+		}
+	}
+	lay := ff.layoutText("one two three four five", Style{MaxLines: 2}, 16, 40)
+	if len(lay.lines) != 2 {
+		t.Errorf("MaxLines 2: %d lines", len(lay.lines))
 	}
 }

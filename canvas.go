@@ -7,8 +7,6 @@ import (
 	"image/color"
 	"image/draw"
 	"math"
-
-	cv "github.com/tdewolff/canvas"
 )
 
 // textBlit is one bitmap glyph to stamp onto the final image after
@@ -108,11 +106,10 @@ func applyBlits(dst draw.Image, blits []textBlit, q *quantizer) {
 // factor maps logical to physical pixels. The origin is the top-left corner
 // and Y increases downward.
 type Canvas struct {
-	cfg          Config
-	physicalDPMM float64 // used only by the rasterizer
-	dpmm         float64 // logical; used for layout
-	scale        float64
-	quant        *quantizer // nil without Config.Palette
+	cfg   Config
+	dpmm  float64 // logical; used for layout
+	scale float64
+	quant *quantizer // nil without Config.Palette
 }
 
 // maxPixelDimension bounds Config.PixelWidth and PixelHeight.
@@ -160,11 +157,10 @@ func New(cfg Config) (*Canvas, error) {
 		}
 	}
 	return &Canvas{
-		cfg:          cfg,
-		physicalDPMM: cfg.PhysicalDPMM(),
-		dpmm:         cfg.DPMM(),
-		scale:        scale,
-		quant:        q,
+		cfg:   cfg,
+		dpmm:  cfg.DPMM(),
+		scale: scale,
+		quant: q,
 	}, nil
 }
 
@@ -188,18 +184,10 @@ func MustNew(cfg Config) *Canvas {
 	return c
 }
 
-// draw builds, measures, lays out, and draws root, returning the vector canvas
-// plus the bitmap glyphs to apply after quantization. Images that request
+// draw builds, measures, lays out, and draws root, returning the image plus
+// the bitmap glyphs to apply after quantization. Images that request
 // dithering are dithered with q while drawing; nil q leaves them as is.
-func (c *Canvas) draw(rs *renderState, root Node, q *quantizer) (*cv.Canvas, []textBlit, error) {
-	// Size the canvas from the pixel dimensions so millimeters map exactly onto
-	// whole pixels; PhysicalHeightMM need not match the width-derived density.
-	wMM := float64(c.cfg.PixelWidth) / c.physicalDPMM
-	hMM := float64(c.cfg.PixelHeight) / c.physicalDPMM
-	cvs := cv.New(wMM, hMM)
-	ctx := cv.NewContext(cvs)
-	ctx.SetCoordSystem(cv.CartesianIV)
-
+func (c *Canvas) draw(rs *renderState, root Node, q *quantizer) (*image.RGBA, []textBlit, error) {
 	internal, err := buildNode(root, &c.cfg, rs)
 	if err != nil {
 		return nil, nil, err
@@ -221,23 +209,22 @@ func (c *Canvas) draw(rs *renderState, root Node, q *quantizer) (*cv.Canvas, []t
 	bounds := nodeRect{x: 0, y: 0, w: wLogical, h: hLogical}
 	internal.layout(bounds)
 
+	img := image.NewRGBA(image.Rect(0, 0, c.cfg.PixelWidth, c.cfg.PixelHeight))
 	bg := c.cfg.Roles.Background
 	if bg == nil {
 		bg = White
 	}
-	ctx.SetFillColor(bg)
-	ctx.SetStrokeColor(color.Transparent)
-	ctx.DrawPath(0, 0, cv.Rectangle(wMM, hMM))
+	draw.Draw(img, img.Bounds(), image.NewUniform(bg), image.Point{}, draw.Src)
 
 	dctx := &drawCtx{
 		rs:    rs,
-		ctx:   ctx,
+		p:     newPainter(img, rs),
 		dpmm:  c.dpmm,
 		scale: c.scale,
 		roles: c.cfg.Roles,
 		fonts: c.cfg.Fonts,
 		quant: q,
-		clip:  image.Rect(0, 0, c.cfg.PixelWidth, c.cfg.PixelHeight),
+		clip:  img.Bounds(),
 	}
 	internal.draw(dctx)
 	if rs.stopped() {
@@ -246,15 +233,7 @@ func (c *Canvas) draw(rs *renderState, root Node, q *quantizer) (*cv.Canvas, []t
 	if dctx.err != nil {
 		return nil, nil, dctx.err
 	}
-	return cvs, dctx.textBlits, nil
-}
-
-// rasterize converts a rendered cv.Canvas into a pixel image.
-func (c *Canvas) rasterize(rs *renderState, cvs *cv.Canvas) *image.RGBA {
-	img := image.NewRGBA(image.Rect(0, 0, c.cfg.PixelWidth, c.cfg.PixelHeight))
-	ras := newVectorRenderer(img, c.physicalDPMM, rs)
-	cvs.RenderTo(ras)
-	return img
+	return img, dctx.textBlits, nil
 }
 
 // Render lays out and rasterizes root. Unset mode uses Config.ColorMode, and
@@ -292,16 +271,12 @@ func (c *Canvas) Render(ctx context.Context, root Node, mode ColorMode, algo ...
 		q = c.quant
 	}
 	rs := &renderState{ctx: ctx}
-	cvs, blits, err := c.draw(rs, root, q)
+	rgba, blits, err := c.draw(rs, root, q)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkBlits(blits, image.Rect(0, 0, c.cfg.PixelWidth, c.cfg.PixelHeight)); err != nil {
+	if err := checkBlits(blits, rgba.Bounds()); err != nil {
 		return nil, err
-	}
-	rgba := c.rasterize(rs, cvs)
-	if rs.stopped() {
-		return nil, rs.stopErr()
 	}
 	var out draw.Image
 	switch mode {

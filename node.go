@@ -15,7 +15,6 @@ import (
 
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/qr"
-	cv "github.com/tdewolff/canvas"
 )
 
 type layoutDir int
@@ -88,7 +87,7 @@ func (mctx *measureCtx) with(availW, availH float64) *measureCtx {
 // drawCtx carries context for the draw pass.
 type drawCtx struct {
 	rs        *renderState
-	ctx       *cv.Context
+	p         *painter
 	dpmm      float64 // logical DPMM (physical DPMM / scale)
 	scale     float64
 	roles     Roles
@@ -582,36 +581,13 @@ func (n *boxNode) layout(bounds nodeRect) {
 }
 
 func (n *boxNode) draw(dctx *drawCtx) {
-	dpmm := dctx.dpmm
-	xMM := n.bounds.x / dpmm
-	yMM := n.bounds.y / dpmm
-	wMM := n.bounds.w / dpmm
-	hMM := n.bounds.h / dpmm
-	rMM := n.cornerRadius / dpmm
-
+	s := dctx.scale
+	x, y, w, h, r := n.bounds.x*s, n.bounds.y*s, n.bounds.w*s, n.bounds.h*s, n.cornerRadius*s
 	if n.background != nil {
-		dctx.ctx.SetFillColor(n.background)
-		dctx.ctx.SetStrokeColor(color.Transparent)
-		if n.cornerRadius > 0 {
-			dctx.ctx.DrawPath(xMM, yMM, cv.RoundedRectangle(wMM, hMM, rMM))
-		} else {
-			dctx.ctx.DrawPath(xMM, yMM, cv.Rectangle(wMM, hMM))
-		}
+		dctx.p.fillRect(x, y, w, h, r, n.background)
 	}
-
 	if n.borderWidth > 0 && n.borderColor != nil {
-		bwMM := n.borderWidth / dpmm
-		inset := bwMM / 2
-		dctx.ctx.SetFillColor(color.Transparent)
-		dctx.ctx.SetStrokeColor(n.borderColor)
-		dctx.ctx.SetStrokeWidth(bwMM)
-		if n.cornerRadius > 0 {
-			r := math.Max(0, rMM-inset)
-			dctx.ctx.DrawPath(xMM+inset, yMM+inset, cv.RoundedRectangle(wMM-2*inset, hMM-2*inset, r))
-		} else {
-			dctx.ctx.DrawPath(xMM+inset, yMM+inset, cv.Rectangle(wMM-2*inset, hMM-2*inset))
-		}
-		dctx.ctx.SetStrokeWidth(1)
+		dctx.p.strokeRect(x, y, w, h, r, n.borderWidth*s, n.borderColor)
 	}
 
 	if n.clip {
@@ -659,15 +635,11 @@ func drawChildren(dctx *drawCtx, children []node) {
 	}
 }
 
-// drawClipped draws children onto a sub-canvas covering r and composites it
-// onto dctx, confining their content to r. The sub-canvas is rasterized at
-// physical resolution on whole physical pixels, so clipped content is as sharp
-// as unclipped content.
+// drawClipped draws children with a painter limited to r, rounded to whole
+// physical pixels, confining their content to r.
 func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 	// Bitmap glyphs apply to the root image after quantization, so they are
 	// clipped to the same physical-pixel bounds.
-	// Limiting the sub-canvas to the visible region bounds its allocation by
-	// the root canvas regardless of the node's own size.
 	clip := image.Rect(
 		int(math.Round(r.x*dctx.scale)),
 		int(math.Round(r.y*dctx.scale)),
@@ -678,18 +650,9 @@ func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 		return
 	}
 
-	physDPMM := dctx.dpmm * dctx.scale
-	xMM := float64(clip.Min.X) / physDPMM
-	yMM := float64(clip.Min.Y) / physDPMM
-
-	subCvs := cv.New(float64(clip.Dx())/physDPMM, float64(clip.Dy())/physDPMM)
-	subCtx := cv.NewContext(subCvs)
-	subCtx.SetCoordSystem(cv.CartesianIV)
-	subCtx.Translate(-xMM, -yMM)
-
 	subDctx := &drawCtx{
 		rs:    dctx.rs,
-		ctx:   subCtx,
+		p:     dctx.p.sub(clip),
 		dpmm:  dctx.dpmm,
 		scale: dctx.scale,
 		roles: dctx.roles,
@@ -702,13 +665,6 @@ func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 		dctx.setErr(subDctx.err)
 	}
 	dctx.textBlits = append(dctx.textBlits, subDctx.textBlits...)
-
-	subImg := image.NewRGBA(image.Rect(0, 0, clip.Dx(), clip.Dy()))
-	if dctx.rs.stopped() {
-		return
-	}
-	subCvs.RenderTo(newVectorRenderer(subImg, physDPMM, dctx.rs))
-	dctx.ctx.DrawImage(xMM, yMM, subImg, cv.DPMM(physDPMM))
 }
 
 // --- spacerNode ---
@@ -783,8 +739,6 @@ func (n *dividerNode) draw(dctx *drawCtx) {
 	if col == nil {
 		col = Black
 	}
-	dctx.ctx.SetFillColor(col)
-	dctx.ctx.SetStrokeColor(color.Transparent)
 	var xPx, yPx float64
 	if n.isHorizontal {
 		xPx = n.bounds.x
@@ -793,11 +747,8 @@ func (n *dividerNode) draw(dctx *drawCtx) {
 		xPx = math.Round(n.bounds.x)
 		yPx = n.bounds.y
 	}
-	xMM := xPx / dctx.dpmm
-	yMM := yPx / dctx.dpmm
-	wMM := n.bounds.w / dctx.dpmm
-	hMM := n.bounds.h / dctx.dpmm
-	dctx.ctx.DrawPath(xMM, yMM, cv.Rectangle(wMM, hMM))
+	s := dctx.scale
+	dctx.p.fillRect(xPx*s, yPx*s, n.bounds.w*s, n.bounds.h*s, 0, col)
 }
 
 // --- textNode ---
@@ -808,13 +759,6 @@ type textNode struct {
 	text   string
 	style  Style // Color is always set
 	bounds nodeRect
-}
-
-// textLayout is vector text shaped by a measurement, which draw reuses so
-// text is shaped once and drawn with the lines it was measured with.
-type textLayout struct {
-	tb  *cv.Text // nil for bitmap fonts
-	wMM float64  // box width tb was laid out in; 0 for no wrapping
 }
 
 func (n *textNode) measure(mctx *measureCtx) nodeSize {
@@ -829,53 +773,10 @@ func (n *textNode) measureUncached(mctx *measureCtx) nodeSize {
 		n.lay = textLayout{}
 		return n.measureBitmap(mctx, ff)
 	}
-	// A zero width disables wrapping. It also keeps the alignment offsets of
-	// centered and right-aligned lines small, so draw can shift them exactly.
-	var wMM float64
-	if !isUnbounded(mctx.availW) {
-		wMM = mctx.availW / mctx.dpmm
-	}
-	face := ff.family.Face(n.style.Size, n.style.Color, n.style.Weight.cvStyle())
-	tb := ff.shape(func() *cv.Text { return n.textBox(face, wMM) })
-	n.lay = textLayout{tb: tb, wMM: wMM}
-	return nodeSize{w: tb.Width * mctx.dpmm, h: tb.Height * mctx.dpmm}
-}
-
-// textBox lays out the text in a box wMM millimeters wide, limited to MaxLines.
-// With TextOverflowEllipsis, text that doesn't fit is shortened to the longest
-// prefix that fits with an ellipsis appended.
-func (n *textNode) textBox(face *cv.FontFace, wMM float64) *cv.Text {
-	var heightMM float64
-	if n.style.MaxLines > 0 {
-		lineStretch := n.style.LineHeight
-		if lineStretch == 0 {
-			lineStretch = 1.0
-		}
-		heightMM = face.LineHeight() * float64(n.style.MaxLines) * lineStretch
-	}
-	opts := textOptions(n.style)
-	box := func(text string) *cv.Text {
-		return cv.NewTextBox(face, text, wMM, heightMM, cvHAlign(n.style.Align), cv.Top, opts)
-	}
-	tb := box(n.text)
-	if heightMM == 0 || n.style.Overflow != TextOverflowEllipsis || !tb.OverflowsY {
-		return tb
-	}
-	// Binary search for the longest rune prefix that fits with the ellipsis.
-	runes := []rune(n.text)
-	lo, hi := 0, len(runes)
-	best := box("…")
-	for lo < hi {
-		mid := (lo + hi + 1) / 2
-		cand := box(strings.TrimRight(string(runes[:mid]), " ") + "…")
-		if cand.OverflowsY {
-			hi = mid - 1
-		} else {
-			lo = mid
-			best = cand
-		}
-	}
-	return best
+	// Points to logical pixels.
+	size := n.style.Size * mctx.dpmm * 25.4 / 72
+	n.lay = ff.layoutText(n.text, n.style, size, mctx.availW)
+	return nodeSize{w: n.lay.width, h: n.lay.height}
 }
 
 func (n *textNode) layout(bounds nodeRect) { n.bounds = bounds }
@@ -886,33 +787,7 @@ func (n *textNode) draw(dctx *drawCtx) {
 		n.drawBitmap(dctx, ff)
 		return
 	}
-	// Lines are aligned within the measured box; move them to the laid-out one.
-	xMM := n.bounds.x / dctx.dpmm
-	switch shift := n.bounds.w/dctx.dpmm - n.lay.wMM; n.style.Align {
-	case TextAlignCenter:
-		xMM += shift / 2
-	case TextAlignRight:
-		xMM += shift
-	}
-	dctx.ctx.DrawText(xMM, n.bounds.y/dctx.dpmm, n.lay.tb)
-}
-
-func cvHAlign(a TextAlign) cv.TextAlign {
-	switch a {
-	case TextAlignCenter:
-		return cv.Center
-	case TextAlignRight:
-		return cv.Right
-	default:
-		return cv.Left
-	}
-}
-
-func textOptions(s Style) *cv.TextOptions {
-	if s.LineHeight != 0 && s.LineHeight != 1.0 {
-		return &cv.TextOptions{LineStretch: s.LineHeight - 1.0}
-	}
-	return nil
+	ff.drawText(dctx.p, &n.lay, n.style, n.bounds.x, n.bounds.y, n.bounds.w, dctx.scale)
 }
 
 // --- bitmap text ---
@@ -1151,37 +1026,51 @@ func (n *imageNode) measure(mctx *measureCtx) nodeSize {
 func (n *imageNode) layout(bounds nodeRect) { n.bounds = bounds }
 
 func (n *imageNode) draw(dctx *drawCtx) {
-	bw := n.bounds.w
-	bh := n.bounds.h
-	if bw == 0 || bh == 0 {
+	if n.bounds.w == 0 || n.bounds.h == 0 {
 		return
 	}
-	dpmm := dctx.dpmm
-	rect := cv.Rect{
-		X0: n.bounds.x / dpmm,
-		Y0: n.bounds.y / dpmm,
-		X1: (n.bounds.x + bw) / dpmm,
-		Y1: (n.bounds.y + bh) / dpmm,
-	}
+	sc := dctx.scale
+	x, y, w, h := n.bounds.x*sc, n.bounds.y*sc, n.bounds.w*sc, n.bounds.h*sc
 	img := n.img
-	var fit cv.ImageFit
+	ib := img.Bounds()
+	iw, ih := float64(ib.Dx()), float64(ib.Dy())
+	xres, yres := iw/w, ih/h // source pixels per destination pixel
 	switch n.scale {
 	case ImageFill:
-		fit = cv.ImageCover
-		// The canvas crops cover images with SubImage and panics without it.
-		if _, ok := img.(subImager); !ok {
-			img = imageView{img, img.Bounds()}
+		// Crop the source to the destination's aspect ratio, centered.
+		crop := ib
+		if xres < yres {
+			dy := int((ih-h*xres)/2 + 0.5)
+			crop.Min.Y += dy
+			crop.Max.Y -= dy
+		} else {
+			dx := int((iw-w*yres)/2 + 0.5)
+			crop.Min.X += dx
+			crop.Max.X -= dx
 		}
+		si, ok := img.(subImager)
+		if !ok {
+			si = imageView{img, ib}
+		}
+		img = si.SubImage(crop)
 	case ImageStretch:
-		fit = cv.ImageFill
 	default: // ImageFit
-		fit = cv.ImageContain
+		// Letterbox within the bounds, centered.
+		if xres < yres {
+			dx := (w - iw/yres) / 2
+			x += dx
+			w -= 2 * dx
+		} else {
+			dy := (h - ih/xres) / 2
+			y += dy
+			h -= 2 * dy
+		}
 	}
 	if n.dither == NoDithering || dctx.quant == nil {
-		dctx.ctx.FitImage(img, rect, fit)
+		dctx.p.drawImage(img, x, y, w, h)
 		return
 	}
-	n.drawDithered(dctx, img, rect, fit)
+	n.drawDithered(dctx, img, x, y, w, h)
 }
 
 type subImager interface {
@@ -1201,44 +1090,33 @@ func (v imageView) SubImage(r image.Rectangle) image.Image {
 	return imageView{v.Image, r.Intersect(v.r)}
 }
 
-// drawDithered rasterizes the image alone at physical resolution, dithers it
-// to the output palette, and draws the result 1:1 on whole physical pixels.
+// drawDithered draws the image alone onto a scratch image on whole physical
+// pixels, dithers it to the output palette, and draws the result 1:1.
 // Dithering in the draw pass leaves content drawn over the image untouched.
-func (n *imageNode) drawDithered(dctx *drawCtx, img image.Image, rect cv.Rect, fit cv.ImageFit) {
-	physDPMM := dctx.dpmm * dctx.scale
-	// Limiting the raster to the visible region bounds its allocation by the
-	// root canvas regardless of the node's own size.
+func (n *imageNode) drawDithered(dctx *drawCtx, img image.Image, x, y, w, h float64) {
+	// Limiting the scratch image to the visible region bounds its allocation
+	// by the root canvas regardless of the node's own size.
 	px := image.Rect(
-		int(math.Floor(rect.X0*physDPMM)),
-		int(math.Floor(rect.Y0*physDPMM)),
-		int(math.Ceil(rect.X1*physDPMM)),
-		int(math.Ceil(rect.Y1*physDPMM)),
+		int(math.Floor(x)),
+		int(math.Floor(y)),
+		int(math.Ceil(x+w)),
+		int(math.Ceil(y+h)),
 	).Intersect(dctx.clip)
 	if px.Empty() {
 		return
 	}
-	xMM := float64(px.Min.X) / physDPMM
-	yMM := float64(px.Min.Y) / physDPMM
-
-	subCvs := cv.New(float64(px.Dx())/physDPMM, float64(px.Dy())/physDPMM)
-	subCtx := cv.NewContext(subCvs)
-	subCtx.SetCoordSystem(cv.CartesianIV)
-	subCtx.Translate(-xMM, -yMM)
-	drawn := subCtx.FitImage(img, rect, fit)
-
-	subImg := image.NewRGBA(image.Rect(0, 0, px.Dx(), px.Dy()))
-	subCvs.RenderTo(newVectorRenderer(subImg, physDPMM, dctx.rs))
+	scratch := image.NewRGBA(px)
+	newPainter(scratch, dctx.rs).drawImage(img, x, y, w, h)
 
 	// Dither only the area the image covers, not letterboxing around it.
 	area := image.Rect(
-		int(math.Round(drawn.X0*physDPMM)),
-		int(math.Round(drawn.Y0*physDPMM)),
-		int(math.Round(drawn.X1*physDPMM)),
-		int(math.Round(drawn.Y1*physDPMM)),
-	).Sub(px.Min).Intersect(subImg.Bounds())
-	dctx.quant.ditherRGBA(subImg, area, n.dither)
-
-	dctx.ctx.DrawImage(xMM, yMM, subImg, cv.DPMM(physDPMM))
+		int(math.Round(x)),
+		int(math.Round(y)),
+		int(math.Round(x+w)),
+		int(math.Round(y+h)),
+	).Intersect(px)
+	dctx.quant.ditherRGBA(scratch, area, n.dither)
+	dctx.p.drawImage(scratch, float64(px.Min.X), float64(px.Min.Y), float64(px.Dx()), float64(px.Dy()))
 }
 
 // --- barcodeNode ---
@@ -1293,8 +1171,8 @@ func (n *barcodeNode) draw(dctx *drawCtx) {
 		dctx.setErr(fmt.Errorf("demy: barcode does not fit %dx%d pixels: %w", px.Dx(), px.Dy(), err))
 		return
 	}
-	physDPMM := dctx.dpmm * dctx.scale
-	dctx.ctx.DrawImage(float64(px.Min.X)/physDPMM, float64(px.Min.Y)/physDPMM, scaled, cv.DPMM(physDPMM))
+	sb := scaled.Bounds()
+	dctx.p.drawImage(scaled, float64(px.Min.X), float64(px.Min.Y), float64(sb.Dx()), float64(sb.Dy()))
 }
 
 // --- gridNode ---

@@ -171,8 +171,11 @@ break lines.
 A `Text` may be at most 8192 bytes of UTF-8 after sanitizing, and all text in a tree at most
 65536 bytes, counting each use of a shared node; longer text fails to render.
 
-`MaxLines` truncates text to that many lines; with `TextOverflowEllipsis` the last line is
-shortened to fit an ellipsis.
+Text is shaped with [go-text/typesetting](https://github.com/go-text/typesetting) (a HarfBuzz
+port: kerning, ligatures, and bidirectional and complex scripts) and wraps at Unicode line
+break opportunities, filling each line before starting the next. Word spacing isn't
+stretched or shrunk. `MaxLines` truncates text to that many lines; with `TextOverflowEllipsis`
+the last line is shortened to fit an ellipsis.
 
 After merging, every `Text` must have a `Font` naming a loaded family in `Config.Fonts`, and
 vector text must have a non-zero `Size` (bitmap fonts ignore it). Otherwise rendering returns
@@ -206,6 +209,10 @@ cfg.Fonts = map[string]*demy.FontFamily{"sans": ff}
 
 Weights: `FontInherit` (zero value), `FontRegular`, `FontThin`, `FontExtraLight`, `FontLight`, `FontMedium`, `FontSemiBold`,
 `FontBold`, `FontExtraBold`, `FontBlack`. OR with `FontItalic` for italics.
+
+Fonts may be TrueType or OpenType files, or the first font of a collection. A style that
+isn't loaded uses the closest loaded one, thickened for a heavier weight and slanted for
+italics.
 
 ### Bitmap fonts
 
@@ -298,7 +305,7 @@ dimensions, an effective scale outside [0.5, 64], an unknown `Config.ColorMode`,
 `Config.Palette`. `Render` returns an error for `Paletted` without a palette and for unknown
 color modes or dithering algorithms.
 
-A typical dashboard renders in about 10 ms on TRMNL Original and 40 ms on TRMNL X
+A typical dashboard renders in about 6 ms on TRMNL Original and 30 ms on TRMNL X
 (`go test -bench RenderDashboard`, Apple M-series).
 
 `Render` returns an error rather than panicking on invalid trees: sizes, gaps, padding, and
@@ -537,11 +544,11 @@ which inputs can come from untrusted sources and what bounds them.
 | XML templates (`xmlscene.Execute`, `Template.Execute`) | Yes, with plain data | The context and `MaxTemplateOutput` (4 MiB). Templates can call exported methods on the data and its fields, so pass maps, slices, and plain structs |
 | BDF fonts | Yes | Glyph size, metric, and bitmap size limits; blitted glyph area per render |
 | Starlark scripts (`plugin/starlark`) | Only with memory isolation | `MaxSteps` and the context bound time, not memory |
-| `Config` (vector fonts, images, styles), template data, and builtins added with `AddBuiltin`/`AddModule` | No | These are the host's: vector fonts are parsed by tdewolff/canvas without extra checks, and builtins run with the host's privileges |
+| `Config` (vector fonts, images, styles), template data, and builtins added with `AddBuiltin`/`AddModule` | No | These are the host's: vector fonts are parsed by go-text/typesetting without extra checks, and builtins run with the host's privileges |
 
 Apply a deadline to every untrusted render with the context passed to `Render`, `Execute`, and
 `Plugin.Render`. A render's memory grows with the canvas size, since the canvas and each
-clipped `Frame` or `Box` are rasterized to an image of at most the canvas size.
+dithered image are rasterized to an image of at most the canvas size.
 
 **Starlark memory isn't limited.** `Environment.MaxSteps` counts execution steps, and one step
 can allocate a lot: `"x" * (1 << 29)` is a single step that allocates 512 MiB. Go can't limit
@@ -553,8 +560,10 @@ WASM build of the host in a runtime with a memory cap. Send the result back with
 
 ## Dependencies
 
-Vector text and rasterization use [tdewolff/canvas](https://github.com/tdewolff/canvas), which
-brings a large dependency tree which demy never uses.
+demy depends on [go-text/typesetting](https://github.com/go-text/typesetting) for font parsing
+and text shaping, `golang.org/x/image` for rasterization and image scaling,
+[boombuler/barcode](https://github.com/boombuler/barcode) for QR codes, and
+[go.starlark.net](https://github.com/google/starlark-go) for the plugin host.
 
 ## Development
 

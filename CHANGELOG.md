@@ -16,12 +16,19 @@ Breaking changes:
   translucent, or role colors.
 - Bitmap text snaps to the nearest palette color instead of black or white, and keeps its color
   in `RGBA` and its luminance in `Grayscale` renders.
+- Text wraps greedily at Unicode line break opportunities and no longer shrinks word spacing
+  to fit, so a line that only fit with tighter spacing now wraps. Glyph edges differ slightly.
+- Fonts load with go-text/typesetting: TrueType, OpenType, and the first font of a collection.
+  WOFF and WOFF2 are no longer accepted.
 
 Other changes:
 
 - Color e-paper: palette presets `PaletteBWR`, `PaletteBWY`, `PaletteBWRY`, `PaletteSpectra6`,
   and `PaletteACeP7`, or any palette of up to 256 colors, with dithering in color.
 - `Green`, `Blue`, and `Orange` colors, also as Starlark constants.
+- Rendering no longer depends on tdewolff/canvas, which removes 23 of the 28 modules a build
+  used (X11, PDF, TeX, Markdown, and more). Text uses go-text/typesetting directly and shapes
+  the same way. Rendering is about 30% faster with far fewer allocations.
 - `xmlscene.ParseTemplate` parses a template once into a `*Template`, whose `Execute` and
   `ExecuteScene` methods can run it repeatedly and concurrently without reparsing.
 

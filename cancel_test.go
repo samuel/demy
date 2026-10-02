@@ -38,7 +38,7 @@ func TestRenderCancelEveryCheck(t *testing.T) {
 	var checks int
 	for n := 0; ; n++ {
 		ctx := &countdownCtx{Context: t.Context(), n: n}
-		_, err := c.Render(ctx, root, demy.TwoBit)
+		_, err := c.Render(ctx, root, demy.Paletted)
 		if err == nil {
 			checks = n
 			break
@@ -61,7 +61,7 @@ func TestRenderDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, err := demy.MustNew(textConfig(800, 480)).Render(ctx, demy.ZStack(demy.Children(texts...)), demy.TwoBit)
+	_, err := demy.MustNew(textConfig(800, 480)).Render(ctx, demy.ZStack(demy.Children(texts...)), demy.Paletted)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
 	}

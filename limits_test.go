@@ -3,6 +3,7 @@ package demy_test
 import (
 	"context"
 	"image"
+	"image/color"
 	"math"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ var sansFont = sync.OnceValue(func() *demy.FontFamily { return demy.MustLoadFont
 func textConfig(w, h int) demy.Config {
 	return demy.Config{
 		PixelWidth: w, PixelHeight: h, PhysicalWidthMM: float64(w), PhysicalHeightMM: float64(h),
+		Palette:          demy.PaletteGray4,
 		Fonts:            map[string]*demy.FontFamily{"sans": sansFont()},
 		DefaultTextStyle: demy.Style{Font: "sans", Size: 12},
 	}
@@ -123,22 +125,27 @@ func TestNewValidatesConfig(t *testing.T) {
 		t.Fatalf("valid config: %v", err)
 	}
 	tests := map[string]func(*demy.Config){
-		"zero width":      func(c *demy.Config) { c.PixelWidth = 0 },
-		"negative height": func(c *demy.Config) { c.PixelHeight = -1 },
-		"huge width":      func(c *demy.Config) { c.PixelWidth = 1 << 20 },
-		"negative mm":     func(c *demy.Config) { c.PhysicalWidthMM = -10 },
-		"nan mm":          func(c *demy.Config) { c.PhysicalHeightMM = math.NaN() },
-		"inf mm":          func(c *demy.Config) { c.PhysicalWidthMM = math.Inf(1) },
-		"negative scale":  func(c *demy.Config) { c.Scale = -1 },
-		"nan scale":       func(c *demy.Config) { c.Scale = math.NaN() },
-		"inf scale":       func(c *demy.Config) { c.Scale = math.Inf(1) },
-		"tiny scale":      func(c *demy.Config) { c.Scale = 1e-12 },
-		"below min scale": func(c *demy.Config) { c.Scale = 0.49 },
-		"above max scale": func(c *demy.Config) { c.Scale = 64.5 },
-		"huge scale":      func(c *demy.Config) { c.Scale = 1e300 },
-		"huge auto scale": func(c *demy.Config) { c.PhysicalWidthMM = 0.001 },
-		"bwred mode":      func(c *demy.Config) { c.ColorMode = demy.BWRed },
-		"unknown mode":    func(c *demy.Config) { c.ColorMode = demy.ColorMode(99) },
+		"zero width":           func(c *demy.Config) { c.PixelWidth = 0 },
+		"negative height":      func(c *demy.Config) { c.PixelHeight = -1 },
+		"huge width":           func(c *demy.Config) { c.PixelWidth = 1 << 20 },
+		"negative mm":          func(c *demy.Config) { c.PhysicalWidthMM = -10 },
+		"nan mm":               func(c *demy.Config) { c.PhysicalHeightMM = math.NaN() },
+		"inf mm":               func(c *demy.Config) { c.PhysicalWidthMM = math.Inf(1) },
+		"negative scale":       func(c *demy.Config) { c.Scale = -1 },
+		"nan scale":            func(c *demy.Config) { c.Scale = math.NaN() },
+		"inf scale":            func(c *demy.Config) { c.Scale = math.Inf(1) },
+		"tiny scale":           func(c *demy.Config) { c.Scale = 1e-12 },
+		"below min scale":      func(c *demy.Config) { c.Scale = 0.49 },
+		"above max scale":      func(c *demy.Config) { c.Scale = 64.5 },
+		"huge scale":           func(c *demy.Config) { c.Scale = 1e300 },
+		"huge auto scale":      func(c *demy.Config) { c.PhysicalWidthMM = 0.001 },
+		"paletted, no palette": func(c *demy.Config) { c.ColorMode = demy.Paletted },
+		"one color":            func(c *demy.Config) { c.Palette = []color.Color{demy.Black} },
+		"257 colors":           func(c *demy.Config) { c.Palette = make([]color.Color, 257) },
+		"nil color":            func(c *demy.Config) { c.Palette = []color.Color{demy.Black, nil} },
+		"translucent color":    func(c *demy.Config) { c.Palette = []color.Color{demy.Black, color.NRGBA{R: 255, A: 128}} },
+		"role color":           func(c *demy.Config) { c.Palette = []color.Color{demy.Black, demy.RoleColor{Name: "accent"}} },
+		"unknown mode":         func(c *demy.Config) { c.ColorMode = demy.ColorMode(99) },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -152,7 +159,14 @@ func TestNewValidatesConfig(t *testing.T) {
 	valid := map[string]func(*demy.Config){
 		"min scale":     func(c *demy.Config) { c.Scale = 0.5 },
 		"max scale":     func(c *demy.Config) { c.Scale = 64 },
-		"two bit mode":  func(c *demy.Config) { c.ColorMode = demy.TwoBit },
+		"paletted mode": func(c *demy.Config) { c.ColorMode, c.Palette = demy.Paletted, demy.PaletteGray4 },
+		"color palette": func(c *demy.Config) { c.Palette = demy.PaletteACeP7 },
+		"256 colors": func(c *demy.Config) {
+			c.Palette = make([]color.Color, 256)
+			for i := range c.Palette {
+				c.Palette[i] = color.RGBA{R: uint8(i), G: uint8(255 - i), A: 255}
+			}
+		},
 		"fractional":    func(c *demy.Config) { c.Scale = 1.5 },
 		"fine auto dpi": func(c *demy.Config) { c.PhysicalWidthMM = 0.5 }, // 20 px/mm → scale 4
 	}
@@ -181,12 +195,11 @@ func TestRenderValidatesModes(t *testing.T) {
 	c := demy.MustNew(textConfig(10, 10))
 	root := demy.Frame(4, 4)
 	bad := map[string]func() error{
-		"bwred":          func() error { _, err := c.Render(t.Context(), root, demy.BWRed); return err },
 		"unknown mode":   func() error { _, err := c.Render(t.Context(), root, demy.ColorMode(99)); return err },
 		"negative mode":  func() error { _, err := c.Render(t.Context(), root, demy.ColorMode(-1)); return err },
-		"unknown dither": func() error { _, err := c.Render(t.Context(), root, demy.OneBit, demy.Dither(9)); return err },
+		"unknown dither": func() error { _, err := c.Render(t.Context(), root, demy.Paletted, demy.Dither(9)); return err },
 		"image dither": func() error {
-			_, err := c.Render(t.Context(), demy.Image(image.NewGray(image.Rect(0, 0, 2, 2)), demy.Dither(9)), demy.OneBit)
+			_, err := c.Render(t.Context(), demy.Image(image.NewGray(image.Rect(0, 0, 2, 2)), demy.Dither(9)), demy.Paletted)
 			return err
 		},
 	}
@@ -197,7 +210,7 @@ func TestRenderValidatesModes(t *testing.T) {
 			}
 		})
 	}
-	for _, mode := range []demy.ColorMode{demy.RGBA, demy.Grayscale, demy.OneBit, demy.TwoBit, demy.FourBit} {
+	for _, mode := range []demy.ColorMode{demy.RGBA, demy.Grayscale, demy.Paletted} {
 		if _, err := c.Render(t.Context(), root, mode, demy.Atkinson); err != nil {
 			t.Errorf("mode %d: %v", mode, err)
 		}
@@ -213,12 +226,12 @@ func TestRenderUnsetMode(t *testing.T) {
 	if _, ok := img.(*image.RGBA); !ok {
 		t.Errorf("Unset with Unset Config.ColorMode: got %T, want *image.RGBA", img)
 	}
-	cfg.ColorMode = demy.TwoBit
+	cfg.ColorMode = demy.Paletted
 	img, err = demy.MustNew(cfg).Render(t.Context(), demy.Frame(4, 4), demy.Unset)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := img.(*image.Gray); !ok {
-		t.Errorf("Unset with TwoBit Config.ColorMode: got %T, want *image.Gray", img)
+	if _, ok := img.(*image.Paletted); !ok {
+		t.Errorf("Unset with Paletted Config.ColorMode: got %T, want *image.Paletted", img)
 	}
 }

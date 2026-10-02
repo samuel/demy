@@ -2,7 +2,6 @@ package demy
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -18,7 +17,7 @@ type textBlit struct {
 	glyph        bitmapGlyph
 	destX, destY int             // physical-pixel top-left of the glyph mask
 	scale        int             // nearest-neighbor upscale factor
-	color        color.Gray      // 0 or 255
+	color        color.RGBA      // opaque text color
 	clip         image.Rectangle // physical pixels; empty means unclipped
 }
 
@@ -53,8 +52,9 @@ func checkBlits(blits []textBlit, bounds image.Rectangle) error {
 
 // blitGlyph writes each set mask pixel of the glyph as a solid scale×scale
 // block, leaving unset pixels untouched. Only the part of the glyph inside the
-// clip is visited.
-func blitGlyph(dst draw.Image, b textBlit) {
+// clip is visited. A *image.Gray gets the color's luminance, and a
+// *image.Paletted gets the palette index idx.
+func blitGlyph(dst draw.Image, b textBlit, idx uint8) {
 	g := b.glyph
 	if g.width == 0 || g.height == 0 || len(g.bits) == 0 || b.scale < 1 {
 		return
@@ -65,12 +65,15 @@ func blitGlyph(dst draw.Image, b textBlit) {
 	}
 	var plot func(x, y int)
 	switch d := dst.(type) {
+	case *image.Paletted:
+		plot = func(x, y int) { d.Pix[d.PixOffset(x, y)] = idx }
 	case *image.Gray:
-		plot = func(x, y int) { d.Pix[d.PixOffset(x, y)] = b.color.Y }
+		lum := luminance(b.color.R, b.color.G, b.color.B)
+		plot = func(x, y int) { d.Pix[d.PixOffset(x, y)] = lum }
 	case *image.RGBA:
 		plot = func(x, y int) {
 			i := d.PixOffset(x, y)
-			d.Pix[i], d.Pix[i+1], d.Pix[i+2], d.Pix[i+3] = b.color.Y, b.color.Y, b.color.Y, 0xff
+			d.Pix[i], d.Pix[i+1], d.Pix[i+2], d.Pix[i+3] = b.color.R, b.color.G, b.color.B, 0xff
 		}
 	default:
 		plot = func(x, y int) { dst.Set(x, y, b.color) }
@@ -85,10 +88,15 @@ func blitGlyph(dst draw.Image, b textBlit) {
 	}
 }
 
-// applyBlits stamps all collected bitmap glyphs onto dst.
-func applyBlits(dst draw.Image, blits []textBlit) {
+// applyBlits stamps all collected bitmap glyphs onto dst. On a
+// *image.Paletted, each glyph takes the palette entry nearest its color.
+func applyBlits(dst draw.Image, blits []textBlit, q *quantizer) {
 	for _, b := range blits {
-		blitGlyph(dst, b)
+		var idx uint8
+		if q != nil {
+			idx = q.nearest(b.color)
+		}
+		blitGlyph(dst, b, idx)
 	}
 }
 
@@ -104,6 +112,7 @@ type Canvas struct {
 	physicalDPMM float64 // used only by the rasterizer
 	dpmm         float64 // logical; used for layout
 	scale        float64
+	quant        *quantizer // nil without Config.Palette
 }
 
 // maxPixelDimension bounds Config.PixelWidth and PixelHeight.
@@ -120,8 +129,9 @@ const (
 
 // New creates a Canvas for cfg. It returns an error unless the pixel dimensions
 // are in [1, 16384], the physical dimensions are finite and positive, the
-// effective scale is in [0.5, 64] (Scale 0 selects it automatically), and
-// ColorMode is Unset or a supported mode.
+// effective scale is in [0.5, 64] (Scale 0 selects it automatically),
+// ColorMode is Unset or a supported mode, and Config.Palette, if set or
+// required by ColorMode Paletted, has 2 to 256 opaque, concrete colors.
 func New(cfg Config) (*Canvas, error) {
 	if cfg.PixelWidth <= 0 || cfg.PixelHeight <= 0 || cfg.PixelWidth > maxPixelDimension || cfg.PixelHeight > maxPixelDimension {
 		return nil, fmt.Errorf("demy: Config pixel dimensions %dx%d out of range [1, %d]", cfg.PixelWidth, cfg.PixelHeight, maxPixelDimension)
@@ -142,11 +152,19 @@ func New(cfg Config) (*Canvas, error) {
 			return nil, err
 		}
 	}
+	var q *quantizer
+	if len(cfg.Palette) > 0 || cfg.ColorMode == Paletted {
+		var err error
+		if q, err = newQuantizer(cfg.Palette); err != nil {
+			return nil, err
+		}
+	}
 	return &Canvas{
 		cfg:          cfg,
 		physicalDPMM: cfg.PhysicalDPMM(),
 		dpmm:         cfg.DPMM(),
 		scale:        scale,
+		quant:        q,
 	}, nil
 }
 
@@ -172,8 +190,8 @@ func MustNew(cfg Config) *Canvas {
 
 // draw builds, measures, lays out, and draws root, returning the vector canvas
 // plus the bitmap glyphs to apply after quantization. Images that request
-// dithering are dithered to pal while drawing; nil pal leaves them as is.
-func (c *Canvas) draw(rs *renderState, root Node, pal []color.Gray) (*cv.Canvas, []textBlit, error) {
+// dithering are dithered with q while drawing; nil q leaves them as is.
+func (c *Canvas) draw(rs *renderState, root Node, q *quantizer) (*cv.Canvas, []textBlit, error) {
 	// Size the canvas from the pixel dimensions so millimeters map exactly onto
 	// whole pixels; PhysicalHeightMM need not match the width-derived density.
 	wMM := float64(c.cfg.PixelWidth) / c.physicalDPMM
@@ -212,14 +230,14 @@ func (c *Canvas) draw(rs *renderState, root Node, pal []color.Gray) (*cv.Canvas,
 	ctx.DrawPath(0, 0, cv.Rectangle(wMM, hMM))
 
 	dctx := &drawCtx{
-		rs:      rs,
-		ctx:     ctx,
-		dpmm:    c.dpmm,
-		scale:   c.scale,
-		roles:   c.cfg.Roles,
-		fonts:   c.cfg.Fonts,
-		palette: pal,
-		clip:    image.Rect(0, 0, c.cfg.PixelWidth, c.cfg.PixelHeight),
+		rs:    rs,
+		ctx:   ctx,
+		dpmm:  c.dpmm,
+		scale: c.scale,
+		roles: c.cfg.Roles,
+		fonts: c.cfg.Fonts,
+		quant: q,
+		clip:  image.Rect(0, 0, c.cfg.PixelWidth, c.cfg.PixelHeight),
 	}
 	internal.draw(dctx)
 	if rs.stopped() {
@@ -240,7 +258,9 @@ func (c *Canvas) rasterize(rs *renderState, cvs *cv.Canvas) *image.RGBA {
 }
 
 // Render lays out and rasterizes root. Unset mode uses Config.ColorMode, and
-// RGBA is used if that is also Unset. algo selects the dithering applied when
+// RGBA is used if that is also Unset. Paletted mode quantizes to
+// Config.Palette and returns an *image.Paletted whose palette is
+// Config.Palette in the same order. algo selects the dithering applied when
 // quantizing (default NoDithering); an ImageNode with its own Dither is
 // dithered with that algorithm instead, so images can be dithered while text
 // stays crisp.
@@ -264,9 +284,15 @@ func (c *Canvas) Render(ctx context.Context, root Node, mode ColorMode, algo ...
 	if err := algorithm.check(); err != nil {
 		return nil, err
 	}
-	pal := palette(mode)
+	var q *quantizer
+	if mode == Paletted {
+		if c.quant == nil {
+			return nil, errNoPalette
+		}
+		q = c.quant
+	}
 	rs := &renderState{ctx: ctx}
-	cvs, blits, err := c.draw(rs, root, pal)
+	cvs, blits, err := c.draw(rs, root, q)
 	if err != nil {
 		return nil, err
 	}
@@ -277,48 +303,24 @@ func (c *Canvas) Render(ctx context.Context, root Node, mode ColorMode, algo ...
 	if rs.stopped() {
 		return nil, rs.stopErr()
 	}
-	if mode == RGBA {
-		applyBlits(rgba, blits)
-		return rgba, nil
+	var out draw.Image
+	switch mode {
+	case RGBA:
+		out = rgba
+	case Grayscale:
+		out = toGray(rgba)
+	default:
+		out = q.paletted(rgba, algorithm)
 	}
-
-	gray := toGray(rgba)
-	if pal == nil {
-		applyBlits(gray, blits)
-		return gray, nil
-	}
-
-	out := applyDither(gray, pal, algorithm)
-	applyBlits(out, blits)
+	applyBlits(out, blits, q)
 	return out, nil
 }
 
-// palette returns the gray levels mode quantizes to, or nil when mode does
-// not quantize.
-func palette(mode ColorMode) []color.Gray {
-	switch mode {
-	case OneBit:
-		return []color.Gray{{Y: 0}, {Y: 255}}
-	case TwoBit:
-		return []color.Gray{{Y: 0}, {Y: 85}, {Y: 170}, {Y: 255}}
-	case FourBit:
-		pal := make([]color.Gray, 16)
-		for i := range 16 {
-			pal[i] = color.Gray{Y: uint8(i * 17)}
-		}
-		return pal
-	default:
-		return nil
-	}
-}
-
-// check reports an error for an unknown mode or one that isn't implemented.
+// check reports an error for an unknown mode.
 func (m ColorMode) check() error {
 	switch m {
-	case RGBA, Grayscale, OneBit, TwoBit, FourBit:
+	case RGBA, Grayscale, Paletted:
 		return nil
-	case BWRed:
-		return errors.New("demy: color mode BWRed is not implemented")
 	default:
 		return fmt.Errorf("demy: unknown color mode %d", int(m))
 	}
@@ -331,17 +333,5 @@ func (d Dither) check() error {
 		return nil
 	default:
 		return fmt.Errorf("demy: unknown dithering algorithm %d", int(d))
-	}
-}
-
-// applyDither quantizes a grayscale image to pal using the given algorithm.
-func applyDither(src *image.Gray, pal []color.Gray, algo Dither) *image.Gray {
-	switch algo {
-	case FloydSteinberg:
-		return ditherFloydSteinberg(src, pal)
-	case Atkinson:
-		return ditherAtkinson(src, pal)
-	default:
-		return ditherNone(src, pal)
 	}
 }

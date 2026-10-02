@@ -83,7 +83,7 @@ func TestFrameDither(t *testing.T) {
 		}
 	}
 	n := demy.Frame(40, 40, demy.Image(src, demy.ImageStretch, demy.FloydSteinberg))
-	img := render(t, n, 40, 40, demy.OneBit, demy.Config{})
+	img := render(t, n, 40, 40, demy.Paletted, demy.Config{Palette: demy.PaletteBW})
 
 	var black, white int
 	for y := range 40 {

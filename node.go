@@ -93,7 +93,7 @@ type drawCtx struct {
 	scale     float64
 	roles     Roles
 	fonts     map[string]*FontFamily
-	palette   []color.Gray // output palette for per-image dithering; nil when not quantizing
+	quant     *quantizer // output palette for per-image dithering; nil when not quantizing
 	textBlits []textBlit
 	clip      image.Rectangle // physical-pixel clip for bitmap text and clipped sub-canvases
 	err       error           // first error encountered while drawing
@@ -688,14 +688,14 @@ func drawClipped(dctx *drawCtx, r nodeRect, children []node) {
 	subCtx.Translate(-xMM, -yMM)
 
 	subDctx := &drawCtx{
-		rs:      dctx.rs,
-		ctx:     subCtx,
-		dpmm:    dctx.dpmm,
-		scale:   dctx.scale,
-		roles:   dctx.roles,
-		fonts:   dctx.fonts,
-		palette: dctx.palette,
-		clip:    clip,
+		rs:    dctx.rs,
+		ctx:   subCtx,
+		dpmm:  dctx.dpmm,
+		scale: dctx.scale,
+		roles: dctx.roles,
+		fonts: dctx.fonts,
+		quant: dctx.quant,
+		clip:  clip,
 	}
 	drawChildren(subDctx, children)
 	if subDctx.err != nil {
@@ -961,7 +961,7 @@ func (n *textNode) drawBitmap(dctx *drawCtx, ff *FontFamily) {
 	if bf == nil {
 		return
 	}
-	col := snapBitmapColor(n.style.Color)
+	col := opaqueRGBA(n.style.Color)
 
 	iscale := bitmapIntScale(dctx.scale)
 	lines := layoutBitmapText(bf, n.text, n.bounds.w/bitmapUnit(dctx.scale), n.style)
@@ -1097,13 +1097,11 @@ func bmpLineWidth(bf *bitmapFont, runes []rune) int {
 	return w
 }
 
-// snapBitmapColor snaps a color to black or white by luminance.
-func snapBitmapColor(c color.Color) color.Gray {
-	gy := color.GrayModel.Convert(c).(color.Gray)
-	if gy.Y < 128 {
-		return color.Gray{Y: 0}
-	}
-	return color.Gray{Y: 255}
+// opaqueRGBA returns c without its alpha. Bitmap text is drawn without
+// blending, and Render snaps it to the palette when quantizing.
+func opaqueRGBA(c color.Color) color.RGBA {
+	n := color.NRGBAModel.Convert(c).(color.NRGBA) //nolint:forcetypeassert // NRGBAModel returns color.NRGBA
+	return color.RGBA{R: n.R, G: n.G, B: n.B, A: 0xff}
 }
 
 // --- imageNode ---
@@ -1179,7 +1177,7 @@ func (n *imageNode) draw(dctx *drawCtx) {
 	default: // ImageFit
 		fit = cv.ImageContain
 	}
-	if n.dither == NoDithering || dctx.palette == nil {
+	if n.dither == NoDithering || dctx.quant == nil {
 		dctx.ctx.FitImage(img, rect, fit)
 		return
 	}
@@ -1238,7 +1236,7 @@ func (n *imageNode) drawDithered(dctx *drawCtx, img image.Image, rect cv.Rect, f
 		int(math.Round(drawn.X1*physDPMM)),
 		int(math.Round(drawn.Y1*physDPMM)),
 	).Sub(px.Min).Intersect(subImg.Bounds())
-	ditherRGBA(subImg, area, dctx.palette, n.dither)
+	dctx.quant.ditherRGBA(subImg, area, n.dither)
 
 	dctx.ctx.DrawImage(xMM, yMM, subImg, cv.DPMM(physDPMM))
 }

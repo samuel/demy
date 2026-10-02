@@ -35,6 +35,9 @@ var (
 	White     = color.Gray{Y: 255}
 	Red       = color.RGBA{R: 255, A: 255}
 	Yellow    = color.RGBA{R: 255, G: 255, A: 255}
+	Green     = color.RGBA{G: 255, A: 255}
+	Blue      = color.RGBA{B: 255, A: 255}
+	Orange    = color.RGBA{R: 255, G: 128, A: 255}
 )
 
 // Roles maps semantic color names to concrete display colors.
@@ -254,8 +257,11 @@ type Config struct {
 	// the pixel density (1 for ~125 PPI displays, 2 for ~250 PPI). The
 	// effective scale must be in [0.5, 64].
 	Scale float64
-	// Palette lists the display's colors. Render quantizes using the
-	// palette implied by ColorMode, not this field.
+	// Palette lists the display's colors, which Paletted mode quantizes
+	// to. The rendered image's palette indices follow this order, so list
+	// the colors in the order the display's driver numbers them. Use the
+	// colors the panel actually shows (often duller than pure sRGB) for
+	// closer dithering; the indices stay the same.
 	Palette          []color.Color
 	Roles            Roles
 	ColorMode        ColorMode              // default mode when Render is called with Unset
@@ -411,21 +417,18 @@ const (
 
 func (ZAlignment) demyOption() {}
 
-// ColorMode controls the bit depth and palette of the rendered image.
+// ColorMode selects the format of the rendered image.
 type ColorMode int
 
 const (
 	Unset     ColorMode = iota // use Config.ColorMode
-	RGBA                       // 32-bit RGBA
-	Grayscale                  // 8-bit grayscale
-	OneBit                     // black/white
-	TwoBit                     // 4 gray levels
-	FourBit                    // 16 gray levels
-	BWRed                      // black/white/red; not yet implemented, so New and Render return an error
+	RGBA                       // full color, unquantized (*image.RGBA)
+	Grayscale                  // 8-bit luminance, unquantized (*image.Gray)
+	Paletted                   // quantized to Config.Palette (*image.Paletted)
 )
 
-// Dither selects the dithering algorithm used when quantizing to OneBit,
-// TwoBit, or FourBit.
+// Dither selects the dithering algorithm used when quantizing to
+// Config.Palette.
 type Dither int
 
 const (

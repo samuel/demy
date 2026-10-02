@@ -5,6 +5,23 @@ changes; they are called out under each release.
 
 ## Unreleased
 
+Breaking changes:
+
+- `ColorMode` is now `RGBA`, `Grayscale`, or `Paletted`. `OneBit`, `TwoBit`, `FourBit`, and
+  `BWRed` are removed; `Paletted` quantizes to `Config.Palette` and returns an
+  `*image.Paletted` whose indices follow `Config.Palette`. Use `PaletteBW`, `PaletteGray4`, or
+  `PaletteGray16` for the old gray modes; they produce the same pixels. `TRMNLOriginal` and
+  `TRMNLX` use `Paletted` with `PaletteGray4` and `PaletteGray16`.
+- `New` rejects a `Config.Palette` with fewer than 2 or more than 256 colors, or with nil,
+  translucent, or role colors.
+- Bitmap text snaps to the nearest palette color instead of black or white, and keeps its color
+  in `RGBA` and its luminance in `Grayscale` renders.
+
+Other changes:
+
+- Color e-paper: palette presets `PaletteBWR`, `PaletteBWY`, `PaletteBWRY`, `PaletteSpectra6`,
+  and `PaletteACeP7`, or any palette of up to 256 colors, with dithering in color.
+- `Green`, `Blue`, and `Orange` colors, also as Starlark constants.
 - `xmlscene.ParseTemplate` parses a template once into a `*Template`, whose `Execute` and
   `ExecuteScene` methods can run it repeatedly and concurrently without reparsing.
 

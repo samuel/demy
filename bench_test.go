@@ -51,10 +51,12 @@ func dashboard() demy.Node {
 
 func BenchmarkRenderDashboard(b *testing.B) {
 	fonts := map[string]*demy.FontFamily{"sans": demy.MustLoadFontBytes("sans", goregular.TTF)}
+	bwry := demy.TRMNLOriginal
+	bwry.Palette = demy.PaletteBWRY
 	for _, preset := range []struct {
 		name string
 		cfg  demy.Config
-	}{{"Original", demy.TRMNLOriginal}, {"X", demy.TRMNLX}} {
+	}{{"Original", demy.TRMNLOriginal}, {"X", demy.TRMNLX}, {"OriginalBWRY", bwry}} {
 		b.Run(preset.name, func(b *testing.B) {
 			cfg := preset.cfg
 			cfg.Fonts = fonts
@@ -62,7 +64,7 @@ func BenchmarkRenderDashboard(b *testing.B) {
 			root := dashboard()
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := c.Render(b.Context(), root, demy.TwoBit); err != nil {
+				if _, err := c.Render(b.Context(), root, demy.Paletted); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -96,7 +98,7 @@ func BenchmarkRenderNested(b *testing.B) {
 				root = w.wrap(root)
 			}
 			for b.Loop() {
-				if _, err := c.Render(b.Context(), root, demy.TwoBit); err != nil {
+				if _, err := c.Render(b.Context(), root, demy.Paletted); err != nil {
 					b.Fatal(err)
 				}
 			}

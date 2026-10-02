@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"image/color"
 	"image/png"
 	"io"
 	"log"
@@ -97,6 +98,22 @@ func lessonsHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.MarshalWrite(w, tutorialLessons)
 }
 
+// palettes are the output palettes the UI offers, by mode name. Color
+// palettes show the accent role in a panel color.
+var palettes = map[string]struct {
+	colors []color.Color
+	accent color.Color
+}{
+	"bw":       {colors: demy.PaletteBW},
+	"gray4":    {colors: demy.PaletteGray4},
+	"gray16":   {colors: demy.PaletteGray16},
+	"bwr":      {colors: demy.PaletteBWR, accent: demy.Red},
+	"bwy":      {colors: demy.PaletteBWY, accent: demy.Yellow},
+	"bwry":     {colors: demy.PaletteBWRY, accent: demy.Red},
+	"spectra6": {colors: demy.PaletteSpectra6, accent: demy.Red},
+	"acep7":    {colors: demy.PaletteACeP7, accent: demy.Red},
+}
+
 func renderHandler(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
@@ -115,6 +132,19 @@ func renderHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := baseCfg
+	colorMode := demy.Grayscale
+	if mode := r.URL.Query().Get("mode"); mode != "" && mode != "grayscale" {
+		p, ok := palettes[mode]
+		if !ok {
+			writeJSONError(w, fmt.Errorf("unknown mode %q", mode), http.StatusBadRequest)
+			return
+		}
+		colorMode = demy.Paletted
+		cfg.Palette = p.colors
+		if p.accent != nil {
+			cfg.Roles.Accent = p.accent
+		}
+	}
 	if len(sceneStyles) > 0 {
 		cfg.Styles = make(map[string]demy.Style, len(sceneStyles))
 		maps.Copy(cfg.Styles, sceneStyles)
@@ -123,14 +153,6 @@ func renderHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSONError(w, fmt.Errorf("creating canvas: %w", err), http.StatusInternalServerError)
 		return
-	}
-
-	colorMode := demy.Grayscale
-	switch r.URL.Query().Get("mode") {
-	case "2bit":
-		colorMode = demy.TwoBit
-	case "1bit":
-		colorMode = demy.OneBit
 	}
 
 	ditherAlgo := demy.NoDithering

@@ -191,7 +191,7 @@ func TestBlitGlyphClipped(t *testing.T) {
 	// covering [-2, 4) on both axes, clipped to x < 3.
 	b := textBlit{
 		glyph: bitmapGlyph{width: 2, height: 2, bits: []byte{0x80, 0x40}},
-		destX: -2, destY: -2, scale: 3,
+		destX: -2, destY: -2, scale: 3, color: color.RGBA{A: 0xff},
 		clip: image.Rect(0, 0, 3, 8),
 	}
 	want := func(x, y int) bool { return x < 3 && (x < 1) == (y < 1) && y < 4 }
@@ -199,9 +199,10 @@ func TestBlitGlyphClipped(t *testing.T) {
 		image.NewGray(image.Rect(0, 0, 8, 8)),
 		image.NewRGBA(image.Rect(0, 0, 8, 8)),
 		image.NewNRGBA(image.Rect(0, 0, 8, 8)),
+		image.NewPaletted(image.Rect(0, 0, 8, 8), color.Palette{Black, White}),
 	} {
 		draw.Draw(dst, dst.Bounds(), image.White, image.Point{}, draw.Src)
-		blitGlyph(dst, b)
+		blitGlyph(dst, b, 0)
 		for y := range 8 {
 			for x := range 8 {
 				got := color.GrayModel.Convert(dst.At(x, y)).(color.Gray).Y == 0 //nolint:forcetypeassert // GrayModel returns color.Gray

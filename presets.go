@@ -2,6 +2,26 @@ package demy
 
 import "image/color"
 
+// Palette presets for common e-paper panels. Colored palettes follow the
+// order most panels number their colors in, but drivers differ; check the
+// panel's documentation and build a palette in its order when it doesn't match.
+var (
+	PaletteBW     = []color.Color{Black, White}
+	PaletteGray4  = []color.Color{Black, DarkGray, LightGray, White}
+	PaletteGray16 = func() []color.Color {
+		pal := make([]color.Color, 16)
+		for i := range pal {
+			pal[i] = color.Gray{Y: uint8(i * 0x11)}
+		}
+		return pal
+	}()
+	PaletteBWR      = []color.Color{Black, White, Red}
+	PaletteBWY      = []color.Color{Black, White, Yellow}
+	PaletteBWRY     = []color.Color{Black, White, Yellow, Red}
+	PaletteSpectra6 = []color.Color{Black, White, Yellow, Red, Blue, Green}
+	PaletteACeP7    = []color.Color{Black, White, Green, Blue, Red, Yellow, Orange}
+)
+
 // TRMNLOriginal is the preset Config for the TRMNL Original display (800×480 px, ~163×98 mm).
 var TRMNLOriginal = Config{
 	PixelWidth:       800,
@@ -9,8 +29,8 @@ var TRMNLOriginal = Config{
 	PhysicalWidthMM:  163,
 	PhysicalHeightMM: 98,
 	Scale:            1,
-	ColorMode:        TwoBit,
-	Palette:          []color.Color{Black, DarkGray, LightGray, White},
+	ColorMode:        Paletted,
+	Palette:          PaletteGray4,
 	Roles: Roles{
 		Foreground: Black,
 		Background: White,
@@ -26,13 +46,8 @@ var TRMNLX = Config{
 	PhysicalWidthMM:  209,
 	PhysicalHeightMM: 157,
 	Scale:            2,
-	ColorMode:        FourBit,
-	Palette: []color.Color{
-		color.Gray{Y: 0x00}, color.Gray{Y: 0x11}, color.Gray{Y: 0x22}, color.Gray{Y: 0x33},
-		color.Gray{Y: 0x44}, color.Gray{Y: 0x55}, color.Gray{Y: 0x66}, color.Gray{Y: 0x77},
-		color.Gray{Y: 0x88}, color.Gray{Y: 0x99}, color.Gray{Y: 0xAA}, color.Gray{Y: 0xBB},
-		color.Gray{Y: 0xCC}, color.Gray{Y: 0xDD}, color.Gray{Y: 0xEE}, color.Gray{Y: 0xFF},
-	},
+	ColorMode:        Paletted,
+	Palette:          PaletteGray16,
 	Roles: Roles{
 		Foreground: Black,
 		Background: White,

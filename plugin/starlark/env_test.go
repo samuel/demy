@@ -96,7 +96,7 @@ def render(d):
 					t.Error(err)
 					return
 				}
-				if _, err := c.Render(t.Context(), n, demy.TwoBit); err != nil {
+				if _, err := c.Render(t.Context(), n, demy.Paletted); err != nil {
 					t.Error(err)
 					return
 				}

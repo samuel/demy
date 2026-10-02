@@ -8,8 +8,9 @@ A declarative rendering library for e-ink and similar displays.
 
 - **Declarative layout**: `VStack`, `HStack`, `ZStack`, `Grid`, `Box`, `Frame`, `Spacer`, `Weighted`, `Divider`
 - **Widgets**: `Text` (shaped, wrapped, vector or bitmap fonts), `Image` (fit/fill/stretch), `Barcode` (QR)
-- **E-ink output**: 1-bit, 2-bit, 4-bit, and grayscale quantization; Floyd-Steinberg and Atkinson
-  dithering, globally or per image
+- **E-paper output**: quantization to any palette of up to 256 colors (gray ramps, BWR, BWRY,
+  Spectra 6, ACeP 7, or a panel's measured colors) as an indexed image; Floyd-Steinberg and
+  Atkinson dithering, globally or per image
 - **Device presets**: `TRMNLOriginal` (800×480) and `TRMNLX` (1872×1407)
 - **Semantic color roles**: foreground/background/accent/muted
 - **Serialization**: JSON (`scene/jsonscene`) and XML with `text/template` support (`scene/xmlscene`)
@@ -58,7 +59,7 @@ root := demy.VStack(demy.Gap(4), demy.Padding(8),
     ),
 )
 
-img, err := c.Render(context.Background(), root, demy.TwoBit)
+img, err := c.Render(context.Background(), root, demy.Unset) // the preset's 4-gray palette
 if err != nil {
     log.Fatal(err)
 }
@@ -220,7 +221,8 @@ demy.Text("Crisp pixels", demy.Style{Font: "pixel"})
 ```
 
 - `Style.Size` is ignored; glyphs render at their native size × `Scale` (nearest-neighbor).
-- Color snaps to black or white by luminance.
+- Color snaps to the nearest palette color when quantizing (so red text stays red on a BWR
+  panel); unquantized renders use the color as is, without blending.
 - Missing glyphs fall back to the font's `DEFAULT_CHAR`.
 - Bitmap text is composited after everything else, so it always draws on top. Only `Frame`
   and `Box` with `Clip` clip it.
@@ -233,7 +235,8 @@ demy.Text("Crisp pixels", demy.Style{Font: "pixel"})
 ## Colors
 
 ```go
-demy.Black, demy.DarkGray, demy.LightGray, demy.White, demy.Red, demy.Yellow
+demy.Black, demy.DarkGray, demy.LightGray, demy.White
+demy.Red, demy.Yellow, demy.Green, demy.Blue, demy.Orange
 
 cfg.Roles.Foreground, cfg.Roles.Background, cfg.Roles.Accent, cfg.Roles.Muted
 
@@ -274,25 +277,26 @@ correction levels: `ECLevelLow` (~7%), `ECLevelMedium` (~15%, default), `ECLevel
 ## Rendering
 
 ```go
-img, err := c.Render(ctx, root, mode)                // mode: RGBA, Grayscale, OneBit, TwoBit, FourBit (BWRed is not implemented)
+img, err := c.Render(ctx, root, mode)                // mode: RGBA, Grayscale, Paletted
 img, err := c.Render(ctx, root, demy.Unset)          // use Config.ColorMode
-img, err := c.Render(ctx, root, demy.TwoBit, demy.Atkinson) // dither the whole scene
+img, err := c.Render(ctx, root, demy.Paletted, demy.Atkinson) // dither the whole scene
 ```
 
 `Render` stops when `ctx` is done and returns an error wrapping the context's error, so
 `errors.Is(err, context.DeadlineExceeded)` reports a timeout. It checks the context for each
 node it builds, measures, lays out, and draws, and for each path and image it rasterizes.
 
-`Render` returns an `*image.RGBA` for `RGBA` and an `*image.Gray` otherwise, with quantized modes
-snapped to the palette's gray levels. Encode it with `image/png` or any other encoder.
-Translucent pixels (e.g. a translucent `Roles.Background`) are composited over white when
-converting to grayscale. `Render` is safe to call from multiple goroutines, and fonts can be
+`Render` returns an `*image.RGBA` for `RGBA`, an `*image.Gray` for `Grayscale`, and an
+`*image.Paletted` for `Paletted`. Encode it with `image/png` or any other encoder; `image/png`
+writes a paletted image as a 1-, 2-, 4-, or 8-bit indexed PNG. Translucent pixels (e.g. a
+translucent `Roles.Background`) are composited over white when converting to grayscale or
+quantizing. `Render` is safe to call from multiple goroutines, and fonts can be
 shared between canvases. `New` copies the `Config` but shares its maps and slices (`Fonts`,
 `Images`, `Styles`, `Palette`), so don't modify them, or call `AddStyle`/`AddStyleBDF` on a
 font, after the first `Render`. `New` rejects pixel dimensions outside 1–16384, non-positive physical
-dimensions, an effective scale outside [0.5, 64], and an unsupported `Config.ColorMode`.
-`Render` returns an error for `BWRed` (not yet implemented) and for unknown color modes or
-dithering algorithms.
+dimensions, an effective scale outside [0.5, 64], an unknown `Config.ColorMode`, and an invalid
+`Config.Palette`. `Render` returns an error for `Paletted` without a palette and for unknown
+color modes or dithering algorithms.
 
 A typical dashboard renders in about 10 ms on TRMNL Original and 40 ms on TRMNL X
 (`go test -bench RenderDashboard`, Apple M-series).
@@ -309,7 +313,7 @@ limit.
 ### Per-image dithering
 
 Rendering without global dithering keeps text crisp. Images can opt into dithering of their
-own pixels in `OneBit`, `TwoBit`, and `FourBit` modes. The image is dithered as it is drawn,
+own pixels in `Paletted` mode. The image is dithered as it is drawn,
 so text and shapes layered over it in a `ZStack` stay crisp. A translucent image is dithered
 on its own colors and then blended with what lies beneath it.
 
@@ -318,8 +322,40 @@ root := demy.VStack(
     demy.Text("Headline", title),
     demy.Image(photo, demy.Atkinson), // or demy.FloydSteinberg
 )
-img, err := c.Render(ctx, root, demy.TwoBit)
+img, err := c.Render(ctx, root, demy.Paletted)
 ```
+
+### Palettes
+
+`Paletted` mode quantizes to `Config.Palette`, a list of 2 to 256 opaque colors. The rendered
+`*image.Paletted` uses the same palette in the same order, so a driver can send each pixel's
+index to the panel without matching colors. Presets cover common panels:
+
+| Preset | Colors |
+| --- | --- |
+| `PaletteBW` | black, white |
+| `PaletteGray4` | 4 grays (`TRMNLOriginal`) |
+| `PaletteGray16` | 16 grays (`TRMNLX`) |
+| `PaletteBWR`, `PaletteBWY` | black, white, red or yellow |
+| `PaletteBWRY` | black, white, yellow, red |
+| `PaletteSpectra6` | black, white, yellow, red, blue, green |
+| `PaletteACeP7` | black, white, green, blue, red, yellow, orange |
+
+```go
+cfg := demy.TRMNLOriginal
+cfg.Palette = demy.PaletteBWR
+cfg.Roles.Accent = demy.Red
+```
+
+Panels number their colors differently. Check the driver and list the colors in its order.
+Real inks are often duller than pure sRGB colors; listing the colors a panel actually shows
+(e.g. `color.RGBA{0xa0, 0x30, 0x2e, 0xff}` for a Spectra 6 red) gives closer dithering, and the
+indices stay the same.
+
+Palettes of only grays are matched by luminance. Other palettes are matched in OKLab, weighted
+toward hue so grays (such as antialiased text edges) don't turn into a color of similar
+lightness. Error diffusion is limited so a color the palette can't approach doesn't streak
+across the image.
 
 ## JSON scenes (`scene/jsonscene`)
 
@@ -468,7 +504,7 @@ Globals:
 | Alignment | `AlignStart`, `AlignCenter`, `AlignEnd`; `TopLeading` … `BottomTrailing` |
 | Images | `ImageFit`, `ImageFill`, `ImageStretch`, `FloydSteinberg`, `Atkinson` |
 | Barcodes | `BarcodeTypeQR`, `ECLevelLow`, `ECLevelMedium`, `ECLevelQuartile`, `ECLevelHigh` |
-| Colors | `Foreground`, `Accent`, `Muted` (roles); `Black`, `DarkGray`, `LightGray`, `White`, `Red`, `Yellow` |
+| Colors | `Foreground`, `Accent`, `Muted` (roles); `Black`, `DarkGray`, `LightGray`, `White`, `Red`, `Yellow`, `Green`, `Blue`, `Orange` |
 | Time | `now()` with `.year` `.month` `.day` `.hour` `.minute` `.second` `.weekday` (0=Sun) `.weekday_name` `.timezone` `.unix` `.format(layout)` (Go layout, e.g. `"Mon Jan 2 15:04"`) |
 | Styles | each `Config.Styles` entry, capitalized (`"h1"` → `H1`), unless the name isn't an identifier or would shadow a builtin; use `Class(name)` for those |
 

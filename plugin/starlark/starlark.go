@@ -70,7 +70,7 @@
 //	BarcodeType:  BarcodeTypeQR
 //	ECLevel:      ECLevelLow, ECLevelMedium, ECLevelQuartile, ECLevelHigh
 //	Colors:       Foreground, Accent, Muted (role names), Black, DarkGray, LightGray,
-//	              White, Red, Yellow (hex strings)
+//	              White, Red, Yellow, Green, Blue, Orange (hex strings)
 //	Time:         now() → time value with .year .month .day .hour .minute .second
 //	              .weekday (0=Sun) .weekday_name .timezone .unix and .format(layout),
 //	              where layout is a Go time layout such as "Mon Jan 2 15:04"
@@ -557,6 +557,9 @@ func newEnv(cfg demy.Config, loc *time.Location, now func() time.Time) sl.String
 		"White":     colorHex(demy.White),
 		"Red":       colorHex(demy.Red),
 		"Yellow":    colorHex(demy.Yellow),
+		"Green":     colorHex(demy.Green),
+		"Blue":      colorHex(demy.Blue),
+		"Orange":    colorHex(demy.Orange),
 		// Time
 		"now": positional("now", func(args sl.Tuple) (sl.Value, error) {
 			if len(args) != 0 {

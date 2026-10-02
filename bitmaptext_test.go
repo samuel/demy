@@ -2,12 +2,13 @@ package demy
 
 import (
 	"image"
+	"image/color"
 	"testing"
 )
 
-// renderBitmap renders root with a bitmap font registered as "px" and returns
-// the quantized grayscale result.
-func renderBitmap(t *testing.T, root Node, w, h int, scale float64, mode ColorMode) *image.Gray {
+// renderBitmap renders root with a bitmap font registered as "px", quantized
+// to pal, and returns the luminance of each pixel.
+func renderBitmap(t *testing.T, root Node, w, h int, scale float64, pal []color.Color) *image.Gray {
 	t.Helper()
 	cfg := Config{
 		PixelWidth:       w,
@@ -17,21 +18,26 @@ func renderBitmap(t *testing.T, root Node, w, h int, scale float64, mode ColorMo
 		Scale:            scale,
 		Fonts:            map[string]*FontFamily{"px": MustLoadBitmapFontBDF("px", []byte(testBDF))},
 		Roles:            Roles{Background: White, Foreground: Black},
+		Palette:          pal,
 	}
 	c := MustNew(cfg)
-	img, err := c.Render(t.Context(), root, mode)
+	img, err := c.Render(t.Context(), root, Paletted)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	g, ok := img.(*image.Gray)
+	p, ok := img.(*image.Paletted)
 	if !ok {
-		t.Fatalf("expected *image.Gray, got %T", img)
+		t.Fatalf("expected *image.Paletted, got %T", img)
+	}
+	g := image.NewGray(p.Rect)
+	for i, idx := range p.Pix {
+		g.Pix[i] = color.GrayModel.Convert(p.Palette[idx]).(color.Gray).Y //nolint:forcetypeassert // GrayModel returns color.Gray
 	}
 	return g
 }
 
 func TestBitmapTextScale1(t *testing.T) {
-	g := renderBitmap(t, Text("A", Style{Font: "px", Color: Black}), 64, 32, 1, OneBit)
+	g := renderBitmap(t, Text("A", Style{Font: "px", Color: Black}), 64, 32, 1, PaletteBW)
 
 	// 'A' row 0 = 0x18 -> columns 3 and 4 set; everything else clear.
 	if g.GrayAt(3, 0).Y != 0 || g.GrayAt(4, 0).Y != 0 {
@@ -58,7 +64,7 @@ func TestBitmapTextScale1(t *testing.T) {
 
 func TestBitmapTextScale2(t *testing.T) {
 	// Scale=2 (retina): each font pixel becomes a 2x2 nearest-neighbor block.
-	g := renderBitmap(t, Text("A", Style{Font: "px", Color: Black}), 64, 32, 2, OneBit)
+	g := renderBitmap(t, Text("A", Style{Font: "px", Color: Black}), 64, 32, 2, PaletteBW)
 
 	// Font pixel (3,0) -> physical block cols 6-7, rows 0-1; (4,0) -> cols 8-9.
 	for _, p := range []image.Point{{6, 0}, {7, 0}, {6, 1}, {7, 1}, {8, 0}, {9, 1}} {
@@ -75,13 +81,13 @@ func TestBitmapTextScale2(t *testing.T) {
 }
 
 func TestBitmapTextPureAcrossModes(t *testing.T) {
-	for _, mode := range []ColorMode{OneBit, TwoBit, FourBit} {
-		g := renderBitmap(t, Text("A", Style{Font: "px", Color: Black}), 64, 32, 1, mode)
+	for name, pal := range map[string][]color.Color{"bw": PaletteBW, "gray4": PaletteGray4, "gray16": PaletteGray16, "bwr": PaletteBWR} {
+		g := renderBitmap(t, Text("A", Style{Font: "px", Color: Black}), 64, 32, 1, pal)
 		if got := g.GrayAt(3, 0).Y; got != 0 {
-			t.Errorf("mode %d: text pixel = %d, want 0", mode, got)
+			t.Errorf("%s: text pixel = %d, want 0", name, got)
 		}
 		if got := g.GrayAt(0, 0).Y; got != 255 {
-			t.Errorf("mode %d: background pixel = %d, want 255", mode, got)
+			t.Errorf("%s: background pixel = %d, want 255", name, got)
 		}
 	}
 }
@@ -97,7 +103,7 @@ func TestBitmapTextOverDither(t *testing.T) {
 
 	// Precondition: a light-gray image dithers to mostly white, so the glyph
 	// region is NOT already solid black from dithering alone.
-	bg := renderBitmap(t, Image(mkImg(), FloydSteinberg), 64, 32, 1, OneBit)
+	bg := renderBitmap(t, Image(mkImg(), FloydSteinberg), 64, 32, 1, PaletteBW)
 	anyWhite := false
 	for d := range 6 {
 		if bg.GrayAt(d+1, 3).Y == 255 {
@@ -112,7 +118,7 @@ func TestBitmapTextOverDither(t *testing.T) {
 	// proving blits are composited after quantization (text wins).
 	over := renderBitmap(t,
 		ZStack(Image(mkImg(), FloydSteinberg), Text("A", Style{Font: "px", Color: Black})),
-		64, 32, 1, OneBit)
+		64, 32, 1, PaletteBW)
 	for d := range 6 {
 		if got := over.GrayAt(d+1, 3).Y; got != 0 {
 			t.Errorf("text-over-dither pixel (%d,3) = %d, want 0", d+1, got)
@@ -130,7 +136,7 @@ func TestBitmapTextClipped(t *testing.T) {
 	}
 	for name, wrap := range wrappers {
 		for _, scale := range []int{1, 2} {
-			g := renderBitmap(t, HStack(Frame(3, 8), Children(wrap())), 32*scale, 16*scale, float64(scale), OneBit)
+			g := renderBitmap(t, HStack(Frame(3, 8), Children(wrap())), 32*scale, 16*scale, float64(scale), PaletteBW)
 			clip := image.Rect(3*scale, 0, 7*scale, 8*scale)
 			// 'A' row 3 = 0x7E sets glyph columns 1..6, i.e. logical x 4..9.
 			if got := g.GrayAt(5*scale, 3*scale).Y; got != 0 {
@@ -143,6 +149,31 @@ func TestBitmapTextClipped(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+func TestBitmapTextPaletteColor(t *testing.T) {
+	cfg := Config{
+		PixelWidth: 64, PixelHeight: 32, PhysicalWidthMM: 64, PhysicalHeightMM: 32,
+		Fonts:   map[string]*FontFamily{"px": MustLoadBitmapFontBDF("px", []byte(testBDF))},
+		Palette: PaletteBWR,
+	}
+	c := MustNew(cfg)
+	for _, tt := range []struct {
+		mode ColorMode
+		want color.Color
+	}{
+		{Paletted, Red},
+		{RGBA, color.RGBA{R: 200, G: 30, B: 30, A: 255}},
+		{Grayscale, color.Gray{Y: luminance(200, 30, 30)}},
+	} {
+		img, err := c.Render(t.Context(), Text("A", Style{Font: "px", Color: color.RGBA{R: 200, G: 30, B: 30, A: 255}}), tt.mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := color.RGBAModel.Convert(img.At(3, 0)); got != color.RGBAModel.Convert(tt.want) {
+			t.Errorf("mode %d: text pixel = %v, want %v", tt.mode, got, tt.want)
 		}
 	}
 }

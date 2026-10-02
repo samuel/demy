@@ -26,18 +26,19 @@ func Example() {
 		demy.Text("Temperature", demy.Style{Weight: demy.FontBold}),
 		demy.HStack(demy.Text("23.4 °C"), demy.Spacer(), demy.Text("Portland")),
 	)
-	img, err := demy.MustNew(cfg).Render(context.Background(), root, demy.Unset) // cfg.ColorMode: TwoBit
+	img, err := demy.MustNew(cfg).Render(context.Background(), root, demy.Unset) // cfg.ColorMode: Paletted
 	if err != nil {
 		log.Fatal(err)
 	}
-	gray := img.(*image.Gray) //nolint:forcetypeassert // quantized modes render *image.Gray
+	// Paletted renders index into cfg.Palette (black, dark gray, light gray, white).
+	pal := img.(*image.Paletted) //nolint:forcetypeassert // Paletted renders *image.Paletted
 	fmt.Println(img.Bounds())
-	fmt.Println("inside the box:", gray.GrayAt(50, 30).Y)
-	fmt.Println("margin:", gray.GrayAt(5, 5).Y)
+	fmt.Println("inside the box:", pal.ColorIndexAt(50, 30))
+	fmt.Println("margin:", pal.ColorIndexAt(5, 5))
 	// Output:
 	// (0,0)-(800,480)
 	// inside the box: 0
-	// margin: 255
+	// margin: 3
 }
 
 // Children spreads a slice built at runtime into a container's children.
@@ -91,15 +92,15 @@ func ExampleDither() {
 			photo.Pix[y*photo.Stride+x] = uint8(x * 4) // horizontal gradient
 		}
 	}
-	cfg := demy.Config{PixelWidth: 64, PixelHeight: 64, PhysicalWidthMM: 64, PhysicalHeightMM: 64}
-	img, err := demy.MustNew(cfg).Render(context.Background(), demy.Image(photo, demy.Atkinson), demy.OneBit)
+	cfg := demy.Config{PixelWidth: 64, PixelHeight: 64, PhysicalWidthMM: 64, PhysicalHeightMM: 64, Palette: demy.PaletteBW}
+	img, err := demy.MustNew(cfg).Render(context.Background(), demy.Image(photo, demy.Atkinson), demy.Paletted)
 	if err != nil {
 		log.Fatal(err)
 	}
-	levels := map[uint8]bool{}
-	for _, v := range img.(*image.Gray).Pix { //nolint:forcetypeassert // OneBit renders *image.Gray
-		levels[v] = true
+	used := map[uint8]bool{}
+	for _, v := range img.(*image.Paletted).Pix { //nolint:forcetypeassert // Paletted renders *image.Paletted
+		used[v] = true
 	}
-	fmt.Println(len(levels), "gray levels:", levels[0], levels[255])
-	// Output: 2 gray levels: true true
+	fmt.Println(len(used), "colors:", used[0], used[1])
+	// Output: 2 colors: true true
 }

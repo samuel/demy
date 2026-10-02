@@ -421,15 +421,24 @@ Use `Environment.AddBuiltin`, `AddValue`, and `AddModule` to expose Go functions
 `AddValue` are frozen because every script and render shares them. `Render` data accepts
 `map[string]any`/`[]any` plus typed slices, string-keyed maps, all integer and float kinds,
 pointers, `json.Number`, and `time.Time` (as a `now()`-style time value); map keys are sorted
-so iteration order is stable. Set `Environment.Now` to fix the time `now()` returns.
+so iteration order is stable. Data may nest at most 100 levels and hold at most 262144 values
+(a value reached through several references counts once per reference); cyclic data is an
+error. `ToStarlark` applies the same limits. Set `Environment.Now` to fix the time `now()` returns.
 
 Builtins reject unknown keyword arguments, wrong argument types, unknown enum names (such as
-`weight="semibold"`), and `Style(class=)` names missing from `Config.Styles`. The returned tree
+`weight="semibold"`), numbers outside [0, 32768] (every numeric argument is a size, gap, or
+weight), and `Style(class=)` names missing from `Config.Styles`. Errors from `Load` and
+`Render` start with the script position that failed, such as `t.star:2:17: Frame: w +Inf out
+of range [0, 32768]`. A panic in a builtin registered with `AddBuiltin` or `AddModule` fails
+that call with an error instead of crashing; panics in goroutines the builtin starts are not
+recovered. The returned tree
 may share nodes between renders, so treat it as read-only.
 
 Module execution and each `Render` call are limited to `Environment.MaxSteps` Starlark
 execution steps (`DefaultMaxSteps`, 10 million, when zero) and stop when their context is
 cancelled. Script `print()` output goes to `Environment.Logger` (default `slog.Default()`).
+Each message is truncated to 4 KiB, and after 64 KiB of output in one `Load` or `Render`,
+later output is dropped with a warning.
 
 Configure an `Environment` (fields and `Add…` calls) before the first `Load`. Each `Plugin`
 keeps the settings and globals from its `Load`, so later changes affect only later loads.
@@ -475,9 +484,7 @@ Scenes, templates, Starlark scripts, and BDF fonts must come from trusted source
 validates its input and returns errors instead of panicking on malformed trees, but it does not
 yet bound the time or memory a hostile input can use:
 
-- `Environment.MaxSteps` bounds Starlark execution steps, not memory. A panic in a Go builtin
-  registered with `AddBuiltin` or `AddModule` crashes the process, and script `print()` output
-  isn't limited.
+- `Environment.MaxSteps` bounds Starlark execution steps, not memory.
 
 Run untrusted input in a separate process with memory and time limits.
 

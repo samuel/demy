@@ -186,6 +186,10 @@ func ParseWeight(s string) (demy.FontStyle, error) {
 // exhaust the stack.
 const MaxDepth = 1000
 
+// MaxDimension bounds sizes, gaps, padding, and weights, matching the range
+// demy accepts when rendering.
+const MaxDimension = 1 << 15
+
 // MaxNodes bounds the number of nodes in decoded scenes, matching the limit
 // demy applies when rendering, so oversized input fails while decoding.
 const MaxNodes = 1 << 14

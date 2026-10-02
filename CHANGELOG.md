@@ -25,6 +25,11 @@ changes; they are called out under each release.
 - Breaking: `Canvas.Render`, `xmlscene.Execute`, and `xmlscene.ExecuteScene` take a
   `context.Context` and stop when it's done. Template output is limited to
   `xmlscene.MaxTemplateOutput` (4 MiB).
+- A panic in a Starlark builtin registered with `AddBuiltin` or `AddModule` fails the call
+  instead of crashing. Script `print()` messages are truncated to 4 KiB, and output past 64 KiB
+  per `Load` or `Render` is dropped. `Load` and `Render` errors start with the script position.
+- Breaking: Starlark builtins reject numbers outside [0, 32768], and `Render` data and
+  `ToStarlark` reject cyclic data, nesting deeper than 100 levels, and more than 262144 values.
 
 ## v0.1.0 — 2026-10-01
 

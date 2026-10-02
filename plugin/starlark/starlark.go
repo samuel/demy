@@ -31,7 +31,13 @@
 //
 // Module execution and each Render call are limited to Environment.MaxSteps
 // Starlark execution steps (DefaultMaxSteps when zero) and are cancelled when
-// their context is done. print() output goes to Environment.Logger.
+// their context is done. print() output goes to Environment.Logger, truncated
+// to 4 KiB per message and 64 KiB per Load or Render.
+//
+// A panic in a builtin registered with AddBuiltin or AddModule fails the call
+// with an error. Numeric arguments must be in [0, 32768], and Render data may
+// nest at most 100 levels, hold at most 262144 values, and not be cyclic.
+// Errors from Load and Render start with the script position that failed.
 //
 // Configure an Environment before the first Load and don't modify it while a
 // Load is running. A Plugin keeps the settings and globals the Environment had
@@ -87,11 +93,14 @@ import (
 	"image/color"
 	"log/slog"
 	"maps"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
+	"unsafe"
 
 	sl "go.starlark.net/starlark"
 	slstruct "go.starlark.net/starlarkstruct"
@@ -138,10 +147,44 @@ func (e *Environment) initExtras() {
 // If the name conflicts with a demy built-in it will shadow it.
 func (e *Environment) AddBuiltin(name string, fn BuiltinFunc) *Environment {
 	e.initExtras()
-	e.extras[name] = sl.NewBuiltin(name, func(t *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
-		return fn(t, args, kwargs)
-	})
+	e.extras[name] = sl.NewBuiltin(name, recoverCall(fn))
 	return e
+}
+
+// recoverCall wraps fn so that a panic becomes an error, which the script
+// sees as a failed call at the line that made it.
+func recoverCall(fn BuiltinFunc) func(*sl.Thread, *sl.Builtin, sl.Tuple, []sl.Tuple) (sl.Value, error) {
+	return func(t *sl.Thread, b *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (v sl.Value, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				v, err = nil, fmt.Errorf("%s: panic: %v", b.Name(), r)
+			}
+		}()
+		return fn(t, args, kwargs)
+	}
+}
+
+// withPosition prefixes a Starlark evaluation error with the innermost script
+// position in its call stack, so the error names the line that failed.
+func withPosition(err error) error {
+	var evalErr *sl.EvalError
+	if !errors.As(err, &evalErr) {
+		return err
+	}
+	for _, frame := range slices.Backward(evalErr.CallStack) {
+		if frame.Pos.IsValid() && frame.Pos.Filename() != "<builtin>" {
+			return fmt.Errorf("%s: %w", frame.Pos, err)
+		}
+	}
+	return err
+}
+
+// recoverError sets *err to an error describing a recovered panic, if any.
+// Deferred by Load and Render as a backstop for panics outside builtins.
+func recoverError(err *error, what string) {
+	if r := recover(); r != nil {
+		*err = fmt.Errorf("starlarkplugin: %s: panic: %v", what, r)
+	}
 }
 
 // AddValue registers an arbitrary Starlark value as a named global. The value
@@ -159,9 +202,7 @@ func (e *Environment) AddModule(name string, fns map[string]BuiltinFunc) *Enviro
 	e.initExtras()
 	members := make(sl.StringDict, len(fns))
 	for fnName, fn := range fns {
-		members[fnName] = sl.NewBuiltin(fnName, func(t *sl.Thread, _ *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
-			return fn(t, args, kwargs)
-		})
+		members[fnName] = sl.NewBuiltin(fnName, recoverCall(fn))
 	}
 	e.extras[name] = &slstruct.Module{Name: name, Members: members}
 	return e
@@ -202,10 +243,20 @@ func (e *Environment) threadConfig() threadConfig {
 // finishes; until then, ctx being done cancels the thread.
 func (tc threadConfig) newThread(ctx context.Context, name string) (*sl.Thread, func() bool) {
 	logger := tc.logger
+	var printed int // bytes logged by this thread
 	thread := &sl.Thread{
 		Name: name,
 		Print: func(t *sl.Thread, msg string) {
-			logger.InfoContext(ContextFromThread(t), msg, "script", name)
+			ctx := ContextFromThread(t)
+			if printed >= maxPrintTotal {
+				return
+			}
+			msg = truncateUTF8(msg, min(maxPrintBytes, maxPrintTotal-printed))
+			printed += len(msg)
+			logger.InfoContext(ctx, msg, "script", name)
+			if printed >= maxPrintTotal {
+				logger.WarnContext(ctx, "print output limit reached; further output is dropped", "script", name, "limit", maxPrintTotal)
+			}
 		},
 	}
 	thread.SetMaxExecutionSteps(tc.maxSteps)
@@ -214,6 +265,27 @@ func (tc threadConfig) newThread(ctx context.Context, name string) (*sl.Thread, 
 		thread.Cancel(context.Cause(ctx).Error())
 	})
 	return thread, stop
+}
+
+// maxPrintBytes bounds one print() message; longer messages are truncated.
+const maxPrintBytes = 4096
+
+// maxPrintTotal bounds print() output per Load or Render; later output is
+// dropped.
+const maxPrintTotal = 1 << 16
+
+// truncateUTF8 shortens s to at most n bytes without splitting a character,
+// marking a shortened string with "…" within the n bytes.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	const ellipsis = "…"
+	n = max(n-len(ellipsis), 0)
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + ellipsis
 }
 
 // contextKey is the thread-local key holding the context.Context passed to Render.
@@ -230,7 +302,8 @@ func ContextFromThread(t *sl.Thread) context.Context {
 
 // ToStarlark converts a Go value to a Starlark value. It accepts nil, Starlark
 // values, bools, strings, all integer and float kinds, json.Number, time.Time,
-// pointers, slices, arrays, and string-keyed maps of these.
+// pointers, slices, arrays, and string-keyed maps of these. It rejects cyclic
+// data, nesting deeper than 100 levels, and more than 262144 values.
 func ToStarlark(v any) (sl.Value, error) {
 	return anyToStarlark(v)
 }
@@ -263,7 +336,8 @@ type Plugin struct {
 	scriptStyles map[string]demy.Style
 }
 
-func (e *Environment) execFile(ctx context.Context, filename string, src any, cfg demy.Config, loc *time.Location) (*Plugin, error) {
+func (e *Environment) execFile(ctx context.Context, filename string, src any, cfg demy.Config, loc *time.Location) (_ *Plugin, err error) {
+	defer recoverError(&err, "load "+filename)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -281,7 +355,7 @@ func (e *Environment) execFile(ctx context.Context, filename string, src any, cf
 	globals, err := sl.ExecFileOptions(&syntax.FileOptions{}, thread, filename, src, env)
 	stop()
 	if err != nil {
-		return nil, fmt.Errorf("starlarkplugin: load %s: %w", filename, err)
+		return nil, fmt.Errorf("starlarkplugin: load %s: %w", filename, withPosition(err))
 	}
 	if _, ok := globals["render"]; !ok {
 		return nil, fmt.Errorf("starlarkplugin: %s must define render(data)", filename)
@@ -323,7 +397,8 @@ func (p *Plugin) Styles() map[string]demy.Style {
 // ctx is propagated to user-provided builtins via ContextFromThread, and
 // cancels the script when done. The returned tree may share nodes with
 // module-level values and other renders, so treat it as read-only.
-func (p *Plugin) Render(ctx context.Context, data map[string]any) (demy.Node, error) {
+func (p *Plugin) Render(ctx context.Context, data map[string]any) (_ demy.Node, err error) {
+	defer recoverError(&err, "render")
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -335,7 +410,7 @@ func (p *Plugin) Render(ctx context.Context, data map[string]any) (demy.Node, er
 	defer stop()
 	result, err := sl.Call(thread, p.globals["render"], sl.Tuple{d}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("starlarkplugin: render: %w", err)
+		return nil, fmt.Errorf("starlarkplugin: render: %w", withPosition(err))
 	}
 	nv, ok := result.(*nodeValue)
 	if !ok {
@@ -881,15 +956,23 @@ func argsToOptions(args sl.Tuple) ([]demy.Option, error) {
 	return opts, nil
 }
 
-// toFloat converts an int or float argument. Range checks happen at render.
+// toFloat converts an int or float argument. Every numeric argument is a
+// size, gap, or weight, so it must be in [0, codec.MaxDimension], as rendering
+// requires; checking here reports the script line that passed it.
 func toFloat(what string, v sl.Value) (float64, error) {
+	var f float64
 	switch t := v.(type) {
 	case sl.Float:
-		return float64(t), nil
+		f = float64(t)
 	case sl.Int:
-		return float64(t.Float()), nil
+		f = float64(t.Float())
+	default:
+		return 0, fmt.Errorf("%s must be a number, got %s", what, v.Type())
 	}
-	return 0, fmt.Errorf("%s must be a number, got %s", what, v.Type())
+	if math.IsNaN(f) || f < 0 || f > codec.MaxDimension {
+		return 0, fmt.Errorf("%s %g out of range [0, %d]", what, f, codec.MaxDimension)
+	}
+	return f, nil
 }
 
 func toString(what string, v sl.Value) (string, error) {
@@ -992,53 +1075,70 @@ func (v *timeValue) AttrNames() []string {
 	return []string{"unix", "year", "month", "day", "hour", "minute", "second", "weekday", "weekday_name", "timezone", "format"}
 }
 
-// --- Data conversion: Go map → Starlark dict ---
+// --- Data conversion: Go values → Starlark values ---
+
+// maxDataDepth bounds the nesting of converted data.
+const maxDataDepth = 100
+
+// maxDataValues bounds the number of values converted from one call, counting
+// a value reached through several references once per reference.
+const maxDataValues = 1 << 18
+
+// converter converts Go values to Starlark values, rejecting cycles and data
+// that is too deep or too large.
+type converter struct {
+	depth  int
+	values int
+	path   map[visit]bool // maps, slices, and pointers being converted
+}
+
+// visit identifies a map, slice, or pointer for cycle detection.
+type visit struct {
+	ptr unsafe.Pointer
+	typ reflect.Type
+	len int
+}
 
 func dataToStarlark(data map[string]any) (*sl.Dict, error) {
-	d := sl.NewDict(len(data))
-	// Sorted keys give scripts a stable iteration order across renders.
-	for _, k := range slices.Sorted(maps.Keys(data)) {
-		sv, err := anyToStarlark(data[k])
-		if err != nil {
-			return nil, fmt.Errorf("data[%q]: %w", k, err)
-		}
-		if err := d.SetKey(sl.String(k), sv); err != nil {
-			return nil, err
-		}
+	var c converter
+	v, err := c.convert(reflect.ValueOf(data))
+	if err != nil {
+		return nil, err
 	}
-	return d, nil
+	return v.(*sl.Dict), nil //nolint:forcetypeassert // a map[string]any converts to a dict
 }
 
 func anyToStarlark(v any) (sl.Value, error) {
-	switch t := v.(type) {
-	case nil:
-		return sl.None, nil
-	case sl.Value:
-		return t, nil
-	case bool:
-		return sl.Bool(t), nil
-	case string:
-		return sl.String(t), nil
-	case json.Number:
-		if i, err := t.Int64(); err == nil {
-			return sl.MakeInt64(i), nil
-		}
-		f, err := t.Float64()
-		if err != nil {
-			return nil, fmt.Errorf("invalid json.Number %q", t)
-		}
-		return sl.Float(f), nil
-	case time.Time:
-		return &timeValue{t: t}, nil
-	case map[string]any:
-		return dataToStarlark(t)
-	}
-	return reflectToStarlark(reflect.ValueOf(v))
+	var c converter
+	return c.convert(reflect.ValueOf(v))
 }
 
-// reflectToStarlark converts numbers, strings, bools, slices, arrays,
-// string-keyed maps, and pointers to them.
-func reflectToStarlark(rv reflect.Value) (sl.Value, error) {
+// convert converts numbers, strings, bools, json.Number, time.Time, Starlark
+// values, slices, arrays, string-keyed maps, and pointers to them.
+func (c *converter) convert(rv reflect.Value) (sl.Value, error) {
+	if c.values++; c.values > maxDataValues {
+		return nil, fmt.Errorf("more than %d values", maxDataValues)
+	}
+	if !rv.IsValid() {
+		return sl.None, nil
+	}
+	if rv.CanInterface() {
+		switch t := rv.Interface().(type) {
+		case sl.Value:
+			return t, nil
+		case json.Number:
+			if i, err := t.Int64(); err == nil {
+				return sl.MakeInt64(i), nil
+			}
+			f, err := t.Float64()
+			if err != nil {
+				return nil, fmt.Errorf("invalid json.Number %q", t)
+			}
+			return sl.Float(f), nil
+		case time.Time:
+			return &timeValue{t: t}, nil
+		}
+	}
 	switch rv.Kind() {
 	case reflect.Bool:
 		return sl.Bool(rv.Bool()), nil
@@ -1050,33 +1150,63 @@ func reflectToStarlark(rv reflect.Value) (sl.Value, error) {
 		return sl.Float(rv.Float()), nil
 	case reflect.String:
 		return sl.String(rv.String()), nil
-	case reflect.Pointer, reflect.Interface:
+	case reflect.Interface:
 		if rv.IsNil() {
 			return sl.None, nil
 		}
-		return anyToStarlark(rv.Elem().Interface())
-	case reflect.Slice, reflect.Array:
-		if rv.Kind() == reflect.Slice && rv.IsNil() {
+		return c.convert(rv.Elem())
+	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
+		return c.convertContainer(rv)
+	default:
+		return nil, fmt.Errorf("unsupported type %s", rv.Type())
+	}
+}
+
+// convertContainer converts a pointer, slice, array, or map, tracking depth
+// and the containers on the current path.
+func (c *converter) convertContainer(rv reflect.Value) (sl.Value, error) {
+	if rv.Kind() != reflect.Array && rv.IsNil() {
+		switch rv.Kind() {
+		case reflect.Slice:
 			return sl.NewList(nil), nil
+		case reflect.Map:
+			return sl.NewDict(0), nil
+		default:
+			return sl.None, nil
 		}
-		items := make([]sl.Value, rv.Len())
-		for i := range rv.Len() {
-			sv, err := anyToStarlark(rv.Index(i).Interface())
-			if err != nil {
-				return nil, fmt.Errorf("[%d]: %w", i, err)
-			}
-			items[i] = sv
+	}
+	if c.depth++; c.depth > maxDataDepth {
+		return nil, fmt.Errorf("nested deeper than %d", maxDataDepth)
+	}
+	defer func() { c.depth-- }()
+	if rv.Kind() != reflect.Array {
+		v := visit{ptr: rv.UnsafePointer(), typ: rv.Type()}
+		if rv.Kind() == reflect.Slice {
+			v.len = rv.Len()
 		}
-		return sl.NewList(items), nil
+		if c.path[v] {
+			return nil, errors.New("cyclic data")
+		}
+		if c.path == nil {
+			c.path = make(map[visit]bool)
+		}
+		c.path[v] = true
+		defer delete(c.path, v)
+	}
+
+	switch rv.Kind() {
+	case reflect.Pointer:
+		return c.convert(rv.Elem())
 	case reflect.Map:
 		if rv.Type().Key().Kind() != reflect.String {
 			return nil, fmt.Errorf("unsupported map key type %s", rv.Type().Key())
 		}
 		keys := rv.MapKeys()
+		// Sorted keys give scripts a stable iteration order across renders.
 		slices.SortFunc(keys, func(a, b reflect.Value) int { return strings.Compare(a.String(), b.String()) })
 		d := sl.NewDict(len(keys))
 		for _, k := range keys {
-			sv, err := anyToStarlark(rv.MapIndex(k).Interface())
+			sv, err := c.convert(rv.MapIndex(k))
 			if err != nil {
 				return nil, fmt.Errorf("[%q]: %w", k.String(), err)
 			}
@@ -1085,9 +1215,15 @@ func reflectToStarlark(rv reflect.Value) (sl.Value, error) {
 			}
 		}
 		return d, nil
-	case reflect.Invalid:
-		return sl.None, nil
-	default:
-		return nil, fmt.Errorf("unsupported type %s", rv.Type())
+	default: // slice or array
+		items := make([]sl.Value, rv.Len())
+		for i := range rv.Len() {
+			sv, err := c.convert(rv.Index(i))
+			if err != nil {
+				return nil, fmt.Errorf("[%d]: %w", i, err)
+			}
+			items[i] = sv
+		}
+		return sl.NewList(items), nil
 	}
 }

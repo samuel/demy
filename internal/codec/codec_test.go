@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samuel/demy"
+	"samuelks.com/demy"
 )
 
 func TestParseColor(t *testing.T) {

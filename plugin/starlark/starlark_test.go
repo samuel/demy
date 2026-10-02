@@ -7,8 +7,8 @@ import (
 	sl "go.starlark.net/starlark"
 	"golang.org/x/image/font/gofont/goregular"
 
-	"github.com/samuel/demy"
-	starlarkplugin "github.com/samuel/demy/plugin/starlark"
+	"samuelks.com/demy"
+	starlarkplugin "samuelks.com/demy/plugin/starlark"
 )
 
 func TestRenderBasic(t *testing.T) {

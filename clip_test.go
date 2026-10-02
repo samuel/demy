@@ -5,7 +5,7 @@ import (
 	"image/color"
 	"testing"
 
-	"github.com/samuel/demy"
+	"samuelks.com/demy"
 )
 
 var (

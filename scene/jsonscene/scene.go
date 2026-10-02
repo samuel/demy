@@ -20,8 +20,8 @@ import (
 	"encoding/json/v2"
 	"fmt"
 
-	"github.com/samuel/demy"
-	"github.com/samuel/demy/internal/codec"
+	"samuelks.com/demy"
+	"samuelks.com/demy/internal/codec"
 )
 
 // GridTrackDef serializes a single GridTrack.

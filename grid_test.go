@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/image/font/gofont/goregular"
 
-	"github.com/samuel/demy"
+	"samuelks.com/demy"
 )
 
 // renderGridCfg renders g on a w×h canvas, failing the test on error.

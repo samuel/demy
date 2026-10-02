@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/samuel/demy"
+	"samuelks.com/demy"
 )
 
 // Roles lists the role color names accepted in place of hex colors.

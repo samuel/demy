@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/image/font/gofont/goregular"
 
-	"github.com/samuel/demy"
+	"samuelks.com/demy"
 )
 
 // dashboard builds a scene shaped like a typical e-ink dashboard: a header,

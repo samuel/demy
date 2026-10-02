@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/image/font/gofont/goregular"
 
-	"github.com/samuel/demy"
+	"samuelks.com/demy"
 )
 
 var sansFont = sync.OnceValue(func() *demy.FontFamily { return demy.MustLoadFontBytes("sans", goregular.TTF) })

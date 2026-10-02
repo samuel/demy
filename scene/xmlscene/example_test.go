@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/samuel/demy"
-	"github.com/samuel/demy/scene/xmlscene"
+	"samuelks.com/demy"
+	"samuelks.com/demy/scene/xmlscene"
 )
 
 func ExampleMarshal() {

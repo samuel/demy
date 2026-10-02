@@ -117,8 +117,8 @@ import (
 	slstruct "go.starlark.net/starlarkstruct"
 	"go.starlark.net/syntax"
 
-	"github.com/samuel/demy"
-	"github.com/samuel/demy/internal/codec"
+	"samuelks.com/demy"
+	"samuelks.com/demy/internal/codec"
 )
 
 // BuiltinFunc is the signature for Go functions exposed as Starlark builtins.

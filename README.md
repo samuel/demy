@@ -29,9 +29,9 @@ import (
     "log"
     "os"
 
-    "github.com/samuel/demy"
     "golang.org/x/image/font/gofont/gobold"
     "golang.org/x/image/font/gofont/goregular"
+    "samuelks.com/demy"
 )
 
 sans := demy.MustLoadFontBytes("sans", goregular.TTF)
@@ -367,7 +367,7 @@ across the image.
 ## JSON scenes (`scene/jsonscene`)
 
 ```go
-import "github.com/samuel/demy/scene/jsonscene"
+import "samuelks.com/demy/scene/jsonscene"
 
 data, err := jsonscene.Marshal(root)
 node, err := jsonscene.Unmarshal(data)
@@ -404,7 +404,7 @@ booleans other than `true`/`false`, children or text in elements that don't take
 anything but whitespace or comments after the root element are errors.
 
 ```go
-import "github.com/samuel/demy/scene/xmlscene"
+import "samuelks.com/demy/scene/xmlscene"
 
 data, err := xmlscene.Marshal(root)
 node, err := xmlscene.Unmarshal(data, cfg)
@@ -459,7 +459,7 @@ def render(data):
 ```
 
 ```go
-import starlarkplugin "github.com/samuel/demy/plugin/starlark"
+import starlarkplugin "samuelks.com/demy/plugin/starlark"
 
 env := &starlarkplugin.Environment{}
 p, err := env.Load(ctx, "weather.star", cfg, loc) // loc sets the zone for now(); nil = UTC

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samuel/demy"
-	"github.com/samuel/demy/scene/xmlscene"
+	"samuelks.com/demy"
+	"samuelks.com/demy/scene/xmlscene"
 )
 
 func TestUnmarshalDepthLimit(t *testing.T) {

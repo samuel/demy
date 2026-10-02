@@ -17,9 +17,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/samuel/demy"
-	"github.com/samuel/demy/scene/xmlscene"
 	"golang.org/x/image/font/gofont/goregular"
+	"samuelks.com/demy"
+	"samuelks.com/demy/scene/xmlscene"
 )
 
 //go:embed static

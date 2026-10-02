@@ -10,9 +10,9 @@ import (
 	sl "go.starlark.net/starlark"
 	"golang.org/x/image/font/gofont/goregular"
 
-	"github.com/samuel/demy"
-	starlarkplugin "github.com/samuel/demy/plugin/starlark"
-	"github.com/samuel/demy/scene/xmlscene"
+	"samuelks.com/demy"
+	starlarkplugin "samuelks.com/demy/plugin/starlark"
+	"samuelks.com/demy/scene/xmlscene"
 )
 
 func ExampleEnvironment_LoadBytes() {

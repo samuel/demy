@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samuel/demy"
+	"samuelks.com/demy"
 )
 
 // lazyImage has bounds but no pixel storage and no SubImage method.

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/samuel/demy"
+	"samuelks.com/demy"
 )
 
 func TestRenderColorPalette(t *testing.T) {

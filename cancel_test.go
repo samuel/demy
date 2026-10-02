@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samuel/demy"
+	"samuelks.com/demy"
 )
 
 // countdownCtx is a context that is canceled from the nth call to Err on.

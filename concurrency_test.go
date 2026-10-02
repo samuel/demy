@@ -10,7 +10,7 @@ import (
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/goregular"
 
-	"github.com/samuel/demy"
+	"samuelks.com/demy"
 )
 
 // TestConcurrentCanvasRender renders on one Canvas from many goroutines with

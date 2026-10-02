@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/samuel/demy/scene/jsonscene"
+	"samuelks.com/demy/scene/jsonscene"
 )
 
 // FuzzRoundTrip checks that any scene that decodes encodes back to JSON that

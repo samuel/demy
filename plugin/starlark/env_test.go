@@ -10,8 +10,8 @@ import (
 
 	sl "go.starlark.net/starlark"
 
-	"github.com/samuel/demy"
-	starlarkplugin "github.com/samuel/demy/plugin/starlark"
+	"samuelks.com/demy"
+	starlarkplugin "samuelks.com/demy/plugin/starlark"
 )
 
 func TestStylesReturnsCopy(t *testing.T) {

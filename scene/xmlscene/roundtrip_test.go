@@ -5,9 +5,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/samuel/demy"
-	"github.com/samuel/demy/scene/jsonscene"
-	"github.com/samuel/demy/scene/xmlscene"
+	"samuelks.com/demy"
+	"samuelks.com/demy/scene/jsonscene"
+	"samuelks.com/demy/scene/xmlscene"
 )
 
 func addRoundTripSeeds(f *testing.F) {

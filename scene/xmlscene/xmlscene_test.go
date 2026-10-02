@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/samuel/demy"
-	"github.com/samuel/demy/scene/xmlscene"
+	"samuelks.com/demy"
+	"samuelks.com/demy/scene/xmlscene"
 )
 
 func TestMarshalSceneRoundTrip(t *testing.T) {

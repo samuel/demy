@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samuel/demy"
-	starlarkplugin "github.com/samuel/demy/plugin/starlark"
 	sl "go.starlark.net/starlark"
+	"samuelks.com/demy"
+	starlarkplugin "samuelks.com/demy/plugin/starlark"
 )
 
 const spinScript = `

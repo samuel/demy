@@ -1,4 +1,4 @@
-module github.com/samuel/demy
+module samuelks.com/demy
 
 go 1.27
 
